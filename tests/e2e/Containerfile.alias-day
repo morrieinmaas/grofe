@@ -1,7 +1,7 @@
 # The alias-day container (plan TA.1): the owner's setup, athome with canopy
 # and grofe as `tmux`, in a disposable Debian box with systemd as PID 1 and a
-# test user with lingering. Built and run only by scripts/e2e-alias-day.sh,
-# from a context holding nothing but `git archive` exports and a canopy
+# test user with lingering. Built and run only by scripts/e2e-alias-day.sh
+# and, as TE.3's systemd image, by scripts/release-gate.sh, from a context holding nothing but `git archive` exports and a canopy
 # bundle, each scanned by gitleaks first:
 #
 #   grofe/                   grofe at HEAD, built in the first stage
@@ -126,6 +126,10 @@ COPY --from=build /out/e2e_alias_day /usr/local/lib/grofe-e2e/e2e_alias_day
 COPY grofe/tests/e2e/alias-day/ /opt/e2e/alias-day/
 COPY grofe/tests/e2e/scenarios/alias-day.sh /opt/e2e/alias-day.sh
 COPY grofe/tests/fixtures/compat/golden/tm_2/wrap.golden /opt/e2e/golden/tm_2/wrap.golden
+# TE.3's legs in this image (scripts/release-gate.sh): the rollback drill,
+# and the README whose alias-day steps readme.sh runs.
+COPY grofe/tests/e2e/scenarios/rollback.sh grofe/tests/e2e/scenarios/readme.sh /opt/e2e/scenarios/
+COPY grofe/README.md /opt/e2e/README.md
 COPY inputs/ /opt/e2e/inputs/
 RUN chmod -R a+rX /opt/e2e
 

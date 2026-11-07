@@ -57,7 +57,7 @@ jobs:
           grep -qx "canopy $CANOPY_SHA" tests/fixtures/compat/golden/tc_13/PINS
           grep -qx "athome $ATHOME_SHA" tests/fixtures/compat/golden/tc_13/PINS
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
 
       - uses: Swatinem/rust-cache@v2
 

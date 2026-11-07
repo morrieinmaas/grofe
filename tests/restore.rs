@@ -31,6 +31,13 @@ const PANES_FMT: &str = "#{session_name}:#{window_index}.#{pane_index} #{pane_ui
                          #{pane_current_path} #{pane_width}x#{pane_height}";
 const WINDOWS_FMT: &str = "#{window_name} #{window_zoomed_flag} #{window_active}";
 
+/// The test home with its symlinks resolved. A pane's current path is
+/// the one the kernel reports, resolved, as in tmux; on macOS the temp
+/// directory is under `/var`, a symlink to `/private/var`.
+fn home(srv: &TestServer) -> PathBuf {
+    srv.home.canonicalize().expect("canonical home")
+}
+
 fn ok(srv: &TestServer, args: &[&str]) -> String {
     srv.cmd(args).unwrap_or_else(|e| panic!("{args:?}: {e}"))
 }
@@ -202,7 +209,7 @@ fn write_config(srv: &TestServer, text: &str) -> PathBuf {
 }
 
 fn assert_sample_restored(srv: &TestServer) {
-    assert_eq!(list_panes(srv, PANES_FMT), sample_panes(&srv.home));
+    assert_eq!(list_panes(srv, PANES_FMT), sample_panes(&home(srv)));
     assert_eq!(
         list_windows(srv),
         ["top 0 1", "editor 0 0", "logs 1 1"].map(String::from)
@@ -215,7 +222,7 @@ fn assert_sample_restored(srv: &TestServer) {
 fn start_server_restore_brings_back_the_snapshot() {
     let srv = TestServer::start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     ok(&srv, &["start-server", "--restore"]);
     assert_sample_restored(&srv);
     // The active pane of each window, and only restored panes are marked.
@@ -299,10 +306,10 @@ fn start_server_restore_brings_back_the_snapshot() {
 fn restored_panes_run_a_shell_in_their_cwd() {
     let srv = TestServer::start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     ok(&srv, &["start-server", "--restore"]);
     ok(&srv, &["send-keys", "-t", "work:1.1", "pwd", "Enter"]);
-    let want = srv.home.join("a").display().to_string();
+    let want = home(&srv).join("a").display().to_string();
     srv.wait_for(|| srv.capture("work:1.1").lines().any(|l| l == want), WAIT)
         .unwrap_or_else(|_| panic!("pwd in the pane: {}", srv.capture("work:1.1")));
 }
@@ -314,7 +321,7 @@ fn restore_into_a_server_with_a_session_errors() {
     let srv = TestServer::start();
     ok(&srv, &["new-session", "-d", "-s", "keep"]);
     let before = ok(&srv, &["list-sessions", "-F", "#{session_name}"]);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     let out = srv.run(&["start-server", "--restore"]);
     assert_eq!(out.status.code(), Some(1), "{}", out.stderr);
     assert!(
@@ -349,7 +356,7 @@ fn restore_without_a_snapshot_reports_it() {
 fn restore_on_start_restores_before_the_first_command() {
     let srv = TestServer::builder().restore_on_start(true).start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
     assert_sample_restored(&srv);
 }
@@ -360,7 +367,7 @@ fn restore_on_start_restores_before_the_first_command() {
 fn new_session_a_attaches_the_restored_session() {
     let srv = TestServer::builder().restore_on_start(true).start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     let mut cmd = srv.command();
     cmd.args(["new-session", "-A", "-s", "main"])
         .env("TERM", "xterm-256color");
@@ -393,7 +400,7 @@ fn restore_on_start_off_in_config_is_read() {
     let srv = TestServer::builder().restore_on_start(true).start();
     write_config(&srv, "restore-on-start = false\n");
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
     assert_eq!(ok(&srv, &["list-sessions", "-F", "#{session_name}"]), "");
     kill(&srv);
@@ -407,7 +414,7 @@ fn restore_on_start_off_in_config_is_read() {
 fn the_harness_forces_restore_off() {
     let srv = TestServer::start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
     assert_eq!(ok(&srv, &["list-sessions", "-F", "#{session_name}"]), "");
 }
@@ -417,7 +424,7 @@ fn the_harness_forces_restore_off() {
 fn a_missing_cwd_gives_the_home_directory() {
     let srv = TestServer::start();
     kill(&srv);
-    let gone = srv.home.join("gone-away");
+    let gone = home(&srv).join("gone-away");
     let snap = Snapshot {
         version: SNAPSHOT_VERSION,
         written_at: String::new(),
@@ -449,7 +456,7 @@ fn a_missing_cwd_gives_the_home_directory() {
                 "#{pane_current_path}"
             ]
         ),
-        format!("{}\n", srv.home.display())
+        format!("{}\n", home(&srv).display())
     );
     let gone = gone.display().to_string();
     let log = srv.log();
@@ -467,9 +474,9 @@ fn the_first_attach_fills_the_update_environment() {
         .path_env("/usr/bin:/bin")
         .start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
-    assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&srv.home));
+    assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&home(&srv)));
     let unset = srv.run(&["show-environment", "-t", "main", "SSH_AUTH_SOCK"]);
     assert!(
         !unset.stdout.contains("SSH_AUTH_SOCK="),
@@ -516,7 +523,7 @@ fn the_first_attach_fills_the_update_environment() {
 fn a_bad_layout_keeps_every_pane() {
     let srv = TestServer::start();
     kill(&srv);
-    let mut snap = sample(&srv.home);
+    let mut snap = sample(&home(&srv));
     // The editor window's layout names a pane it does not have.
     snap.sessions[0].windows[0].layout = split(
         Dir::Horizontal,
@@ -539,7 +546,7 @@ fn a_restore_raises_restore_done() {
     let srv = TestServer::builder().restore_on_start(true).start();
     write_config(&srv, "[hooks]\nrestore-done = \"set -g @restored yes\"\n");
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
     wait_until(
         || {
@@ -563,7 +570,7 @@ fn a_restore_raises_restore_done() {
 fn a_restored_state_is_saved_again_with_its_persist_marks() {
     let srv = TestServer::start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     ok(&srv, &["start-server", "--restore"]);
     // Something changes, so the writer writes the restored state.
     ok(&srv, &["rename-window", "-t", "main:0", "renamed"]);
@@ -574,7 +581,7 @@ fn a_restored_state_is_saved_again_with_its_persist_marks() {
     wait_until(saved, WAIT).expect("the writer saved the restored state with its marks");
     kill(&srv);
     ok(&srv, &["start-server", "--restore"]);
-    assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&srv.home));
+    assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&home(&srv)));
     assert_eq!(
         ok(
             &srv,
@@ -598,7 +605,7 @@ fn a_restored_state_is_saved_again_with_its_persist_marks() {
 /// window, renamed windows, persisted and unpersisted options and `cd`s.
 fn build(srv: &TestServer) {
     for dir in ["one", "two"] {
-        fs::create_dir_all(srv.home.join(dir)).expect("mkdir");
+        fs::create_dir_all(home(srv).join(dir)).expect("mkdir");
     }
     ok(
         srv,
@@ -644,7 +651,7 @@ fn build(srv: &TestServer) {
             srv,
             &["send-keys", "-t", pane, &format!("cd {dir}"), "Enter"],
         );
-        let want = format!("{}/{dir}", srv.home.display());
+        let want = format!("{}/{dir}", home(srv).display());
         srv.wait_for(
             || {
                 srv.cmd(&["display-message", "-p", "-t", pane, "#{pane_current_path}"])
@@ -725,7 +732,7 @@ fn a_changed_uid_turns_the_comparison_red() {
 fn the_restore_request_reaches_nothing_the_server_runs() {
     let srv = TestServer::start();
     kill(&srv);
-    write_snapshot(&srv, &sample(&srv.home));
+    write_snapshot(&srv, &sample(&home(&srv)));
     ok(&srv, &["start-server", "--restore"]);
     let home = srv.home.display().to_string();
     ok(

@@ -671,19 +671,28 @@ fn a_plugin_inherits_only_stdio_from_the_server() {
     let p = script(
         &srv,
         "p.sh",
-        &format!("ls /dev/fd > {}\nexec sleep 600", out.display()),
+        &format!(
+            "sh -c '[ -e /dev/fd/3 ] && echo leak3; \
+             for f in /dev/fd/*; do echo \"${{f##*/}}\"; done; echo end' > {}\nexec sleep 600",
+            out.display()
+        ),
     );
     let srv = start_with(srv, &plugin_table("p", &p, "restart = \"never\""), None);
     running(&srv, "p");
     wait_until(
-        || fs::read_to_string(&out).is_ok_and(|t| t.ends_with('\n')),
+        // The list is whole only at its sentinel: a write can land
+        // between two of its lines.
+        || fs::read_to_string(&out).is_ok_and(|t| t.ends_with("end\n")),
         WAIT,
     )
     .expect("fd list");
-    // `ls` itself may hold its directory open as one more descriptor; the
-    // server's sockets, pty masters and logs are many, and well above it.
-    let fds: Vec<u32> = fs::read_to_string(&out)
-        .expect("fds")
+    // A child shell lists what the plugin passes on: fd 3 checked first,
+    // then a glob, which holds /dev/fd open as one more descriptor, 3
+    // (`ls` would hold two on macOS, whose fts keeps `.` open too, and the
+    // script's own shell may hold its script at 255).
+    let text = fs::read_to_string(&out).expect("fds");
+    assert!(!text.contains("leak3"), "the plugin holds fd 3: {text}");
+    let fds: Vec<u32> = text
         .split_whitespace()
         .filter_map(|f| f.parse().ok())
         .collect();

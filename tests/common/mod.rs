@@ -63,6 +63,9 @@ pub use nix::sys::signal::Signal;
 /// The prompt a pane's shell shows (see [`TestServer::command`]).
 pub const PROMPT: &str = "$ ";
 
+/// The file `ENV` names for a pane's `sh`, in the test root: it sets [`PROMPT`].
+const SHRC: &str = "shrc";
+
 /// The `conf.d` file, relative to the config dir `grofe/`, that pins a
 /// harness to frames off (module docs).
 pub const FRAMES_PIN: &str = "conf.d/00-harness-frames-off.toml";
@@ -128,6 +131,13 @@ impl TestServer {
         for d in [&home, &config_home, &state_home, &runtime_dir] {
             fs::create_dir_all(d).expect("create test dir");
         }
+        // Only a login shell (`-sh`) reads the profile; a shell started with
+        // its own `PS1` keeps it.
+        fs::write(
+            root.join(SHRC),
+            format!("case $0 in -*) PS1='{PROMPT}' ;; esac\n"),
+        )
+        .expect("write the shell's ENV file");
         TestServer {
             socket: runtime_dir.join("test.sock"),
             dir,
@@ -267,8 +277,11 @@ impl TestServer {
     /// shell prompts [`PROMPT`] whoever runs the tests: `sh` would print
     /// `# ` as root (a CI container) and `$ ` otherwise. `SHELL` is pinned to
     /// `sh` (the pane command strings run through `$SHELL -c`, and a bash there
-    /// drops the exported `PS1`); `ENV` is cleared so
-    /// no startup file sets another prompt.
+    /// drops the exported `PS1`). A pane's shell is a login shell, and a
+    /// system `/etc/profile` may set its own `PS1` (Debian's and Ubuntu's set
+    /// `# ` for root), so `ENV` names a file that sets [`PROMPT`] again: an
+    /// interactive `sh` reads it after the profile. Only a login shell's
+    /// prompt is set there, so a test's own `PS1` for a plain `sh` stands.
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
         if self.path_env.is_some() {
@@ -286,7 +299,7 @@ impl TestServer {
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
             .env("SHELL", "/bin/sh")
             .env("PS1", PROMPT)
-            .env("ENV", "")
+            .env("ENV", self.dir.path().join(SHRC))
             .env(StartOptions::REMAIN_ON_EXIT_ENV, "1");
         if self.restore_on_start {
             cmd.env_remove(StartOptions::RESTORE_ON_START_ENV);

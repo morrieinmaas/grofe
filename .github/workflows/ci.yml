@@ -24,22 +24,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Linux runs scripts/ci-linux.sh, the same steps the release gate's
+      # linux leg runs in a container, with the toolchain it pins.
+      - name: Rust (Linux)
+        if: runner.os == 'Linux'
+        run: scripts/ci-linux.sh toolchain
+
+      # rust-toolchain.toml's channel.
+      - uses: dtolnay/rust-toolchain@1.98.1
+        if: runner.os == 'macOS'
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo fmt --check
-        run: cargo fmt --check
+      - name: fmt, clippy, lib, bin and doc tests (Linux)
+        if: runner.os == 'Linux'
+        run: scripts/ci-linux.sh unit
 
-      - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: cargo test (lib, bins, doc)
-        run: |
-          cargo test --lib --bins
-          cargo test --doc
+      # scripts/ci-macos.sh, which the release gate's macos leg runs too.
+      - name: fmt, clippy, lib, bin and doc tests (macOS)
+        if: runner.os == 'macOS'
+        run: scripts/ci-macos.sh unit
 
   acceptance:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
@@ -52,53 +58,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust (Linux)
+        if: runner.os == 'Linux'
+        run: scripts/ci-linux.sh toolchain
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+        if: runner.os == 'macOS'
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install tools (Linux)
+      # The tools, fzf's pin, the plugin binaries, every integration test
+      # binary and bats, as the release gate runs them.
+      - name: Acceptance (Linux)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y neovim fzf htop tmux bats less shellcheck
+        run: scripts/ci-linux.sh acceptance
 
+      # Homebrew's fzf on macOS is current.
       - name: Install tools (macOS)
         if: runner.os == 'macOS'
         run: brew install neovim fzf htop tmux bats-core shellcheck
 
-      - name: Verify tools present
-        run: |
-          nvim --version | head -1
-          fzf --version
-          htop --version
-          tmux -V
-          bats --version
-          less --version | head -1
-          shellcheck --version | head -2
-
-      # The Linux job runs in a container (act, or a fresh runner), so /tmp
-      # is its own: the plugin cases that write fixed /tmp paths run here
-      # (TP.8, TP.9 cases 2 and 3, TP.12 case 2). Their release binaries
-      # come from canopy's checksum-verified provisioning: from the checkout
-      # GROFE_COMPAT_CANOPY names (scripts/ci-local.sh mounts it), else from
-      # canopy at the commit tc_13's PINS names.
-      - name: Provision plugin release binaries (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          echo GROFE_TEST_PRIVATE_TMP=1 >>"$GITHUB_ENV"
-          canopy="${GROFE_COMPAT_CANOPY:-}"
-          if [ -z "$canopy" ]; then
-            canopy="$RUNNER_TEMP/canopy"
-            sha="$(awk '$1 == "canopy" { print $2 }' tests/fixtures/compat/golden/tc_13/PINS)"
-            git clone --quiet https://github.com/morrieinmaas/canopy "$canopy"
-            git -C "$canopy" checkout --quiet "$sha"
-          fi
-          scripts/provision-plugin-binaries.sh "$canopy" "$RUNNER_TEMP/plugin-bin" >>"$GITHUB_ENV"
-
-      - name: cargo test (integration)
-        run: cargo test --test '*'
-
-      - name: bats
-        run: |
-          cargo build
-          bats tests/cli.bats
+      # The plugin binaries, every integration test binary and bats, as the
+      # release gate's macos leg runs them (scripts/ci-macos.sh).
+      - name: Acceptance (macOS)
+        if: runner.os == 'macOS'
+        run: scripts/ci-macos.sh acceptance

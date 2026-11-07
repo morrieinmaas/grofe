@@ -1,0 +1,6 @@
+# The Rust grofe is built and tested with, here and in CI. Channel only:
+# the e2e images carry a minimal 1.98.1 and a root-owned rustup, so the
+# steps that need rustfmt and clippy add them (scripts/ci-linux.sh, the
+# rust-toolchain step in ci.yml).
+[toolchain]
+channel = "1.98.1"

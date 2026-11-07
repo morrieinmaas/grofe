@@ -578,7 +578,13 @@ fn a_killed_restored_agent_leaves_a_shell_in_its_cwd() {
     let srv = TestServer::start();
     let agent = Agent::new();
     agent.config(&srv, "restore-stagger-ms = 0");
-    let cwd = srv.home.join("work");
+    // Resolved, as a pane's current path is (macOS's temp dir is under
+    // `/var`, a symlink to `/private/var`).
+    let cwd = srv
+        .home
+        .canonicalize()
+        .expect("canonical home")
+        .join("work");
     fs::create_dir_all(&cwd).expect("mkdir");
     let snap = snapshot_of(
         &srv.home,

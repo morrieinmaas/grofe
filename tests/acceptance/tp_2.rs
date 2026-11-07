@@ -516,13 +516,15 @@ fn a_key_right_after_nvim_starts_or_quits_sees_the_process_in_front() {
 }
 
 /// `sh -c 'cat | fzf'`: the group's leader is `sh` and its first member
-/// `cat`, and a member whose argv[0] is `fzf` (a `cat` under that name)
-/// still makes the key go to the pane.
+/// `cat`, and a member whose argv[0] is `fzf` still makes the key go to
+/// the pane. The `fzf` is a shell under that name, reading `cat`'s output:
+/// a `cat` would not do, as a multi-call coreutils (uutils, Ubuntu's since
+/// 26.04) runs the tool its argv[0] names and has no `fzf`.
 #[test]
 fn a_pipeline_matches_on_a_member_that_is_not_the_leader() {
     let bin = tempfile::tempdir().expect("tempdir");
-    let cat = which("cat").expect("cat on PATH");
-    symlink(&cat, bin.path().join("fzf")).expect("fzf symlink");
+    let sh = which("sh").expect("sh on PATH");
+    symlink(&sh, bin.path().join("fzf")).expect("fzf symlink");
     let path = std::env::var("PATH").unwrap_or_default();
     let pipeline = format!(
         "exec env PATH='{}:{path}' sh -c 'cat | fzf'",

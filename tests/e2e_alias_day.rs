@@ -907,8 +907,10 @@ fn w16(c: &mut Ctx) -> Step {
         let seen = String::from_utf8_lossy(&out[from.min(out.len())..]).to_string();
         seen.contains(&osc).then_some(())
     });
+    // The stub's shell creates its log before `cat` has written to it, and
+    // the pipe runs on its own, as in tmux: an empty log is not done yet.
     let stub = c.wait("the stub clipboard command's output", 10, |_| {
-        fs::read_to_string(&clip).ok()
+        fs::read_to_string(&clip).ok().filter(|s| !s.is_empty())
     });
     let buffer = c.tmux(&["show-buffer"])?;
     ensure(buffer == "w001", || {
