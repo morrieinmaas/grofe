@@ -128,6 +128,26 @@ fn load_commands_run_in_order_at_start_and_on_reload() {
     assert_eq!(lines(&log)[3..], ["one", "two", "three"]);
 }
 
+/// What the config starts before the server is ready (a status source, a
+/// background job) must not hold the readiness pipe: the CLI that
+/// auto-started the server waits for its EOF.
+#[test]
+fn a_config_child_does_not_delay_the_cli_start() {
+    let srv = TestServer::unstarted();
+    write_config(
+        &srv,
+        "load-commands = [\"run-shell -b 'sleep 30'\", \"run-shell true\"]\n\
+         [status.sources.slow]\ncmd = \"sleep 30\"\n",
+    );
+    let started = std::time::Instant::now();
+    srv.cmd(&["new-session", "-d"]).expect("new-session");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "new-session took {:?}",
+        started.elapsed()
+    );
+}
+
 #[test]
 fn the_new_keys_are_checked_when_the_config_loads() {
     for (config, want) in [

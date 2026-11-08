@@ -425,7 +425,12 @@ fn plugin_env(state: &State, name: &str, cfg: &ConfigPlugin) -> Vec<(String, Str
         "GROFE_STATE".to_string(),
         paths::state_dir(&Env::from_process()).display().to_string(),
     );
-    env.into_iter().collect()
+    let mut env: Vec<(String, String)> = env.into_iter().collect();
+    // Only with `TMUX` set does a plugin's `tmux` know which server it is.
+    if state.model.identity == Identity::Tmux {
+        crate::compat::with_tmux_link(&mut env);
+    }
+    env
 }
 
 struct Supervisor {

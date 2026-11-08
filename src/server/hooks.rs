@@ -2013,6 +2013,7 @@ pub fn shell_env(state: &State, session: Option<SessionId>) -> Vec<(String, Stri
     let set = crate::compat::job_env(state, session);
     env.retain(|(k, _)| !set.iter().any(|(name, _)| name == k));
     env.extend(set);
+    crate::compat::with_tmux_link(&mut env);
     env
 }
 

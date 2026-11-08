@@ -318,8 +318,10 @@ directory, never in tmux's. Run as `tmux`, grofe refuses a `-S` path inside
 tmux's socket directory (`$TMUX_TMPDIR` or `/tmp`, then `tmux-<uid>`) and
 never replaces a socket it did not create. A `-S` path elsewhere that a real
 tmux server listens on is still connected to, and grofe then reports that it
-is not a grofe server. Inside a grofe pane, `$TMUX` points at grofe, so run
-real tmux there as `env -u TMUX /path/to/tmux`.
+is not a grofe server. Inside grofe, `tmux` is grofe under either name: the
+server puts a `tmux` link to itself first on the `PATH` of its panes and of
+the commands it runs, so scripts and plugins that call `tmux` reach it. Run
+real tmux there by its full path, as `env -u TMUX /path/to/tmux`.
 
 ## First steps
 

@@ -394,7 +394,7 @@ const NESTED_TMUX: &str = "grofe-t36-nested";
 
 /// Kills the private nested tmux server, and only that one. `tmux` is the
 /// one on `PATH` (the harness's `require_tool` found it), the same one the
-/// pane resolves with `command -v`.
+/// pane runs by [`real_tmux`]'s full path.
 struct NestedTmux {
     tmpdir: tempfile::TempDir,
 }
@@ -419,6 +419,18 @@ impl Drop for NestedTmux {
     }
 }
 
+/// Real tmux's full path, from this process's `PATH`: inside grofe `tmux`
+/// is grofe (spec D12), so a pane reaches real tmux only by its path.
+fn real_tmux() -> PathBuf {
+    std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("tmux"))
+                .find(|bin| bin.is_file())
+        })
+        .unwrap_or_else(|| PathBuf::from("tmux"))
+}
+
 /// Real tmux in a pane (`env -u TMUX`, a private `-L` server with no config
 /// in its own `TMUX_TMPDIR`): its status line renders, and the inner prefix
 /// sent through grofe's `send-prefix` (`C-b C-b c`) makes an inner window.
@@ -434,9 +446,10 @@ fn nested_tmux_renders_and_takes_its_prefix() {
             .expect("tempdir"),
     };
     let srv = start(&format!(
-        "TMUX_TMPDIR={} SHELL=/bin/sh exec env -u TMUX \"$(command -v tmux)\" \
+        "TMUX_TMPDIR={} SHELL=/bin/sh exec env -u TMUX {} \
          -L {NESTED_TMUX} -f /dev/null new-session -s nested",
         shell_quote(&nested.tmpdir.path().display().to_string()),
+        shell_quote(&real_tmux().display().to_string()),
     ));
     let mut a = attach(&srv, "");
     a.wait_for("[nested] 0:");

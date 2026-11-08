@@ -103,6 +103,13 @@ pub fn snapshot_path(env: &Env, socket: &Path) -> PathBuf {
         .join("state.json")
 }
 
+/// The directory holding the instance at `socket`'s `tmux` link to grofe,
+/// which the server puts first on the `PATH` of what it runs (spec D12).
+/// One per instance: two servers may run different grofe builds.
+pub fn shim_dir(env: &Env, socket: &Path) -> PathBuf {
+    state_dir(env).join("bin").join(instance_name(socket))
+}
+
 /// Resolves `socket` to a path that is stable whether or not the socket
 /// file itself exists yet. Absolutises it lexically against the current
 /// working directory (no filesystem access beyond reading the cwd, for a

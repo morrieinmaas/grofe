@@ -58,7 +58,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use futures_util::{SinkExt, StreamExt};
-use nix::fcntl::{Flock, FlockArg};
+use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
@@ -440,6 +440,11 @@ pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>, exit_when_empty: bool)
     // SAFETY: the CLI passed us this fd as the write end of the readiness
     // pipe, and close_inherited_fds kept it open; nothing else owns it.
     let mut ready = ready_fd.map(|fd| unsafe { File::from_raw_fd(fd) });
+    // The CLI reads the pipe to EOF, so nothing the server starts before
+    // it is ready (a config job, a status source) may inherit it.
+    if let Some(f) = &ready {
+        let _ = nix::fcntl::fcntl(f, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
+    }
 
     let log = paths::log_path(&Env::from_process(), socket);
     if let Err(e) = redirect_stdio(&log) {

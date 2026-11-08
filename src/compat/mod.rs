@@ -59,6 +59,39 @@ pub fn set_started_as(identity: Identity) {
     let _ = STARTED_AS.set(identity);
 }
 
+/// The directory holding this server's `tmux` link to grofe (spec D12),
+/// set by `main.rs` before the server runs.
+static TMUX_LINK_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Records the directory of this server's `tmux` link. Only the first call
+/// counts.
+pub fn set_tmux_link_dir(dir: PathBuf) {
+    let _ = TMUX_LINK_DIR.set(dir);
+}
+
+/// `env` with the `tmux` link's directory first on its `PATH`, so a child
+/// that runs `tmux` reaches this server (spec D12). The server's own
+/// environment (`show-environment`) keeps the `PATH` it was given.
+// ponytail: pipe-pane inherits the server process's env and misses it.
+pub fn with_tmux_link(env: &mut Vec<(String, String)>) {
+    let Some(dir) = TMUX_LINK_DIR.get() else {
+        return;
+    };
+    let dir = dir.display().to_string();
+    let path = env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let rest = path.split(':').filter(|p| !p.is_empty() && *p != dir);
+    let path = std::iter::once(dir.as_str())
+        .chain(rest)
+        .collect::<Vec<_>>();
+    env.retain(|(k, _)| k != "PATH");
+    env.push(("PATH".to_string(), path.join(":")));
+}
+
 /// The config files a CLI run as `tmux -f <file>...` started this server
 /// with (`__server --file`, once per file), set by `main.rs` before the
 /// server runs.

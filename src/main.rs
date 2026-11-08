@@ -545,9 +545,33 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
     }
     let socket = socket.unwrap_or_else(|| globals.socket());
     report_panics_for(&socket, "server");
+    install_tmux_shim(&socket);
     match server::run_daemon(&socket, ready_fd, exit_when_empty) {
         0 => ExitCode::SUCCESS,
         _ => ExitCode::FAILURE,
+    }
+}
+
+/// Makes a `tmux` link to this binary, which the server puts first on the
+/// `PATH` of its panes, jobs and status sources, so a script that calls
+/// `tmux` inside grofe reaches this server (spec D12). A real tmux would
+/// read `$TMUX`, connect to grofe's socket and hang. Without the link the
+/// server still runs, as before.
+// ponytail: a shell rc that rebuilds PATH from scratch drops the link.
+fn install_tmux_shim(socket: &Path) {
+    let dir = grofe::paths::shim_dir(&grofe::paths::Env::from_process(), socket);
+    let link = dir.join("tmux");
+    let made = std::env::current_exe().and_then(|exe| {
+        grofe::paths::ensure_private_dir(&dir)?;
+        match std::fs::remove_file(&link) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        std::os::unix::fs::symlink(exe, &link)
+    });
+    match made {
+        Ok(()) => grofe::compat::set_tmux_link_dir(dir),
+        Err(e) => eprintln!("grofe server: no tmux link at {}: {e}", link.display()),
     }
 }
 

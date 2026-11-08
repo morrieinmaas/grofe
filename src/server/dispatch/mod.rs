@@ -466,6 +466,7 @@ pub(crate) fn pane_env(
     let mut all = server::hooks::pane_env(state, session);
     all.extend(env);
     all.extend(compat::pane_env(state, session, pane));
+    compat::with_tmux_link(&mut all);
     all
 }
 
