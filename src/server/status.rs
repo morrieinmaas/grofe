@@ -355,7 +355,7 @@ pub fn style_valid(value: &str) -> bool {
 /// strftime over the raw template, then `#{...}` (tmux's
 /// `format_expand_time`).
 pub fn expand_time(fmt: &str, vars: &dyn FormatVars, now: &libc::tm) -> String {
-    expand(&apply_strftime(fmt, now), vars)
+    crate::cmd::format::expand_after_time(&apply_strftime(fmt, now), vars)
 }
 
 /// tmux's `=N` trim for a `*-length` option: 0 leaves the text whole.

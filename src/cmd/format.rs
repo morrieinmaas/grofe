@@ -174,16 +174,34 @@ pub fn expand(fmt: &str, vars: &dyn FormatVars) -> String {
     .expand(fmt)
 }
 
+/// [`expand`] of a format strftime has already been through, as tmux's
+/// `format_expand_time` leaves it: every format a modifier expands again
+/// inside it (`#{E:@opt}`) goes through strftime too, as in tmux, where
+/// the time flag stays set for the whole expansion.
+pub fn expand_after_time(fmt: &str, vars: &dyn FormatVars) -> String {
+    let closers = scan_closers(fmt);
+    let shared = Shared::default();
+    shared.expand_time.set(true);
+    shared.timed_top.set(true);
+    Expander {
+        src: fmt,
+        vars,
+        closers: &closers,
+        shared: &shared,
+    }
+    .expand(fmt)
+}
+
 /// tmux's `format_expand_time`: `fmt` through strftime at the current local
 /// time, then expanded. `display-message` and `set-titles-string` use it;
 /// `list-*` formats and names do not. A format too long for strftime's
 /// 8 KiB buffer gives nothing.
 pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
     if !fmt.contains('%') {
-        return expand(fmt, vars);
+        return expand_after_time(fmt, vars);
     }
     match modify::strftime_now(fmt, 8192) {
-        Some(timed) => expand(&timed, vars),
+        Some(timed) => expand_after_time(&timed, vars),
         None => String::new(),
     }
 }
@@ -246,6 +264,9 @@ struct Shared {
     depth: Cell<usize>,
     /// Inside `#{T:}`: a `%` in a format goes through strftime first.
     expand_time: Cell<bool>,
+    /// The outermost format was already through strftime
+    /// ([`expand_after_time`]): only the formats inside it are timed.
+    timed_top: Cell<bool>,
     /// `display-message -v`: the lines tmux's `format_log` prints, kept as
     /// the expansion goes (`None` when nothing is asked for).
     trace: RefCell<Option<Vec<String>>>,
@@ -377,7 +398,8 @@ impl<'a> Expander<'a> {
     }
 
     fn expand_text(&self, fmt: &str) -> String {
-        if self.shared.expand_time.get() && fmt.contains('%') {
+        let top_done = self.shared.timed_top.replace(false);
+        if self.shared.expand_time.get() && !top_done && fmt.contains('%') {
             // tmux 3.7b: a format too long for strftime's 8 KiB buffer gives
             // nothing.
             let Some(timed) = modify::strftime_now(fmt, 8192) else {
@@ -1288,6 +1310,20 @@ mod tests {
     }
 
     // --- M2: nesting, escaping, ==:, b: ---
+
+    /// tmux keeps its time flag for the whole status expansion: a format
+    /// `#{E:}` expands again is through strftime too, while the outer one,
+    /// already through it, is not timed twice (`%%` stays `%`).
+    #[test]
+    fn e_inside_a_timed_format_is_timed_and_the_outer_one_once() {
+        let year = expand_after_time("#{E:@y}", &vars(&[("@y", "%Y")]));
+        assert!(
+            year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()),
+            "{year:?}"
+        );
+        assert_eq!(expand_after_time("50%d", &vars(&[])), "50%d");
+        assert_eq!(expand("#{E:@y}", &vars(&[("@y", "%Y")])), "%Y");
+    }
 
     #[test]
     fn nested_ternary_condition_expands() {

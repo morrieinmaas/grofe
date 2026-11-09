@@ -888,3 +888,20 @@ fn show_config_round_trips_the_new_keys() {
         "show-config's output loads back to itself"
     );
 }
+
+/// A user option a format reads through `#{E:...}` is a format itself, as
+/// tmux expands it: its short forms are written in grofe's spelling. One
+/// nothing expands keeps its value as written.
+#[test]
+fn a_user_option_read_through_e_is_converted_as_a_format() {
+    let f = Fixture::new("expanded-user-options");
+    let out = f.run(&[]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let doc: toml::Table = out.stdout.parse().expect("valid toml");
+    let user = doc["user-options"].as_table().expect("user-options");
+    assert_eq!(
+        user["seg"].as_str(),
+        Some("#{session_name} on #{host_short} at %H:%M")
+    );
+    assert_eq!(user["plain"].as_str(), Some("#S"));
+}
