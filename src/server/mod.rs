@@ -856,6 +856,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             // Parsed once: classified, then run.
             state.failed_out.clear();
             state.cli_io = Some(CliIo::of(&req, pid));
+            let ctx = crate::compat::forget_stale_pane(state, ctx);
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors

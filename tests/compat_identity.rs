@@ -943,6 +943,55 @@ fn the_tmux_name_follows_the_socket_in_dollar_tmux() {
     let _ = tmux(&srv, &["kill-server"]);
 }
 
+/// A `$TMUX_PANE` naming no pane of the server is ignored under the tmux
+/// name, as tmux 3.7b's `cmd_find_inside_pane` ignores it (recorded): the
+/// request falls back to the best session, it is not refused. A server
+/// started from inside another tmux keeps that `$TMUX_PANE` in its global
+/// environment, so every plugin job's `tmux display -p` otherwise failed.
+#[test]
+fn a_stale_dollar_tmux_pane_falls_back_under_the_tmux_name() {
+    let srv = start_as_tmux();
+    grofe(&srv, &["new-session", "-d", "-s", "st"]).expect("new-session");
+    let active = grofe(&srv, &["display-message", "-p", "#{pane_id}"]).expect("display");
+    let tmux_var = format!("{},1,0", srv.socket.display());
+    let link = tmux_link(&srv);
+    let out = run_with(
+        &srv,
+        &link,
+        &[("TMUX", &tmux_var), ("TMUX_PANE", "%99")],
+        &["display-message", "-p", "#{pane_id}"],
+    );
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(out.stdout, active);
+
+    // The case a plugin hits: the server's environment carries the stale
+    // pane into its jobs.
+    grofe(&srv, &["set-environment", "-g", "TMUX_PANE", "%99"]).expect("setenv");
+    let out = tmux(
+        &srv,
+        &["run-shell", "tmux display-message -p 'job #{pane_id}'"],
+    );
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("job {active}"));
+
+    // The grofe name keeps its rule: a stale `$GROFE_PANE` is an error.
+    let grofe_bin = Path::new(env!("CARGO_BIN_EXE_grofe"));
+    let sock = srv.socket.display().to_string();
+    let out = run_with(
+        &srv,
+        grofe_bin,
+        &[("GROFE", &sock), ("GROFE_PANE", "%99")],
+        &["-S", &sock, "display-message", "-p", "#{pane_id}"],
+    );
+    assert!(!out.status.success(), "{}", out.stdout);
+    assert!(
+        out.stderr.contains("can't find pane: %99"),
+        "{}",
+        out.stderr
+    );
+    let _ = tmux(&srv, &["kill-server"]);
+}
+
 /// The `grofe` name keeps its own rule: `$GROFE`, never `$TMUX`.
 #[test]
 fn the_grofe_name_ignores_dollar_tmux() {

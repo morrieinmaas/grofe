@@ -203,6 +203,23 @@ pub fn job_env(state: &State, session: Option<SessionId>) -> Vec<(String, String
     env
 }
 
+/// A tmux-dialect request's pane (`$TMUX_PANE`) dropped when it names no
+/// pane of this server, as tmux 3.7b's `cmd_find_inside_pane` ignores
+/// one, so the request falls back to the best session instead of failing.
+/// A server started from inside another tmux carries that tmux's
+/// `$TMUX_PANE` into every job. A grofe request keeps its pane: a stale
+/// `$GROFE_PANE` stays an error there.
+pub fn forget_stale_pane(state: &State, mut ctx: ClientCtx) -> ClientCtx {
+    if ctx.dialect == Dialect::Tmux
+        && ctx
+            .pane
+            .is_some_and(|pane| !state.model.panes.contains_key(&pane))
+    {
+        ctx.pane = None;
+    }
+    ctx
+}
+
 /// Variables a new or respawned pane of `session` gets from the server's
 /// identity, applied over the session's environment (spec D12, §4.2):
 /// `TMUX` and `TMUX_PANE` under both identities, and under tmux identity
