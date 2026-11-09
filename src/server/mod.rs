@@ -10,6 +10,7 @@
 //! control-mode requests into [`ServerMsg::Control`] and write the reply
 //! back. Commands run through the single [`dispatch`] seam.
 
+pub mod adopt;
 pub mod alerts;
 pub mod borders;
 pub mod buffers;

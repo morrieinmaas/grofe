@@ -13,6 +13,10 @@ escape-time-ms = 0
 history-limit = 100000
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:30
 mouse = true
+# grofe starts with the running tmux server's sessions, else resurrect's newest save
+start-from-tmux = true
+# ~/.local/share/canopy/tmux/conf.d/30-plugins.conf:48
+resurrect-dir = "$CANOPY_STATE/resurrect"
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:114
 automatic-rename = true
 # ~/.local/share/canopy/tmux/conf.d/00-core.conf:115

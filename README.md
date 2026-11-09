@@ -160,6 +160,13 @@ so you know exactly what is left to do.
 Your `tmux.conf` is never touched, and tmux keeps working alongside grofe while
 you try it.
 
+The converted config also says `start-from-tmux = true`: a grofe server that
+starts with no sessions takes them from your running tmux server (names,
+windows, layouts and directories, with fresh shells, since the programs are
+still running in tmux), or, with no tmux running, from tmux-resurrect's
+newest save in `resurrect-dir`, where a pane saved with a command runs it
+again.
+
 grofe sets `TMUX` and `TMUX_PANE` in its panes and answers the commands,
 aliases and formats that scripts and tools send, so things like `fzf --tmux`
 and vim-tmux-navigator keep working. Once your config has moved, you can put

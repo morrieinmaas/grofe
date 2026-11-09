@@ -584,6 +584,22 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "1000",
     },
+    // grofe's own names: a server that starts empty takes its sessions
+    // from a running tmux, else from tmux-resurrect's newest save, found
+    // in `resurrect-dir` or resurrect's default directories
+    // (`server::adopt`).
+    Builtin {
+        name: "start-from-tmux",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "off",
+    },
+    Builtin {
+        name: "resurrect-dir",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "",
+    },
     // G3: kitty direct placements, animation and sixel (grofe's own name,
     // like `compat-identity`; `docs/graphics-placement.md`). Off, the
     // clients get what T3.8 sent.

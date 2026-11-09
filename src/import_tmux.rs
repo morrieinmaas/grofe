@@ -895,6 +895,18 @@ impl Importer {
                 let msg = format!("@{user}: these plugins load where TPM runs");
                 return self.note(file, line, msg);
             }
+            // Where grofe looks for resurrect's saves (`start-from-tmux`).
+            if user == "resurrect-dir"
+                && let Some(w) = words.get(i + 1)
+            {
+                let entry = OptionEntry {
+                    value: w.value.clone(),
+                    file: file.to_path_buf(),
+                    line,
+                };
+                self.options.insert("resurrect-dir", entry);
+                return;
+            }
             if user.starts_with("resurrect-") || user.starts_with("continuum-") {
                 return self.report(file, line, "plugins and TPM", text);
             }
@@ -2269,6 +2281,16 @@ impl Importer {
         // Each option as (TOML key, its comment and assignment lines).
         let mut items: Vec<(&str, String)> = Vec::new();
         for (toml_key, _) in config::OPTION_NAMES {
+            // Moving from tmux: start with its sessions.
+            if *toml_key == "start-from-tmux" && !self.options.contains_key(toml_key) {
+                items.push((
+                    toml_key,
+                    "# grofe starts with the running tmux server's sessions, else resurrect's newest save\n\
+                     start-from-tmux = true\n"
+                        .to_string(),
+                ));
+                continue;
+            }
             let Some(entry) = self.options.get(toml_key) else {
                 continue;
             };

@@ -13,6 +13,8 @@ escape-time-ms = 10
 history-limit = 10000
 # ~/.tmux.conf:32
 mouse = false
+# grofe starts with the running tmux server's sessions, else resurrect's newest save
+start-from-tmux = true
 # ~/.tmux.conf:2
 default-terminal = "tmux-256color"
 # ~/.tmux.conf:13

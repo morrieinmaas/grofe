@@ -39,7 +39,7 @@ use crate::server::pane::usable_cwd;
 use crate::server::snapshot::{
     self, OptionSnap, PaneSnap, SessionSnap, Snapshot, SnapshotError, WindowSnap,
 };
-use crate::server::{Job, State, hooks, resume};
+use crate::server::{Job, State, adopt, hooks, resume};
 use crate::types::{PaneId, Rect, SessionId, WindowId, cap_size};
 
 /// Set to `1` in the environment of a server `start-server --restore`
@@ -96,6 +96,9 @@ pub fn at_start(state: &mut State) {
     if !forced && !configured {
         return;
     }
+    if from_tmux(state) {
+        return;
+    }
     let path = paths::snapshot_path(&Env::from_process(), &state.socket);
     // `read` moves an unknown version or an unreadable file aside itself.
     let snap = match snapshot::read(&path) {
@@ -121,6 +124,65 @@ pub fn at_start(state: &mut State) {
             crate::server::hooks::restore_done(state);
         }
         Err(e) => eprintln!("grofe server: restore: {e}"),
+    }
+}
+
+/// `start-from-tmux` (`server::adopt`): the sessions of a running tmux
+/// server, else of tmux-resurrect's newest save, restored in place of
+/// grofe's own snapshot. Whether it restored anything.
+fn from_tmux(state: &mut State) -> bool {
+    if state.model.options.lookup("start-from-tmux", &[]) != Some("on") {
+        return false;
+    }
+    let (snap, from) = match adopt::from_live_tmux() {
+        Ok(snap) => (snap, "the running tmux server".to_string()),
+        Err(live) => {
+            let vars = hooks::variables(state, None);
+            let get = |name: &str| {
+                vars.iter()
+                    .find(|v| v.name == name)
+                    .and_then(|v| v.value.clone())
+                    .unwrap_or_default()
+            };
+            let dir = state
+                .model
+                .options
+                .lookup("resurrect-dir", &[])
+                .filter(|d| !d.is_empty())
+                .map(|d| PathBuf::from(crate::config::expand_value(d, &get)));
+            let home = PathBuf::from(Env::from_process().home.unwrap_or_default());
+            let Some(save) = adopt::resurrect_last(dir.as_deref(), &home) else {
+                eprintln!("grofe server: start-from-tmux: {live}, and no resurrect save");
+                return false;
+            };
+            let parsed = std::fs::read_to_string(&save)
+                .map_err(|e| e.to_string())
+                .and_then(|text| adopt::from_resurrect(&text));
+            match parsed {
+                Ok(snap) => (snap, save.display().to_string()),
+                Err(e) => {
+                    eprintln!(
+                        "grofe server: start-from-tmux: {live}; {}: {e}",
+                        save.display()
+                    );
+                    return false;
+                }
+            }
+        }
+    };
+    match restore(state, snap) {
+        Ok(r) => {
+            eprintln!(
+                "grofe server: restore-done: {} sessions, {} windows, {} panes from {from}",
+                r.sessions, r.windows, r.panes
+            );
+            crate::server::hooks::restore_done(state);
+            true
+        }
+        Err(e) => {
+            eprintln!("grofe server: start-from-tmux: {e}");
+            false
+        }
     }
 }
 

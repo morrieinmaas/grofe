@@ -23,7 +23,6 @@
 ~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/20-status.conf
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:93: note: $CANOPY_STORE in status.sources.src-8bd13bdceb94f361 is expanded by the source's shell, from the server's environment
 ~/.local/share/canopy/tmux/tmux.conf:42: note: source-file -q found ~/.local/share/canopy/tmux/conf.d/30-plugins.conf
-~/.local/share/canopy/tmux/conf.d/30-plugins.conf:48: plugins and TPM: set -g @resurrect-dir "$CANOPY_STATE/resurrect"
 ~/.local/share/canopy/tmux/conf.d/30-plugins.conf:70: plugins and TPM: set -g @continuum-restore on
 ~/.local/share/canopy/tmux/conf.d/30-plugins.conf:83: plugins and TPM: set -g @continuum-save-interval '5'
 ~/.local/share/canopy/tmux/conf.d/30-plugins.conf:93: plugins and TPM: set -g @resurrect-strategy-nvim 'session'

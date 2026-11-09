@@ -41,6 +41,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     // M4 (spec §6): read by T4.3 and T4.4.
     ("restore-on-start", "restore-on-start"),
     ("restore-stagger-ms", "restore-stagger-ms"),
+    ("start-from-tmux", "start-from-tmux"),
+    ("resurrect-dir", "resurrect-dir"),
     ("automatic-rename", "automatic-rename"),
     ("automatic-rename-format", "automatic-rename-format"),
     ("allow-rename", "allow-rename"),
@@ -253,6 +255,7 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         "mouse"
         | "remain-on-exit"
         | "restore-on-start"
+        | "start-from-tmux"
         | "automatic-rename"
         | "allow-rename"
         | "focus-events"
