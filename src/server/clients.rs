@@ -2548,6 +2548,39 @@ fn pane_looks(
     looks
 }
 
+/// The `#[range=control|N]` under window cell `(x, y)` of a frame title
+/// in client `id`'s framed window, and the pane whose title it is: the
+/// default `pane-border-format`'s zoom and close buttons (FR.2), laid out
+/// as [`render::frame_title`] draws them.
+pub(crate) fn frame_title_control(
+    state: &State,
+    id: ClientId,
+    (x, y): (u32, u32),
+) -> Option<(PaneId, u8)> {
+    let c = state.clients.get(&id)?;
+    let model = &state.model;
+    let w = model
+        .sessions
+        .get(&c.session)
+        .and_then(|s| model.windows.get(&s.active))?;
+    let (pane, r) = w.frame_rects().into_iter().find(|(_, r)| {
+        u32::from(r.y) == y && (u32::from(r.x)..u32::from(r.x) + u32::from(r.cols)).contains(&x)
+    })?;
+    let look = pane_looks(state, c, w, &[pane]);
+    if !look.frame_title {
+        return None;
+    }
+    let title = look.panes.get(&pane).map(|l| l.title.as_str())?;
+    let (x0, x1) = (i32::from(r.x), i32::from(r.x) + i32::from(r.cols) - 1);
+    let plain = status::Style::default();
+    let (tx, drawn) = render::frame_title((x0, x1), i32::from(w.cols), title, plain, '─')?;
+    let col = u16::try_from(i64::from(x) - i64::from(tx)).ok()?;
+    match drawn.range_at(col)?.kind {
+        status::RangeKind::Control(n) => Some((pane, n as u8)),
+        _ => None,
+    }
+}
+
 /// The border titles client `id`'s window shows, as drawn: where each
 /// pane's title is and what its `#[range=...]` parts cover, for the mouse.
 pub(crate) fn border_titles(state: &State, id: ClientId) -> Vec<render::Title> {

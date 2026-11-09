@@ -562,14 +562,11 @@ fn draw_frame(screen: &mut Screen, pane: &PaneBox, frame: &Frame) {
             screen.cells[(y * cols + x) as usize] = styled(*ch, &frame.style);
         }
     }
-    if let Some(title) = frame.title.filter(|t| !t.is_empty()) {
-        // Corner and one edge cell on each side stay the frame's.
-        let tx = x0 + 2;
-        let width = (x1 - 1 - tx).min(cols - tx);
-        if width >= 3 && tx >= 0 && on_screen(tx, y0) {
-            let under = vec![(g(borders::CELL_LEFTRIGHT), frame.style); width as usize];
-            let drawn =
-                crate::server::status::draw_over(&format!(" {title} "), frame.style, &under);
+    if let Some(title) = frame.title {
+        let edge = g(borders::CELL_LEFTRIGHT);
+        if let Some((tx, drawn)) = frame_title((x0, x1), cols, title, frame.style, edge)
+            && on_screen(tx, y0)
+        {
             draw_line_at(screen, y0 as u16, tx as usize, &drawn.line);
         }
     }
@@ -580,6 +577,28 @@ fn draw_frame(screen: &mut Screen, pane: &PaneBox, frame: &Frame) {
             }
         }
     }
+}
+
+/// A frame's title on its top edge from column `x0` to `x1` (the corners)
+/// in a screen `cols` wide: from two cells in, between a space each side,
+/// over `edge` glyphs, leaving the corner and one edge cell each side the
+/// frame's. Its column and what it draws, with its `#[range=...]` parts
+/// (columns from there) for the mouse; `None` with no room or no title.
+pub fn frame_title(
+    (x0, x1): (i32, i32),
+    cols: i32,
+    title: &str,
+    style: Style,
+    edge: char,
+) -> Option<(i32, StatusRow)> {
+    let tx = x0 + 2;
+    let width = (x1 - 1 - tx).min(cols - tx);
+    if title.is_empty() || width < 3 || tx < 0 {
+        return None;
+    }
+    let under = vec![(edge, style); width as usize];
+    let drawn = crate::server::status::draw_over(&format!(" {title} "), style, &under);
+    Some((tx, drawn))
 }
 
 /// A border glyph by which neighbours are border too.

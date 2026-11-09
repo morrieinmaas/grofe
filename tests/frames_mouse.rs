@@ -652,3 +652,28 @@ fn a_drop_on_the_pane_itself_clears_the_preview() {
     std::thread::sleep(Duration::from_millis(200));
     red_corners(&mut a, &[corner(r0)]);
 }
+
+/// The `[z]` the default `pane-border-format` draws in a frame's title is
+/// `MouseDown1Control8`, which zooms the pane, as on a tmux border title.
+#[test]
+fn clicking_z_in_a_frame_title_zooms_the_pane() {
+    let srv = framed();
+    let mut a = attach(&srv);
+    let (_, t, _, _) = rect(&srv, "%0");
+    let row = (t - 1) as usize;
+    a.wait_until("the title's [z]", WAIT, |s| {
+        s.lines().nth(row).is_some_and(|l| l.contains("[z]"))
+    });
+    let line = a.text().lines().nth(row).unwrap_or_default().to_string();
+    let at = line
+        .char_indices()
+        .find(|(i, _)| line[*i..].starts_with("[z]"))
+        .map(|(i, _)| line[..i].chars().count())
+        .expect("[z] on the title row");
+    std::thread::sleep(Duration::from_millis(350));
+    let z = (at as u16 + 1, t - 1);
+    a.send(sgr(0, z, false));
+    a.send(sgr(0, z, true));
+    let zoomed = wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "1", WAIT);
+    assert!(zoomed.is_ok(), "not zoomed; title row: {line:?}");
+}

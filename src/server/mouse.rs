@@ -395,6 +395,9 @@ fn hit(state: &State, client: ClientId, cell: (u16, u16)) -> Hit {
     // Framed, every cell that is no pane's content is a frame or a gap,
     // and belongs to a pane as a border does (FR.3).
     if w.framed() {
+        if let Some((pane, n)) = clients::frame_title_control(state, client, at) {
+            return Hit::Control(pane, n);
+        }
         return frame_owner(w, at).map_or(Hit::Nothing, Hit::Border);
     }
     if let Some(hit) = title_hit(state, client, w, &panes, at) {
