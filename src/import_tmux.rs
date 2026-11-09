@@ -688,6 +688,13 @@ struct Importer {
     /// `load-commands` (TP.0): load-time `if-shell`/`run-shell`, in order,
     /// in grofe's own grammar.
     load_commands: Vec<RuntimeEntry>,
+    /// TPM's plugin list: `@tpm_plugins`, then each `@plugin`, as TPM reads
+    /// them, loaded where the config runs TPM.
+    tpm_plugins: Vec<String>,
+    at_plugins: Vec<String>,
+    /// Whether TPM's line has been read: a binding after it is also bound
+    /// again after the plugins load, so it wins over theirs, as in tmux.
+    tpm_ran: bool,
     reports: Vec<ConfigError>,
 }
 
@@ -733,6 +740,9 @@ impl Importer {
             user_options: BTreeMap::new(),
             environment: Vec::new(),
             load_commands: Vec::new(),
+            tpm_plugins: Vec::new(),
+            at_plugins: Vec::new(),
+            tpm_ran: false,
             reports: Vec::new(),
         }
     }
@@ -871,11 +881,21 @@ impl Importer {
         };
         let name = name_word.value.clone();
         if let Some(user) = name.strip_prefix('@') {
-            if user == "plugin"
-                || user == "tpm_plugins"
-                || user.starts_with("resurrect-")
-                || user.starts_with("continuum-")
-            {
+            if user == "plugin" || user == "tpm_plugins" {
+                let value = words
+                    .get(i + 1)
+                    .map(|w| w.value.clone())
+                    .unwrap_or_default();
+                let names = value.split_whitespace().map(str::to_string);
+                if user == "plugin" {
+                    self.at_plugins.extend(names);
+                } else {
+                    self.tpm_plugins = names.collect();
+                }
+                let msg = format!("@{user}: these plugins load where TPM runs");
+                return self.note(file, line, msg);
+            }
+            if user.starts_with("resurrect-") || user.starts_with("continuum-") {
                 return self.report(file, line, "plugins and TPM", text);
             }
             if other_table {
@@ -1436,6 +1456,21 @@ impl Importer {
     /// bound, content and comment by the winning line), and notes the
     /// superseded line so it is still accounted for.
     fn upsert_key(&mut self, new: BindingEntry) {
+        if self.tpm_ran {
+            let (table, key) = (single_quote(&new.table), single_quote(&new.key.to_string()));
+            let text = match new.command.as_str() {
+                "" => format!("unbind-key -T {table} {key}"),
+                cmd => {
+                    let r = if new.repeat { "-r " } else { "" };
+                    format!("bind-key {r}-T {table} {key} {}", single_quote(cmd))
+                }
+            };
+            self.load_commands.push(RuntimeEntry {
+                text,
+                file: new.file.clone(),
+                line: new.line,
+            });
+        }
         if let Some(i) = self
             .keys
             .iter()
@@ -1871,10 +1906,77 @@ impl Importer {
     /// A `run-shell` at load time: `load-commands` (TP.0) in native form;
     /// TPM and plugin scripts are reported.
     fn handle_run_shell(&mut self, file: &Path, line: usize, text: &str, all: &[Word]) {
+        if let Some(tpm) = all[1..].iter().find_map(|w| tpm_script(&w.value)) {
+            return self.load_tpm_plugins(file, line, &tpm);
+        }
         if all[1..].iter().any(|w| runs_a_plugin(&w.value)) {
             return self.report(file, line, "plugins and TPM", text);
         }
         self.load_command(file, line, text, all);
+    }
+
+    /// TPM's own `run .../tpm/tpm`: what TPM would source, a `run-shell` of
+    /// each listed plugin's `*.tmux` from TPM's plugin directory (the one
+    /// holding `tpm` itself), in TPM's order. Nothing is cloned: a plugin
+    /// that is not there is reported, as are resurrect and continuum,
+    /// which grofe's own persistence replaces.
+    fn load_tpm_plugins(&mut self, file: &Path, line: usize, tpm: &str) {
+        let tpm = match (tpm.strip_prefix("~/"), &self.home) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(tpm),
+        };
+        let Some(dir) = tpm.parent().and_then(Path::parent).map(Path::to_path_buf) else {
+            return self.report(file, line, "plugins and TPM", &tpm.display().to_string());
+        };
+        let listed: Vec<String> = self
+            .tpm_plugins
+            .iter()
+            .chain(&self.at_plugins)
+            .cloned()
+            .collect();
+        let mut loaded = 0;
+        for spec in listed {
+            let name = spec.split('#').next().unwrap_or(&spec);
+            let name = name.rsplit('/').next().unwrap_or(name);
+            if name == "tpm" {
+                continue;
+            }
+            if name == "tmux-resurrect" || name == "tmux-continuum" {
+                let why = format!("{spec}: grofe's own persistence replaces it");
+                self.report(file, line, "plugins and TPM", &why);
+                continue;
+            }
+            let mut entry_points: Vec<PathBuf> = fs::read_dir(dir.join(name))
+                .into_iter()
+                .flatten()
+                .filter_map(|e| Some(e.ok()?.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "tmux"))
+                .collect();
+            if entry_points.is_empty() {
+                let at = tilde(&dir, self.home.as_deref());
+                let why = format!("{spec}: not installed in {at} (TPM would clone it)");
+                self.report(file, line, "plugins and TPM", &why);
+                continue;
+            }
+            entry_points.sort();
+            for p in entry_points {
+                // `~/...`: the shell `run-shell` starts expands it.
+                // ponytail: a plugin path with a space in it is not quoted for sh.
+                let path = tilde(&p, self.home.as_deref());
+                self.load_commands.push(RuntimeEntry {
+                    text: format!("run-shell {}", single_quote(&path)),
+                    file: file.to_path_buf(),
+                    line,
+                });
+                loaded += 1;
+            }
+        }
+        self.tpm_ran = true;
+        self.note(
+            file,
+            line,
+            format!("TPM: runs {loaded} plugin entry points here"),
+        );
     }
 
     /// An `if-shell` at load time: grofe's conditional (TC.10), branches
@@ -2422,6 +2524,13 @@ fn stored_commands(argv: &[String], command: &Command) -> Vec<(usize, String)> {
     out
 }
 
+/// The path in a `run-shell` word that runs TPM itself (`.../tpm/tpm`).
+fn tpm_script(text: &str) -> Option<String> {
+    text.split(|c: char| c.is_whitespace() || "'\"".contains(c))
+        .find(|t| t.ends_with("/tpm/tpm"))
+        .map(str::to_string)
+}
+
 /// Whether a `run-shell`/`if-shell` word runs TPM or a plugin: a path to
 /// `tpm`, to a `*.tmux` plugin entry point, or under a `plugins/`
 /// directory.
@@ -2624,6 +2733,11 @@ fn literal(toml: &str, value: &str) -> String {
 
 fn quote(s: &str) -> String {
     toml::Value::String(s.to_string()).to_string()
+}
+
+/// One word in grofe's command grammar: in single quotes, a `'` as `'\''`.
+fn single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 fn bare_or_quoted(s: &str) -> String {

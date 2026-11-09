@@ -2,9 +2,10 @@
 ~/.tmux.conf:15: note: source-file of the imported config rewritten to reload
 ~/.tmux.conf:32: note: mouse with no value toggles it, as tmux does, to off
 ~/.tmux.conf:7: note: mouse is overridden by a later set at ~/.tmux.conf:32
-~/.tmux.conf:33: plugins and TPM: set -g @plugin 'tmux-plugins/tpm'
-~/.tmux.conf:34: plugins and TPM: set -g @plugin 'tmux-plugins/tmux-sensible'
+~/.tmux.conf:33: note: @plugin: these plugins load where TPM runs
+~/.tmux.conf:34: note: @plugin: these plugins load where TPM runs
 ~/.tmux.conf:37: note: source-file -q found ~/.tmux/local.conf
 ~/.tmux.conf:6: note: keys.prefix.C-a is overridden by a later binding at ~/.tmux/local.conf:3
 ~/.tmux.conf:38: skipped: no file matches (source-file -q): source-file -q ~/.tmux/missing.conf
-~/.tmux.conf:39: plugins and TPM: run '~/.tmux/plugins/tpm/tpm'
+~/.tmux.conf:39: plugins and TPM: tmux-plugins/tmux-sensible: not installed in ~/.tmux/plugins (TPM would clone it)
+~/.tmux.conf:39: note: TPM: runs 0 plugin entry points here

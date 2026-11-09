@@ -239,6 +239,8 @@ fn accounting_note(rest: &str) -> bool {
         " toggles it, as tmux does",
         " replaced by the built-in mouse model",
         " is already set, so -o leaves it",
+        ": these plugins load where TPM runs",
+        "TPM: runs ",
     ]
     .iter()
     .any(|a| note.starts_with(a.trim_start()) || note.contains(a))
@@ -297,6 +299,43 @@ fn no_fixture_leaves_a_line_out_as_a_note() {
             }
         }
     }
+}
+
+/// TPM's `run .../tpm/tpm` becomes a `run-shell` of every installed
+/// plugin's `*.tmux`, in TPM's order (`@tpm_plugins`, then `@plugin`
+/// lines), so plugins load under grofe as TPM loads them. TPM itself, a
+/// plugin that is not installed, and resurrect (grofe's own persistence
+/// replaces it) are reported instead.
+#[test]
+fn tpm_loads_each_installed_plugin() {
+    let f = Fixture::new("tpm-plugins");
+    let out = f.run(&[]);
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
+    let doc: toml::Table = out.stdout.parse().expect("valid toml");
+    let run = |p: &str| format!("run-shell '~/.config/tmux/plugins/{p}'");
+    let loads: Vec<&str> = doc["load-commands"]
+        .as_array()
+        .expect("load-commands")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        loads,
+        [
+            run("tmux-yank/yank.tmux"),
+            run("tmux-sessionx/sessionx.tmux"),
+            // Bound after TPM, so bound again after the plugins: it wins.
+            r"bind-key -T 'prefix' 's' 'run-shell '\''echo mine'\'''".to_string(),
+        ]
+    );
+    let report = report_lines(&out.stderr).join("\n");
+    assert!(report.contains("someone/not-installed"), "{report}");
+    assert!(report.contains("tmux-resurrect"), "{report}");
+    assert_eq!(
+        doc["user-options"]["sessionx-bind"].as_str(),
+        Some("o"),
+        "a plugin's own options still come across"
+    );
 }
 
 /// Case 5: `neww`, `setw`, `display` and `-t =x` are written in grofe's
@@ -837,7 +876,7 @@ fn show_config_round_trips_the_new_keys() {
     for want in [
         "user-options.theme_blue = \"#458588\"\n",
         "environment.CANOPY_STORE = \"$HOME/.local/share/canopy\"\n",
-        "load-commands = [\"run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'\"",
+        "load-commands = [\"bind-key -T 'prefix' 'C-s' 'send-prefix'\", \"run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'\"",
     ] {
         assert!(first.contains(want), "{want:?} missing from:\n{first}");
     }

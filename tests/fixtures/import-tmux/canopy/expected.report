@@ -36,9 +36,10 @@
 ~/.local/share/canopy/tmux/tmux.conf:43: note: source-file -q found ~/.config/canopy/user.conf
 ~/.local/state/canopy/10-keys.conf:17: note: keys.prefix.K is overridden by a later binding at ~/.config/canopy/user.conf:4
 ~/.config/canopy/user.conf:9: plugins and TPM: set-environment -g TMUX_PLUGIN_MANAGER_PATH '~/.config/tmux/plugins/'
-~/.config/canopy/user.conf:10: plugins and TPM: set -g @tpm_plugins '            tmux-plugins/tpm               tmux-plugins/tmux-sensible   '
+~/.config/canopy/user.conf:10: note: @tpm_plugins: these plugins load where TPM runs
 ~/.config/canopy/user.conf:14: plugins and TPM: if "test ! -d ~/.config/tmux/plugins/tpm" "run 'git clone --depth 1 https://github.com/tmux-plugins/tpm ~/.config/tmux/plugins/tpm'"
-~/.config/canopy/user.conf:15: plugins and TPM: run '~/.config/tmux/plugins/tpm/tpm'
+~/.config/canopy/user.conf:15: plugins and TPM: tmux-plugins/tmux-sensible: not installed in ~/.config/tmux/plugins (TPM would clone it)
+~/.config/canopy/user.conf:15: note: TPM: runs 0 plugin entry points here
 ~/.local/state/canopy/10-keys.conf:8: note: keys.prefix.C-s is overridden by a later binding at ~/.config/canopy/user.conf:16
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:79: note: status.left is overridden by a later set at ~/.config/canopy/user.conf:18
 ~/.local/share/canopy/tmux/conf.d/20-status.conf:93: note: status.right is overridden by a later set at ~/.config/canopy/user.conf:19

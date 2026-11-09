@@ -128,9 +128,11 @@ Ctrl-drag, `prefix F` and the menu items are grofe-name defaults; under the
 > tools and scripts it was tested against send, but some things are not there
 > yet or never will be:
 >
-> - **Plugins.** TPM itself does not run. The plugins you load with it run
->   unchanged through canopy's plugin loader, which vendors each one and
->   starts it with `run-shell`, as TPM does. A plugin's own `*.tmux` and
+> - **Plugins.** TPM itself does not run. `import-tmux` turns its `run`
+>   line into a `run-shell` of each installed plugin's `*.tmux`, in TPM's
+>   order, so the plugins you already have load unchanged; nothing is
+>   cloned or updated. Resurrect and continuum are left out, since grofe's
+>   own persistence replaces them. A plugin's own `*.tmux` and
 >   `*.conf` files are read as tmux config only when the request comes
 >   through the `tmux` name or the server has tmux identity.
 > - **Copy mode and paste buffers** (`copy-mode`, `send-keys -X`, the

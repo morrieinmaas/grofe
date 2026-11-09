@@ -30,6 +30,8 @@ renumber-windows = true
 # ~/.config/canopy/user.conf:1
 main-pane-width = "50%"
 load-commands = [
+# ~/.config/canopy/user.conf:16
+"bind-key -T 'prefix' 'C-s' 'send-prefix'",
 # ~/.config/canopy/user.conf:17
 "run-shell -b '$HOME/.config/tmux/wk-keys-fix.sh'",
 # ~/.config/canopy/user.conf:20
