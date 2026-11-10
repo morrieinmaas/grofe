@@ -116,7 +116,24 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
 /// 2026-11-05-frames.md): through the tmux dialect `set-option` and
 /// `show-options` call them `invalid option`, as tmux would, while the
 /// native CLI and the TOML config take them under either identity.
-const GROFE_ONLY: &[&str] = &["pane-frames", "pane-gap", "pane-frame-title"];
+const GROFE_ONLY: &[&str] = &[
+    "pane-frames",
+    "pane-gap",
+    "pane-frame-title",
+    "pane-frame-tab-ends",
+];
+
+/// `pane-border-format`'s default, tmux 3.7b's: its `[z]` and `[x]`
+/// buttons are `control|8` and `control|9`.
+pub const PANE_BORDER_FORMAT: &str = "#{?pane_active,#[reverse],}#{pane_index}#[default] \
+     \"#{pane_title}\"#{?#{mouse},#[align=right]#[range=control|8]\
+     [#{?#{window_zoomed_flag},u,z}]#[norange]#[range=control|9][x]#[norange],}";
+
+/// What a framed title under grofe identity draws for the default
+/// `pane-border-format`: the same less its buttons, which the frame's
+/// control tab takes over (`render::frame_tab`).
+pub const FRAME_TITLE_FORMAT: &str =
+    "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"";
 
 /// Whether `name` is a built-in tmux's CLI must not see ([`GROFE_ONLY`]).
 pub fn is_grofe_only(name: &str) -> bool {
@@ -541,6 +558,16 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "on",
     },
+    // The two end glyphs of a framed title's control tab under grofe
+    // identity: half blocks, which any terminal font has; a Powerline
+    // font's rounded `\u{e0b6}\u{e0b4}` are the usual choice there, and
+    // anything but two one-cell glyphs gives plain ends.
+    Builtin {
+        name: "pane-frame-tab-ends",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "▐▌",
+    },
     Builtin {
         name: "status-position",
         kind: Kind::Choice(&["top", "bottom"]),
@@ -692,9 +719,7 @@ const BUILTINS: &[Builtin] = &[
         name: "pane-border-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"\
-                  #{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]\
-                  #[norange]#[range=control|9][x]#[norange],}",
+        default: PANE_BORDER_FORMAT,
     },
     Builtin {
         name: "renumber-windows",

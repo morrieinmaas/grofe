@@ -1917,8 +1917,25 @@ pub fn default_bindings() -> KeyTables {
             Binding::new(vec![argv], false, BindingSource::Default),
         );
     }
+    // The float control of a framed title's tab (`render::frame_tab`);
+    // grofe's own, as the tab is.
+    if let (Ok(key), Ok(cmds)) = (
+        parse_key("MouseDown1Control7"),
+        crate::cmd::split_command_string(GROFE_FLOAT_CONTROL),
+    ) {
+        t.insert(
+            ROOT_TABLE,
+            key,
+            Binding::new(cmds, false, BindingSource::Default),
+        );
+    }
     t
 }
+
+/// grofe identity's `MouseDown1Control7`, the tab's float control: the
+/// pane clicked floats, or unfloats if it is floating.
+pub const GROFE_FLOAT_CONTROL: &str =
+    r##"if-shell -F -t = "#{pane_floating_flag}" { unfloat-pane -t = } { float-pane -t = }"##;
 
 /// grofe identity's `MouseDown3Pane` (FR.4): a pane that asked for the
 /// mouse is focused and gets the click, as tmux's stock row sends it on;

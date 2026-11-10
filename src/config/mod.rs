@@ -85,6 +85,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("pane-frames", "pane-frames"),
     ("pane-gap", "pane-gap"),
     ("pane-frame-title", "pane-frame-title"),
+    ("pane-frame-tab-ends", "pane-frame-tab-ends"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),

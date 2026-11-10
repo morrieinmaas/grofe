@@ -28,7 +28,8 @@ use grofe::server::borders::PaneLines;
 use grofe::server::layout::LayoutTree;
 use grofe::server::pane::{CellFlags, CursorShape, CursorState, RowsSnapshot, SnapCell};
 use grofe::server::render::{
-    FloatingPane, FrameInputs, PaneLook, PaneLooks, Screen, compose, draw_floating,
+    FloatingPane, FrameInputs, PaneLook, PaneLooks, Screen, compose, draw_floating, frame_tab,
+    frame_title,
 };
 use grofe::server::status::{Style, parse_style};
 use grofe::types::{Dir, PaneId, Rect, SplitSize};
@@ -158,6 +159,7 @@ fn look(index: usize, title: &str) -> PaneLook {
         border: Style::default(),
         active_border: parse_style(ACTIVE),
         title: title.to_string(),
+        tab: None,
         index,
     }
 }
@@ -258,6 +260,57 @@ fn the_active_frame_takes_the_active_style_and_the_others_the_border_style() {
         assert_eq!(c.fg, Color::Named(NamedColor::Foreground));
         assert_eq!(c.bg, Color::Named(NamedColor::Background));
     }
+}
+
+/// The control tab sits at the right end of a frame's top edge, one edge
+/// cell before the corner, in the frame's own style: its ends plain, its
+/// controls reversed, so it reads as a pill of the frame's colour. The
+/// title keeps the left and is cut before the tab.
+#[test]
+fn the_control_tab_ends_the_title_edge_in_the_frames_colours() {
+    let mut inputs = three(Some(1), PaneLines::Rounded, true);
+    for l in inputs.look.panes.values_mut() {
+        l.tab = Some(frame_tab("▐▌", false, false));
+    }
+    let screen = compose(&inputs);
+    for (id, f) in inputs.look.frames.clone() {
+        let (y, x1) = (f.y, f.x + f.cols - 1);
+        let tab: String = (x1 - 8..x1 - 1).map(|x| at(&screen, x, y).c).collect();
+        assert_eq!(tab, "▐z f x▌", "{id}:\n{}", text(&screen));
+        assert_eq!(at(&screen, x1 - 1, y).c, '─');
+        assert_eq!(at(&screen, x1, y).c, '╮');
+        let end = at(&screen, x1 - 8, y);
+        let z = at(&screen, x1 - 7, y);
+        assert!(!end.flags.contains(CellFlags::INVERSE), "{id}");
+        assert!(z.flags.contains(CellFlags::INVERSE), "{id}");
+        assert_eq!(is_active(end), id == PaneId(1), "{id}");
+        assert_eq!(is_active(z), id == PaneId(1), "{id}");
+        let row = text(&screen)
+            .lines()
+            .nth(usize::from(y))
+            .unwrap()
+            .to_string();
+        let n = id.0;
+        assert!(row.contains(&format!("╭─ {n}: ")), "{row}");
+    }
+    // Zoomed and floating, the controls are unzoom and tile.
+    assert_eq!(frame_tab("", true, true).matches("u").count(), 1);
+}
+
+/// Each control of the tab is a click range: zoom on its first two
+/// cells, float on the middle three, close on the last two.
+#[test]
+fn the_control_tabs_cells_are_its_controls() {
+    use grofe::server::status::RangeKind;
+    let tab = frame_tab("▐▌", false, false);
+    let edge = frame_title((0, 30), 80, "t", Some(&tab), Style::default(), '─');
+    let (tx, _) = edge.tab.as_ref().expect("a tab");
+    assert_eq!(*tx, 30 - 1 - 7);
+    let got: Vec<Option<RangeKind>> = (0..7)
+        .map(|i| edge.range_at(tx + i).map(|r| r.kind.clone()))
+        .collect();
+    let c = |n| Some(RangeKind::Control(n));
+    assert_eq!(got, vec![c(8), c(8), c(7), c(7), c(7), c(9), c(9)]);
 }
 
 #[test]
@@ -477,7 +530,7 @@ fn attached(config: &str) -> (TestServer, Harness) {
 fn an_attached_client_sees_rounded_frames_with_titles() {
     let (_srv, mut client) = attached("pane-frames = true\n");
     client.wait_until("three titled frames", harness::DEFAULT_TIMEOUT, |t| {
-        t.matches(": cat ─").count() == 3
+        t.matches(": ca").count() == 3 && t.matches("▐z f x▌").count() == 3
     });
     let shown = client.text();
     assert_eq!(shown.matches("╭─ ").count(), 3, "{shown}");
@@ -521,6 +574,22 @@ fn tmux_identity_with_frames_on_keeps_a_single_the_config_sets() {
     assert!(!shown.contains('╭'), "{shown}");
 }
 
+/// Under tmux identity a frame's title is tmux's stock
+/// `pane-border-format`, its `[z][x]` included, and grofe's control tab is
+/// not drawn.
+#[test]
+fn tmux_identity_with_frames_on_keeps_the_stock_title_buttons() {
+    let (srv, mut client) = attached("compat-identity = \"tmux\"\npane-frames = true\n");
+    srv.cmd(&["set", "-gu", "pane-border-format"])
+        .expect("default format");
+    srv.cmd(&["set", "-g", "mouse", "on"]).expect("mouse");
+    // Zoomed, so the one frame is wide enough for the whole title.
+    srv.cmd(&["resize-pane", "-Z", "-t", "f:.1"]).expect("zoom");
+    client.wait_for("[u][x]");
+    assert!(!client.text().contains("z f x"), "{}", client.text());
+    assert!(!client.text().contains('▐'), "{}", client.text());
+}
+
 #[test]
 fn grofe_identity_with_an_explicit_single_draws_single_frames() {
     let (srv, mut client) = attached("pane-frames = true\npane-frame-title = false\n");
@@ -535,7 +604,7 @@ fn grofe_identity_with_an_explicit_single_draws_single_frames() {
 fn a_zoomed_framed_window_draws_one_framed_tile() {
     let (srv, mut client) = attached("pane-frames = true\n");
     client.wait_until("three titled frames", harness::DEFAULT_TIMEOUT, |t| {
-        t.matches(": cat ─").count() == 3
+        t.matches(": ca").count() == 3 && t.matches("▐z f x▌").count() == 3
     });
     srv.cmd(&["resize-pane", "-Z", "-t", "f:.1"]).expect("zoom");
     client.wait_until("one framed tile", harness::DEFAULT_TIMEOUT, |t| {
