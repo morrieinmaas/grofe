@@ -80,17 +80,25 @@ with its own frame, its title drawn in the frame's top edge, and a cell of
 gap between tiles and around the outside:
 
 ```
- ╭─ 1: nvim ──────────────────╮ ╭─ 2: zsh ──────────────────╮
+ ╭─ 1: nvim ──────── ▐z f x▌ ─╮ ╭─ 2: zsh ─────── ▐z f x▌ ─╮
  │                            │ │                           │
  │                            │ ╰───────────────────────────╯
  │                            │
- │                            │ ╭─ 3: cargo ────────────────╮
+ │                            │ ╭─ 3: cargo ───── ▐z f x▌ ─╮
  │                            │ │                           │
  ╰────────────────────────────╯ ╰───────────────────────────╯
 ```
 
 The active pane's frame takes `pane-active-border-style`, the others
-`pane-border-style`, and the title is `pane-border-format`. `#{pane_width}`,
+`pane-border-style`, and the title is `pane-border-format`. With `mouse` on,
+each title ends in a small tab of controls drawn as a pill in the frame's own
+colour: `z` zooms the pane (`u` unzooms), `f` floats it (`t` puts a floating
+pane back in the tiling) and `x` closes it, after asking. They are the mouse
+keys `MouseDown1Control8`, `Control7` and `Control9`, so they can be rebound.
+The default `pane-border-format`'s `[z][x]` buttons give way to the tab.
+`pane-frame-tab-ends` sets the tab's two end glyphs: half blocks `▐▌` by
+default, which any font has; with a Powerline or Nerd font
+`""` gives rounded ends, and an empty value plain ones. `#{pane_width}`,
 the pty size and `#{window_layout}` are the content, inside the frames. A
 window too small to frame every pane falls back to tmux's shared borders.
 The keys in `config.toml`:
@@ -99,6 +107,7 @@ The keys in `config.toml`:
 pane-frames = true          # false: tmux's shared one-cell borders
 pane-gap = 1                # cells between frames and around them, 0 to 8
 pane-frame-title = true     # false: a plain top edge
+pane-frame-tab-ends = "▐▌"  # the control tab's end glyphs
 
 [pane-border]
 lines = "rounded"           # the default with frames; single, double, heavy, ...
@@ -107,13 +116,18 @@ lines = "rounded"           # the default with frames; single, double, heavy, ..
 Under the `tmux` name nothing changes: shared borders, tmux's geometry, and
 the frame options are unknown to tmux's `set-option`. Set `pane-frames = true`
 (and `pane-gap` if you like) in `config.toml` to get the framed canvas there
-too.
+too; the titles then keep tmux's own `[z][x]` and draw no tab.
 
-With `mouse` on, panes move with the mouse. Drag a tile by its title (or
-Ctrl-drag anywhere in it, `drag-pane -M`): a preview frame shows where it
-will land. Drop it on another pane's middle and the two swap; drop it on the
-outer quarter of a side and it docks there, splitting that pane; drop it on
-itself or a gap and nothing changes. Dragging a gap or any other frame edge
+With `mouse` on, panes move with the mouse, as windows do on a desktop. Drag a
+tile by its title (or Ctrl-drag anywhere in it, `drag-pane -M`) and it lifts
+out of the tiling: it follows the pointer as a floating frame, its content
+live, the grabbed cell under the pointer, while its old place stays empty, and
+a preview frame shows where it will land. Drop it on another pane's middle
+and the two swap; drop it on the outer quarter of a side and it docks there,
+splitting that pane; drop it on itself and nothing changes; drop it on a gap,
+off every tile, and it stays floating there, at its size. A right click or
+Escape before the release puts it back. The program inside learns its new
+size once, on the release. Dragging a gap or any other frame edge
 resizes, as a border drag does in tmux. Panes can float above the tiles:
 `prefix F` floats the active pane or puts a floating one back
 (`float-pane`, `unfloat-pane`), the right-click pane menu has Float and

@@ -195,17 +195,13 @@ fn dropping_on_a_panes_left_quarter_docks_left() {
 }
 
 #[test]
-fn dropping_a_pane_on_itself_or_a_gap_changes_nothing() {
+fn dropping_a_pane_on_itself_changes_nothing() {
     let srv = framed();
     let mut a = attach(&srv);
     let before = layout(&srv);
     drag(&mut a, 0, title(&srv, "%0"), &[(20, 5), middle(&srv, "%0")]);
     stays(&srv, &before);
-    // The gap between the two frames.
-    let (l0, _, w0, _) = rect(&srv, "%0");
-    let gap = l0 + w0 + 1;
-    drag(&mut a, 0, title(&srv, "%0"), &[(50, 5), (gap, 10)]);
-    stays(&srv, &before);
+    assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "0");
     // An edge drop that leaves the shape as it is: %0 onto %1's left
     // quarter, with the divider moved first, which stays put.
     ok(&srv, &["resize-pane", "-t", "%0", "-R", "6"]);
@@ -213,6 +209,123 @@ fn dropping_a_pane_on_itself_or_a_gap_changes_nothing() {
     let (l1, t1, _, h1) = rect(&srv, "%1");
     drag(&mut a, 0, title(&srv, "%0"), &[(l1 + 1, t1 + h1 / 2)]);
     stays(&srv, &moved);
+}
+
+/// The character on the client's screen at `(x, y)`.
+fn cell_at(screen: &str, (x, y): (u16, u16)) -> Option<char> {
+    screen.lines().nth(y as usize)?.chars().nth(x as usize)
+}
+
+/// Where the frame corner of a pane grabbed by its title at
+/// [`title`] (3 cells in) is drawn with the pointer at `p`: the grab point
+/// stays under the pointer.
+fn lifted_corner(p: (u16, u16)) -> (u16, u16) {
+    (p.0 - 4, p.1)
+}
+
+/// While the button is down a pane dragged by its title is drawn as a
+/// floating frame under the pointer, its old place empty; the layout and
+/// the program's size change only on the release.
+#[test]
+fn a_dragged_pane_follows_the_pointer_until_the_release() {
+    let srv = framed();
+    let mut a = attach(&srv);
+    let before = layout(&srv);
+    let r0 = rect(&srv, "%0");
+    let old = (r0.0 - 1, r0.1 - 1);
+    let grab = title(&srv, "%0");
+    a.wait_until("%0's frame", WAIT, |s| cell_at(s, old) == Some('╭'));
+    std::thread::sleep(Duration::from_millis(350));
+    a.send(sgr(0, grab, false));
+    a.send(sgr(32, (grab.0 + 1, grab.1), false));
+    let to = (30, 6);
+    a.send(sgr(32, to, false));
+    a.wait_until("the lifted frame", WAIT, |s| {
+        cell_at(s, lifted_corner(to)) == Some('╭') && cell_at(s, old) != Some('╭')
+    });
+    assert_eq!(layout(&srv), before);
+    // It follows each report.
+    let next = (34, 9);
+    a.send(sgr(32, next, false));
+    a.wait_until("the frame moved", WAIT, |s| {
+        cell_at(s, lifted_corner(next)) == Some('╭') && cell_at(s, lifted_corner(to)) != Some('╭')
+    });
+    assert_eq!(layout(&srv), before);
+    // Back over itself and released: nothing changes, and it is drawn in
+    // its place again.
+    let home = middle(&srv, "%0");
+    a.send(sgr(32, home, false));
+    a.send(sgr(0, home, true));
+    a.wait_until("back in place", WAIT, |s| {
+        cell_at(s, old) == Some('╭') && cell_at(s, lifted_corner(home)) != Some('╭')
+    });
+    stays(&srv, &before);
+}
+
+/// Released over no tile (a gap), the pane stays floating where it was
+/// dropped, at its size, as the same pane.
+#[test]
+fn releasing_a_pane_over_a_gap_leaves_it_floating_there() {
+    let srv = framed();
+    let mut a = attach(&srv);
+    let (l0, t0, w0, h0) = rect(&srv, "%0");
+    let pid = var(&srv, "%0", "#{pane_pid}");
+    let gap = l0 + w0 + 1;
+    let at = (gap, t0 + 5);
+    drag(&mut a, 0, title(&srv, "%0"), &[(50, 5), at]);
+    let floated = wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "1", WAIT);
+    assert!(floated.is_ok(), "{:?}", layout(&srv));
+    let corner = lifted_corner(at);
+    assert_eq!(rect(&srv, "%0"), (corner.0 + 1, corner.1 + 1, w0, h0));
+    assert_eq!(var(&srv, "%0", "#{pane_pid}"), pid);
+    assert_eq!(var(&srv, "%0", "#{pane_active}"), "1");
+    // %1 has the tiling to itself.
+    assert_eq!(rect(&srv, "%1").0, l0, "{:?}", layout(&srv));
+    // Moved by its title, it stays floating and follows.
+    let (fx, fy, _, _) = rect(&srv, "%0");
+    drag(
+        &mut a,
+        0,
+        (fx + 3, fy - 1),
+        &[(fx + 5, fy - 1), (fx + 8, fy + 1)],
+    );
+    let moved = wait_until(|| rect(&srv, "%0").0 == fx + 5, WAIT);
+    assert!(moved.is_ok(), "{:?}", rect(&srv, "%0"));
+    assert_eq!(rect(&srv, "%0").1, fy + 2);
+    assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "1");
+}
+
+/// A right click or Escape while the button is down cancels the move: the
+/// pane goes back as it was.
+#[test]
+fn a_right_click_or_escape_cancels_a_move() {
+    let srv = framed();
+    let mut a = attach(&srv);
+    let before = layout(&srv);
+    let r0 = rect(&srv, "%0");
+    let old = (r0.0 - 1, r0.1 - 1);
+    let mid = middle(&srv, "%1");
+    for cancel in [sgr(2, mid, false), "\x1b".to_string()] {
+        std::thread::sleep(Duration::from_millis(350));
+        a.send(sgr(0, title(&srv, "%0"), false));
+        a.send(sgr(32, (mid.0 - 1, mid.1), false));
+        a.send(sgr(32, mid, false));
+        a.wait_until("lifted", WAIT, |s| {
+            cell_at(s, lifted_corner(mid)) == Some('╭')
+        });
+        a.send(&cancel);
+        a.wait_until("back in place", WAIT, |s| {
+            cell_at(s, old) == Some('╭') && cell_at(s, lifted_corner(mid)) != Some('╭')
+        });
+        // The rest of the drag and its release do nothing.
+        a.send(sgr(32, (mid.0 + 1, mid.1), false));
+        a.send(sgr(0, (mid.0 + 1, mid.1), true));
+        if cancel.starts_with("\x1b[") {
+            a.send(sgr(2, mid, true));
+        }
+        stays(&srv, &before);
+        assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "0");
+    }
 }
 
 #[test]
@@ -572,9 +685,10 @@ fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
     let mid = middle(&srv, "%1");
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
     a.send(sgr(32, mid, false));
-    red_corners(&mut a, &[corner(r0), corner(r1)]);
+    // %0, lifted, is drawn under the pointer in its active style, and its
+    // old place is empty.
+    red_corners(&mut a, &[lifted_corner(mid), corner(r1)]);
     let bottom = |(l, t, w, h): (u16, u16, u16, u16)| (l + w, t + h);
-    wait_red(&mut a, '╯', &[bottom(r0), bottom(r1)]);
     // Over %1's bottom quarter: docking below %1, so the preview moves
     // to the landing rect of that drop.
     let low = (mid.0, r1.1 + r1.3 - 2);
@@ -583,7 +697,7 @@ fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
     let half = loop {
         let got: Vec<(u16, u16)> = red(&mut a, '╭')
             .into_iter()
-            .filter(|c| *c != corner(r0))
+            .filter(|c| *c != lifted_corner(low))
             .collect();
         if let [c] = got[..]
             && c != corner(r1)
@@ -619,7 +733,7 @@ fn the_drop_preview_goes_when_the_move_is_cancelled() {
     let mid = middle(&srv, "%1");
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
     a.send(sgr(32, mid, false));
-    red_corners(&mut a, &[corner(r0), corner(r1)]);
+    red_corners(&mut a, &[lifted_corner(mid), corner(r1)]);
     ok(&srv, &["set", "-g", "mouse", "off"]);
     // The next report finds the mouse off and cancels the move.
     a.send(sgr(32, (mid.0 + 1, mid.1), false));
@@ -642,7 +756,7 @@ fn a_drop_on_the_pane_itself_clears_the_preview() {
     let mid = middle(&srv, "%1");
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
     a.send(sgr(32, mid, false));
-    red_corners(&mut a, &[corner(r0), corner(r1)]);
+    red_corners(&mut a, &[lifted_corner(mid), corner(r1)]);
     // The release comes over %0 with no motion report there first.
     a.send(sgr(0, middle(&srv, "%0"), true));
     red_corners(&mut a, &[corner(r0)]);
@@ -653,27 +767,89 @@ fn a_drop_on_the_pane_itself_clears_the_preview() {
     red_corners(&mut a, &[corner(r0)]);
 }
 
-/// The `[z]` the default `pane-border-format` draws in a frame's title is
-/// `MouseDown1Control8`, which zooms the pane, as on a tmux border title.
+/// The column of the first `tab` on row `row` of the client's screen, once
+/// it shows.
+fn tab_at(a: &mut Harness, row: u16, tab: &str) -> u16 {
+    let row = row as usize;
+    a.wait_until(&format!("{tab:?} on row {row}"), WAIT, |s| {
+        s.lines().nth(row).is_some_and(|l| l.contains(tab))
+    });
+    let line = a.text().lines().nth(row).unwrap_or_default().to_string();
+    let i = line.find(tab).expect("the tab on its row");
+    line[..i].chars().count() as u16
+}
+
+fn click(a: &mut Harness, at: (u16, u16)) {
+    std::thread::sleep(Duration::from_millis(350));
+    a.send(sgr(0, at, false));
+    a.send(sgr(0, at, true));
+}
+
+/// Under grofe identity a frame's title ends in a tab of three controls in
+/// the frame's colours, `▐z f x▌`, in place of the default
+/// `pane-border-format`'s `[z][x]`: zoom (`MouseDown1Control8`), float
+/// (`MouseDown1Control7`) and close (`MouseDown1Control9`, which asks).
+/// On a floating pane the middle one unfloats it (`t`), and zoomed the
+/// first unzooms (`u`).
 #[test]
-fn clicking_z_in_a_frame_title_zooms_the_pane() {
+fn the_frame_tab_zooms_floats_and_closes() {
     let srv = framed();
     let mut a = attach(&srv);
     let (_, t, _, _) = rect(&srv, "%0");
-    let row = (t - 1) as usize;
-    a.wait_until("the title's [z]", WAIT, |s| {
-        s.lines().nth(row).is_some_and(|l| l.contains("[z]"))
-    });
-    let line = a.text().lines().nth(row).unwrap_or_default().to_string();
-    let at = line
-        .char_indices()
-        .find(|(i, _)| line[*i..].starts_with("[z]"))
-        .map(|(i, _)| line[..i].chars().count())
-        .expect("[z] on the title row");
-    std::thread::sleep(Duration::from_millis(350));
-    let z = (at as u16 + 1, t - 1);
-    a.send(sgr(0, z, false));
-    a.send(sgr(0, z, true));
+    let row = t - 1;
+    let at = tab_at(&mut a, row, "z f x");
+    assert!(!a.text().contains("[z]"), "{}", a.text());
+    let ends = a
+        .text()
+        .lines()
+        .nth(row as usize)
+        .unwrap_or_default()
+        .to_string();
+    assert!(ends.contains("▐z f x▌"), "{ends:?}");
+    // Zoom, then unzoom with the same control, now `u`.
+    click(&mut a, (at, row));
     let zoomed = wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "1", WAIT);
-    assert!(zoomed.is_ok(), "not zoomed; title row: {line:?}");
+    assert!(zoomed.is_ok(), "not zoomed: {}", a.text());
+    let zrow = rect(&srv, "%0").1 - 1;
+    let u = tab_at(&mut a, zrow, "u f x");
+    click(&mut a, (u, zrow));
+    let unzoomed = wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "0", WAIT);
+    assert!(unzoomed.is_ok(), "still zoomed: {}", a.text());
+    // Float, then unfloat from the floating pane's own tab.
+    let at = tab_at(&mut a, row, "z f x");
+    click(&mut a, (at + 2, row));
+    let floated = wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "1", WAIT);
+    assert!(floated.is_ok(), "not floating: {}", a.text());
+    let frow = rect(&srv, "%0").1 - 1;
+    let ft = tab_at(&mut a, frow, "z t x");
+    click(&mut a, (ft + 2, frow));
+    let tiled = wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "0", WAIT);
+    assert!(tiled.is_ok(), "still floating: {}", a.text());
+    a.wait_until("both tiled again", WAIT, |s| {
+        !s.contains("z t x") && s.matches("z f x").count() == 2
+    });
+    // Close asks first.
+    let row = rect(&srv, "%0").1 - 1;
+    let at = tab_at(&mut a, row, "z f x");
+    let shown = a.text();
+    click(&mut a, (at + 4, row));
+    let asked = wait_until(|| a.text().contains("Kill pane"), WAIT);
+    assert!(asked.is_ok(), "clicked {:?} on:\n{shown}", (at + 4, row));
+    assert_eq!(var(&srv, "%0", "#{window_panes}"), "2");
+}
+
+/// `pane-frame-tab-ends` names the tab's two end glyphs; empty draws the
+/// tab with plain ends.
+#[test]
+fn the_tab_ends_are_an_option() {
+    let srv = framed();
+    ok(
+        &srv,
+        &["set", "-g", "pane-frame-tab-ends", "\u{e0b6}\u{e0b4}"],
+    );
+    let mut a = attach(&srv);
+    let row = rect(&srv, "%0").1 - 1;
+    tab_at(&mut a, row, "\u{e0b6}z f x\u{e0b4}");
+    ok(&srv, &["set", "-g", "pane-frame-tab-ends", ""]);
+    tab_at(&mut a, row, "─ z f x ─");
 }

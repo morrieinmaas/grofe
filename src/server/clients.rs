@@ -2518,7 +2518,14 @@ fn pane_looks(
     };
     // FR.2: the frames, their title and lines, and the drop preview.
     render::apply_frames(model, w, &mut looks);
+    looks.lifted = crate::server::mouse::lifted(state, w.id).map(|(p, _)| p);
     let titled = looks.status != PaneStatus::Off || looks.frame_title;
+    // grofe identity's framed titles end in a control tab while the mouse
+    // is on; tmux identity keeps tmux's stock title, buttons and all.
+    let tabbed = model.identity != crate::compat::Identity::Tmux
+        && !looks.frames.is_empty()
+        && looks.frame_title
+        && wopt("mouse") == "on";
     let order = w.pane_ids();
     let base_index = model.pane_base_index(w.id) as usize;
     let now = local_now();
@@ -2528,11 +2535,23 @@ fn pane_looks(
         let client_vars = ClientVars::new(model, c, Some(FormatCtx::new(model, *id)));
         let vars = options::ServerVars::new(state, *id, &client_vars);
         let (fg, bg) = window_style_colours(&opt, &vars, *id == w.active);
+        let format = match opt("pane-border-format") {
+            // The tab takes the place of the default format's buttons.
+            f if tabbed && f == options::PANE_BORDER_FORMAT => options::FRAME_TITLE_FORMAT,
+            f => f,
+        };
         let title = if !titled {
             String::new()
         } else {
-            status::expand_time(opt("pane-border-format"), &vars, &now)
+            status::expand_time(format, &vars, &now)
         };
+        let tab = tabbed.then(|| {
+            render::frame_tab(
+                opt("pane-frame-tab-ends"),
+                w.zoomed,
+                w.floating(*id).is_some(),
+            )
+        });
         looks.panes.insert(
             *id,
             render::PaneLook {
@@ -2541,6 +2560,7 @@ fn pane_looks(
                 border: status::base_style(opt("pane-border-style"), &vars),
                 active_border: status::base_style(opt("pane-active-border-style"), &vars),
                 title,
+                tab,
                 index: order.iter().position(|p| p == id).unwrap_or(0) + base_index,
             },
         );
@@ -2548,35 +2568,40 @@ fn pane_looks(
     looks
 }
 
-/// The `#[range=control|N]` under window cell `(x, y)` of a frame title
-/// in client `id`'s framed window, and the pane whose title it is: the
-/// default `pane-border-format`'s zoom and close buttons (FR.2), laid out
-/// as [`render::frame_title`] draws them.
+/// The `#[range=control|N]` at window column `x` of the top edge of
+/// `pane`'s frame, which runs from column `x0` to `x1` (its corners), in
+/// client `id`'s framed window: grofe identity's control tab, or a control
+/// of the pane's `pane-border-format` (tmux's default `[z]` and `[x]`),
+/// laid out as [`render::frame_title`] draws them.
 pub(crate) fn frame_title_control(
     state: &State,
     id: ClientId,
-    (x, y): (u32, u32),
-) -> Option<(PaneId, u8)> {
+    pane: PaneId,
+    (x0, x1): (i32, i32),
+    x: i32,
+) -> Option<u8> {
     let c = state.clients.get(&id)?;
     let model = &state.model;
     let w = model
         .sessions
         .get(&c.session)
         .and_then(|s| model.windows.get(&s.active))?;
-    let (pane, r) = w.frame_rects().into_iter().find(|(_, r)| {
-        u32::from(r.y) == y && (u32::from(r.x)..u32::from(r.x) + u32::from(r.cols)).contains(&x)
-    })?;
     let look = pane_looks(state, c, w, &[pane]);
     if !look.frame_title {
         return None;
     }
-    let title = look.panes.get(&pane).map(|l| l.title.as_str())?;
-    let (x0, x1) = (i32::from(r.x), i32::from(r.x) + i32::from(r.cols) - 1);
+    let l = look.panes.get(&pane)?;
     let plain = status::Style::default();
-    let (tx, drawn) = render::frame_title((x0, x1), i32::from(w.cols), title, plain, '─')?;
-    let col = u16::try_from(i64::from(x) - i64::from(tx)).ok()?;
-    match drawn.range_at(col)?.kind {
-        status::RangeKind::Control(n) => Some((pane, n as u8)),
+    let edge = render::frame_title(
+        (x0, x1),
+        i32::from(w.cols),
+        &l.title,
+        l.tab.as_deref(),
+        plain,
+        '─',
+    );
+    match edge.range_at(x)?.kind {
+        status::RangeKind::Control(n) => Some(n as u8),
         _ => None,
     }
 }
@@ -2632,9 +2657,14 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     } else {
         w.layout.borders(area)
     };
+    // A pane moved with the mouse is drawn under the pointer, above
+    // everything else, and its own place shows empty (FR.3).
+    let lifted = crate::server::mouse::lifted(state, w.id);
+    let is_lifted = |id: PaneId| lifted.is_some_and(|(p, _)| p == id);
     let mut cursor = None;
     let panes: Vec<_> = rects
         .into_iter()
+        .filter(|(id, _)| !is_lifted(*id))
         .filter_map(|(id, rect)| {
             let snap = model.panes.get(&id)?.handle.snapshot_rows(0..rect.rows);
             if id == w.active {
@@ -2660,6 +2690,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         .iter()
         .map(|(id, _, _)| *id)
         .chain(w.floating.iter().map(|f| f.pane).filter(|_| !w.zoomed))
+        .chain(lifted.map(|(p, _)| p))
         .collect();
     let look = pane_looks(state, c, w, &shown);
     let mut window = render::compose(&FrameInputs {
@@ -2683,21 +2714,25 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         look: look.clone(),
     });
     screenimg::mark_covered(&mut window, 0);
-    if !w.zoomed && !w.floating.is_empty() {
+    if (!w.zoomed && !w.floating.is_empty()) || lifted.is_some() {
         let mut stack = w.floating.clone();
         stack.sort_by_key(|f| f.z);
+        let floating_pane = |id: PaneId, at: (i32, i32)| {
+            let p = model.panes.get(&id)?;
+            Some(render::FloatingPane {
+                id,
+                at,
+                size: (p.cols, p.rows),
+                snap: p.handle.snapshot_rows(0..p.rows),
+                active: id == w.active,
+            })
+        };
         let floating: Vec<render::FloatingPane> = stack
             .iter()
-            .filter_map(|f| {
-                let p = model.panes.get(&f.pane)?;
-                Some(render::FloatingPane {
-                    id: f.pane,
-                    at: (f.x, f.y),
-                    size: (p.cols, p.rows),
-                    snap: p.handle.snapshot_rows(0..p.rows),
-                    active: f.pane == w.active,
-                })
-            })
+            .filter(|f| !w.zoomed && !is_lifted(f.pane))
+            .map(|f| (f.pane, (f.x, f.y)))
+            .chain(lifted)
+            .filter_map(|(id, at)| floating_pane(id, at))
             .collect();
         render::draw_floating(
             &mut window,

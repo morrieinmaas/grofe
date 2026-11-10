@@ -54,14 +54,27 @@ tiled or floating. Under tmux identity the key is unbound and `drag-pane` is an
 unknown command, as in tmux 3.7b. Outside a mouse key `drag-pane -M` fails with
 `no mouse target`, as `send-keys -M` does.
 
-While the button is down the window's drop preview shows where the pane will
-land. On release over a tiled pane `T`:
+While the button is down the pane is drawn as a floating frame under the
+pointer, the cell grabbed staying under it, above everything, and its own
+place shows empty; the window's drop preview shows where it will land. On
+release over a tiled pane `T`:
 
 | Released over | Result |
 |---|---|
 | the middle of `T` | the two swap places, as `swap-pane` |
 | the outer quarter of one of `T`'s sides (its frame included) | `T` is split, and the pane takes the half on that side; the space it left is filled as `kill-pane` would fill it |
-| the pane itself, a gap, or no pane | nothing changes |
+| the pane itself | nothing changes |
+| no tile: a gap, or off the window | the pane floats there at its size, on top and active (a floating pane moves there); a window's last tiled pane stays. Unframed, only off the window |
+
+A right click or Escape before the release cancels the move, and the rest of
+the drag does nothing.
+
+Under grofe identity each frame's title ends in a control tab (spec
+`docs/specs/2026-11-05-frames.md`, "The control tab"): `MouseDown1Control8`
+zooms, `MouseDown1Control7` floats or unfloats
+(`if-shell -F "#{pane_floating_flag}" { unfloat-pane -t = } { float-pane -t = }`),
+`MouseDown1Control9` asks to kill the pane. A floating pane's tab is on its
+top edge too.
 
 - An edge drop that would leave the layout's shape as it is changes nothing,
   so a moved divider stays put.

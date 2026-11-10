@@ -7,7 +7,8 @@
 //! |---|---|
 //! | the middle of `T` | the two swap places, as `swap-pane` |
 //! | the outer quarter of one of `T`'s sides | `T` is split and the pane takes the half on that side; the space it left is filled as `kill-pane` fills it |
-//! | the pane itself, a gap, or no pane | nothing |
+//! | the pane itself | nothing |
+//! | no tile (a gap) | the pane floats where it was dropped ([`float_at`]) |
 //!
 //! An edge drop that would leave the layout's shape as it is changes
 //! nothing, so a moved divider stays put; a side of `T` too small to split
@@ -22,7 +23,7 @@
 
 use crate::server::layout::{GeometryCell, Insert, LayoutGeometry, LayoutTree};
 use crate::server::model::Window;
-use crate::server::model::{HOLE, Model};
+use crate::server::model::{Floating, HOLE, Model};
 use crate::types::{Dir, PaneId, Rect, SplitSize, WindowId};
 
 /// A side of the pane dropped onto.
@@ -206,6 +207,55 @@ fn same_shape(a: &LayoutGeometry, b: &LayoutGeometry) -> bool {
         ) => da == db && ca.len() == cb.len() && ca.iter().zip(cb).all(|(a, b)| same_shape(a, b)),
         _ => false,
     }
+}
+
+/// Whether window cell `at` of `w` is over a tile, the frame round it
+/// included: a drop there that [`plan`] has no answer for changes
+/// nothing. Off every tile (a gap, or off the window) the pane floats
+/// where it is dropped ([`float_at`]). Without frames the tiles and their
+/// borders fill the window, so only a drop off it floats.
+pub fn over_tile(w: &Window, at: (u32, u32)) -> bool {
+    let framed = w.framed();
+    if !framed {
+        return contains(w.area(), at);
+    }
+    w.tiled_rects()
+        .into_iter()
+        .any(|(id, r)| id != HOLE && contains(drop_rect(r, framed), at))
+}
+
+/// `pane` of `window` floats with its top-left content cell at window cell
+/// `(x, y)`, at the size it has (so its program learns no new size), on
+/// top, and becomes the active pane: a tiled pane leaves the layout, as
+/// `float-pane` takes it out, and a floating one moves there. A window's
+/// last tiled pane, or a zoomed window, stays as it is.
+pub fn float_at(model: &mut Model, window: WindowId, pane: PaneId, (x, y): (i32, i32)) {
+    let Some((cols, rows)) = model.panes.get(&pane).map(|p| (p.cols, p.rows)) else {
+        return;
+    };
+    let Some(w) = model.windows.get_mut(&window).filter(|w| !w.zoomed) else {
+        return;
+    };
+    if let Some(f) = w.floating.iter_mut().find(|f| f.pane == pane) {
+        (f.x, f.y) = (x, y);
+    } else {
+        let tiled = w.tiled_ids();
+        if !tiled.contains(&pane) || tiled.len() < 2 {
+            return;
+        }
+        w.layout.remove(pane);
+        let z = w.floating.iter().map(|f| f.z).max().unwrap_or(0) + 1;
+        w.floating.push(Floating {
+            pane,
+            x,
+            y,
+            cols,
+            rows,
+            z,
+        });
+    }
+    w.set_active(pane);
+    model.relayout(window);
 }
 
 /// Puts `pane` of `window` in its place in `layout`, worked out by

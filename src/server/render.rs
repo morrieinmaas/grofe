@@ -127,8 +127,39 @@ pub struct PaneLook {
     /// The pane's `pane-border-format`, expanded; drawn on its border
     /// line while `pane-border-status` is on.
     pub title: String,
+    /// grofe identity's control tab ([`frame_tab`]), drawn at the right end
+    /// of the frame's top edge; `None` draws none.
+    pub tab: Option<String>,
     /// The pane's index (`pane-border-lines number` shows it).
     pub index: usize,
+}
+
+/// How many cells the control tab ([`frame_tab`]) covers.
+pub const TAB_WIDTH: i32 = 7;
+
+/// The control tab of a frame's title (grofe identity, spec
+/// 2026-11-05-frames.md "Drawing"): zoom (`u` to unzoom), float (`t` to
+/// tile a floating pane) and close, as the click ranges `control|8`,
+/// `control|7` and `control|9`, between `ends`' two end glyphs. The ends
+/// are drawn in the frame's style and the controls in it reversed, a pill
+/// of the frame's colour on any theme; `ends` other than two one-cell
+/// glyphs gives a pill with plain ends. Always [`TAB_WIDTH`] cells.
+pub fn frame_tab(ends: &str, zoomed: bool, floating: bool) -> String {
+    let one = |c: &char| UnicodeWidthChar::width(*c) == Some(1);
+    let glyphs: Vec<char> = ends.chars().collect();
+    let (left, right) = match glyphs[..] {
+        [l, r] if one(&l) && one(&r) => (format!("{l}#[reverse]"), format!("#[noreverse]{r}")),
+        _ => ("#[reverse] ".to_string(), " #[noreverse]".to_string()),
+    };
+    let zoom = if zoomed { 'u' } else { 'z' };
+    let float = if floating { 't' } else { 'f' };
+    // A range runs one cell past its `#[norange]`, as in tmux, so each
+    // control is targeted on two or three cells: zoom on the left end and
+    // `z`, float on ` f `, close on `x` and the right end.
+    format!(
+        "#[range=control|8]{left}#[norange]{zoom}#[range=control|7] {float}#[norange] \
+         #[range=control|9]x#[norange]{right}"
+    )
 }
 
 /// The window's border options and each pane's [`PaneLook`].
@@ -153,6 +184,9 @@ pub struct PaneLooks {
     /// ([`Window::drop_preview`]): framed in `pane-active-border-style`
     /// above the tiles and below the floating panes.
     pub drop_preview: Option<Rect>,
+    /// A pane being moved with the mouse: its tile's frame is not drawn
+    /// (its place shows empty), as the pane is drawn under the pointer.
+    pub lifted: Option<PaneId>,
 }
 
 /// Fills in `looks`' frame part for window `w` (spec
@@ -481,6 +515,7 @@ fn compose_window(inputs: &FrameInputs) -> (Screen, Vec<bool>) {
             lines: inputs.look.lines,
             style: inputs.active_border_style,
             title: None,
+            tab: None,
             marked: false,
         };
         draw_frame(&mut win, &preview, &frame);
@@ -494,6 +529,8 @@ struct Frame<'a> {
     style: Style,
     /// The title drawn in the top edge, if any.
     title: Option<&'a str>,
+    /// The control tab at the right end of the top edge, if any.
+    tab: Option<&'a str>,
     /// The marked pane's frame is drawn with reverse toggled.
     marked: bool,
 }
@@ -505,6 +542,9 @@ struct Frame<'a> {
 fn draw_frames(win: &mut Screen, inputs: &FrameInputs) {
     let looks = &inputs.look;
     for (i, (id, r)) in looks.frames.iter().enumerate() {
+        if looks.lifted == Some(*id) {
+            continue;
+        }
         let look = looks.panes.get(id);
         let style = match (*id == inputs.active, look) {
             (true, Some(l)) => l.active_border,
@@ -524,6 +564,7 @@ fn draw_frames(win: &mut Screen, inputs: &FrameInputs) {
             lines: looks.lines,
             style,
             title: look.map(|l| l.title.as_str()).filter(|_| looks.frame_title),
+            tab: look.and_then(|l| l.tab.as_deref()),
             marked: inputs.marked == Some(*id),
         };
         draw_frame(win, &content, &frame);
@@ -562,12 +603,14 @@ fn draw_frame(screen: &mut Screen, pane: &PaneBox, frame: &Frame) {
             screen.cells[(y * cols + x) as usize] = styled(*ch, &frame.style);
         }
     }
-    if let Some(title) = frame.title {
+    if frame.title.is_some() || frame.tab.is_some() {
         let edge = g(borders::CELL_LEFTRIGHT);
-        if let Some((tx, drawn)) = frame_title((x0, x1), cols, title, frame.style, edge)
-            && on_screen(tx, y0)
-        {
-            draw_line_at(screen, y0 as u16, tx as usize, &drawn.line);
+        let title = frame.title.unwrap_or("");
+        let drawn = frame_title((x0, x1), cols, title, frame.tab, frame.style, edge);
+        for (tx, row) in [drawn.title, drawn.tab].into_iter().flatten() {
+            if on_screen(tx, y0) {
+                draw_line_at(screen, y0 as u16, tx as usize, &row.line);
+            }
         }
     }
     if frame.marked {
@@ -579,26 +622,62 @@ fn draw_frame(screen: &mut Screen, pane: &PaneBox, frame: &Frame) {
     }
 }
 
-/// A frame's title on its top edge from column `x0` to `x1` (the corners)
-/// in a screen `cols` wide: from two cells in, between a space each side,
-/// over `edge` glyphs, leaving the corner and one edge cell each side the
-/// frame's. Its column and what it draws, with its `#[range=...]` parts
-/// (columns from there) for the mouse; `None` with no room or no title.
+/// What a frame's top edge carries: its title and its control tab, each
+/// with the column it starts at and what it draws.
+#[derive(Debug, Default)]
+pub struct TitleEdge {
+    pub title: Option<(i32, StatusRow)>,
+    pub tab: Option<(i32, StatusRow)>,
+}
+
+impl TitleEdge {
+    /// The `#[range=...]` under column `x`: the tab's first, then the
+    /// title's.
+    pub fn range_at(&self, x: i32) -> Option<&crate::server::status::StatusRange> {
+        [&self.tab, &self.title]
+            .into_iter()
+            .flatten()
+            .find_map(|(tx, row)| row.range_at(u16::try_from(x - tx).ok()?))
+    }
+}
+
+/// A frame's title and control tab on its top edge from column `x0` to
+/// `x1` (the corners) in a screen `cols` wide. The tab ([`frame_tab`]),
+/// when given and there is room, ends one edge cell before the right
+/// corner. The title runs from two cells in, between a space each side,
+/// over `edge` glyphs, and stops one edge cell before the tab (or before
+/// the right corner), so corners and the cells next to them stay the
+/// frame's. Each part keeps its `#[range=...]` parts (columns from its
+/// start) for the mouse; one with no room, or no text, is `None`.
 pub fn frame_title(
     (x0, x1): (i32, i32),
     cols: i32,
     title: &str,
+    tab: Option<&str>,
     style: Style,
     edge: char,
-) -> Option<(i32, StatusRow)> {
-    let tx = x0 + 2;
-    let width = (x1 - 1 - tx).min(cols - tx);
-    if title.is_empty() || width < 3 || tx < 0 {
-        return None;
+) -> TitleEdge {
+    let draw = |text: &str, width: i32| {
+        let under = vec![(edge, style); width as usize];
+        crate::server::status::draw_over(text, style, &under)
+    };
+    let mut out = TitleEdge::default();
+    let tab_x = x1 - 1 - TAB_WIDTH;
+    let mut right = x1 - 1;
+    if let Some(tab) = tab
+        && tab_x >= x0 + 2
+        && tab_x >= 0
+        && tab_x + TAB_WIDTH <= cols
+    {
+        out.tab = Some((tab_x, draw(tab, TAB_WIDTH)));
+        right = tab_x - 1;
     }
-    let under = vec![(edge, style); width as usize];
-    let drawn = crate::server::status::draw_over(&format!(" {title} "), style, &under);
-    Some((tx, drawn))
+    let tx = x0 + 2;
+    let width = (right - tx).min(cols - tx);
+    if !title.is_empty() && width >= 3 && tx >= 0 {
+        out.title = Some((tx, draw(&format!(" {title} "), width)));
+    }
+    out
 }
 
 /// A border glyph by which neighbours are border too.
@@ -878,6 +957,7 @@ pub fn draw_floating(
                 lines: looks.lines,
                 style: border,
                 title: look.map(|l| l.title.as_str()).filter(|_| looks.frame_title),
+                tab: look.and_then(|l| l.tab.as_deref()),
                 marked: false,
             };
             draw_frame(screen, &on_screen, &frame);
