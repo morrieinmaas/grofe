@@ -311,7 +311,7 @@ mod tests {
             pane_gap: 0,
             drop_preview: None,
         };
-        w.set_frames(framed, 1);
+        w.set_frames(framed, 1, crate::server::model::StatusEdge::None);
         layout.set_pad(w.layout.pad());
         layout
             .split(

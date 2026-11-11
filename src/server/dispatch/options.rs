@@ -2020,7 +2020,10 @@ fn option_changed(model: &mut Model, events: &mut Events, owner: Owner, name: &s
     if name == "graphics" {
         crate::server::graphics::sync_option(model);
     }
-    if matches!(name, "pane-frames" | "pane-gap") {
+    if matches!(
+        name,
+        "pane-frames" | "pane-gap" | "status" | "status-position"
+    ) {
         model.sync_frames();
     }
     events.emit(Event::OptionChanged {

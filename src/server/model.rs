@@ -155,6 +155,24 @@ pub struct Floating {
 /// pane has this id, so nothing is drawn or listed for it.
 pub const HOLE: PaneId = PaneId(u32::MAX);
 
+/// Which edge of its windows a session's status line sits on, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusEdge {
+    None,
+    Top,
+    Bottom,
+}
+
+/// The outer gap rows a framed window leaves out at its top and bottom:
+/// all of it on the status line's edge, where the frames meet the bar.
+fn edge_trim(gap: u16, edge: StatusEdge) -> (u16, u16) {
+    match edge {
+        StatusEdge::None => (0, 0),
+        StatusEdge::Top => (gap, 0),
+        StatusEdge::Bottom => (0, gap),
+    }
+}
+
 impl Window {
     /// Makes `pane` the active pane; the one it replaces becomes the most
     /// recent last pane, as tmux's `window_set_active_pane` does.
@@ -202,13 +220,16 @@ impl Window {
         }
     }
 
-    /// Frames the tiles, or not, with `gap` cells between them: the
-    /// contract fields and the layout's pad together. The caller lays the
-    /// window out again ([`Model::relayout`]).
-    pub fn set_frames(&mut self, frames: bool, gap: u16) {
+    /// Frames the tiles, or not, with `gap` cells between them and
+    /// around them, less the outer gap on the `edge` the status line sits
+    /// on: the contract fields and the layout's pad together. The caller
+    /// lays the window out again ([`Model::relayout`]).
+    pub fn set_frames(&mut self, frames: bool, gap: u16, edge: StatusEdge) {
         self.frames = frames;
         self.pane_gap = gap;
         self.layout.set_pad(if frames { 1 + gap } else { 0 });
+        let (top, bottom) = edge_trim(gap, edge);
+        self.layout.set_trim(top, bottom);
     }
 
     /// The cells a zoomed pane is inset by on every side: its frame and
@@ -295,11 +316,14 @@ impl Window {
         if pad == 0 {
             return self.edge_adjusted(self.area());
         }
+        let gap = pad - 1;
+        let (top, bottom) = self.layout.trim();
+        let (top, bottom) = (top.min(gap), bottom.min(gap));
         Rect {
             x: pad,
-            y: pad,
+            y: pad - top,
             cols: self.cols - 2 * pad,
-            rows: self.rows - 2 * pad,
+            rows: self.rows - 2 * pad + top + bottom,
         }
     }
 
@@ -476,43 +500,50 @@ impl Model {
     pub fn insert_window(&mut self, mut window: Window) {
         let (id, session, index) = (window.id, window.session, window.index);
         window.links.clear();
-        let (frames, gap) = self.frame_options(&[Owner::Window(id), Owner::Session(session)]);
-        window.set_frames(frames, gap);
+        let (frames, gap, edge) = self.frame_options(&[Owner::Window(id), Owner::Session(session)]);
+        window.set_frames(frames, gap, edge);
         self.windows.insert(id, window);
         self.add_link(session, id, index);
         self.sync_group(session);
     }
 
-    /// `pane-frames` and `pane-gap` as `chain` (then global) sets them.
-    fn frame_options(&self, chain: &[Owner]) -> (bool, u16) {
+    /// `pane-frames` and `pane-gap` as `chain` (then global) sets them,
+    /// and the edge `status` and `status-position` put the status line on.
+    fn frame_options(&self, chain: &[Owner]) -> (bool, u16, StatusEdge) {
         let frames = self.options.lookup("pane-frames", chain) == Some("on");
         let gap = self
             .options
             .lookup("pane-gap", chain)
             .and_then(|g| g.parse().ok())
             .unwrap_or(0);
-        (frames, gap)
+        let edge = match self.options.lookup("status", chain) {
+            Some("off") | None => StatusEdge::None,
+            _ if self.options.lookup("status-position", chain) == Some("top") => StatusEdge::Top,
+            _ => StatusEdge::Bottom,
+        };
+        (frames, gap, edge)
     }
 
     /// Gives every window the `pane-frames` and `pane-gap` its options now
-    /// say, laying out again each one that changed. Run when either option
-    /// changes anywhere (`options::option_changed`).
+    /// say, and the status line's edge, laying out again each one that
+    /// changed. Run when any of those options changes anywhere
+    /// (`options::option_changed`).
     // ponytail: only then and when a window is made; a window moved to a
     // session that sets them differently keeps its own until the next
     // change of either.
     pub fn sync_frames(&mut self) {
-        let wanted: Vec<(WindowId, (bool, u16))> = self
+        let wanted: Vec<(WindowId, (bool, u16, StatusEdge))> = self
             .windows
             .values()
             .map(|w| (w.id, self.frame_options(&options::chain(self, w.active))))
-            .filter(|(id, want)| {
+            .filter(|(id, (frames, gap, edge))| {
                 let w = &self.windows[id];
-                (w.frames, w.pane_gap) != *want
+                (w.frames, w.pane_gap, w.layout.trim()) != (*frames, *gap, edge_trim(*gap, *edge))
             })
             .collect();
-        for (id, (frames, gap)) in wanted {
+        for (id, (frames, gap, edge)) in wanted {
             if let Some(w) = self.windows.get_mut(&id) {
-                w.set_frames(frames, gap);
+                w.set_frames(frames, gap, edge);
             }
             self.relayout(id);
             self.fit_zoomed(id);
@@ -1689,7 +1720,7 @@ mod tests {
             .unwrap();
         assert!(!w.framed());
         assert!(w.frame_rects().is_empty());
-        w.set_frames(true, 1);
+        w.set_frames(true, 1, StatusEdge::None);
         assert!(w.framed());
         let r = |x, y, cols, rows| Rect { x, y, cols, rows };
         // The border status has no effect on a framed window.

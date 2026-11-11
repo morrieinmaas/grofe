@@ -1,7 +1,8 @@
 //! FR.1: framed geometry and its options (spec 2026-11-05-frames.md).
 //! With `pane-frames on` and gap `g`, each tiled pane's content is inset
 //! by its own frame and the gap: neighbouring content rects are `2 + g`
-//! cells apart and the content area is the window inset by `1 + g`.
+//! cells apart and the content area is the window inset by `1 + g`, but
+//! only `1` on the status line's edge (the bottom, in these tests).
 //! Frames off is tmux's geometry exactly; a window too small to frame its
 //! panes falls back to shared borders; the defaults follow the identity,
 //! and the TOML config takes the options under either.
@@ -112,11 +113,11 @@ fn a_framed_split_insets_the_content() {
     let srv = framed();
     session(&srv);
     ok(&srv, &["split-window", "-h", "-t", "f"]);
-    // The inner area 78x22 at (2,2) splits as tmux splits 78 columns,
+    // The inner area 78x23 at (2,2) splits as tmux splits 78 columns,
     // 39 and 38, and each pane gives up 2 to its right and bottom.
-    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x20", "42,2,36x20"]));
-    wait_pty(&srv, "f:.0", "20 37");
-    wait_pty(&srv, "f:.1", "20 36");
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x21", "42,2,36x21"]));
+    wait_pty(&srv, "f:.0", "21 37");
+    wait_pty(&srv, "f:.1", "21 36");
     // `#{window_layout}` describes the content rects.
     let layout = ok(
         &srv,
@@ -125,15 +126,43 @@ fn a_framed_split_insets_the_content() {
     assert!(
         layout
             .trim_end()
-            .ends_with(",76x20,2,2{37x20,2,2,0,36x20,42,2,1}"),
+            .ends_with(",76x21,2,2{37x21,2,2,0,36x21,42,2,1}"),
         "{layout}"
     );
     // A content size in cells is a content size.
     ok(&srv, &["split-window", "-v", "-t", "f:.1", "-l", "5"]);
     assert_eq!(
         geometry(&srv, "f"),
-        strings(&["2,2,37x20", "42,2,36x12", "42,17,36x5"])
+        strings(&["2,2,37x21", "42,2,36x13", "42,18,36x5"])
     );
+}
+
+/// The edge the status line sits on has no outer gap: the frames meet
+/// the status line, as tiles meet a bar in a tiling window manager. The
+/// other edges keep theirs, and with the status line off all four do.
+#[test]
+fn the_status_lines_edge_has_no_outer_gap() {
+    let srv = framed();
+    session(&srv);
+    ok(&srv, &["split-window", "-h", "-t", "f"]);
+    ok(&srv, &["set", "-t", "f", "status-position", "top"]);
+    assert_eq!(geometry(&srv, "f"), strings(&["2,1,37x21", "42,1,36x21"]));
+    wait_pty(&srv, "f:.1", "21 36");
+    let layout = ok(
+        &srv,
+        &["display-message", "-p", "-t", "f", "#{window_layout}"],
+    );
+    ok(&srv, &["select-layout", "-t", "f", "even-vertical"]);
+    ok(&srv, &["select-layout", "-t", "f", layout.trim_end()]);
+    assert_eq!(geometry(&srv, "f"), strings(&["2,1,37x21", "42,1,36x21"]));
+    ok(&srv, &["resize-pane", "-Z", "-t", "f:.1"]);
+    let zoomed = ok(&srv, &["display-message", "-p", "-t", "f:.1", GEOM]);
+    assert_eq!(zoomed, "2,1,76x21\n");
+    ok(&srv, &["resize-pane", "-Z", "-t", "f:.1"]);
+    ok(&srv, &["set", "-t", "f", "status-position", "bottom"]);
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x21", "42,2,36x21"]));
+    ok(&srv, &["set", "-t", "f", "status", "off"]);
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x20", "42,2,36x20"]));
 }
 
 /// `resize-pane -L 5` moves the divider 5 cells, frames and all.
@@ -143,15 +172,15 @@ fn resize_pane_moves_the_framed_divider() {
     session(&srv);
     ok(&srv, &["split-window", "-h", "-t", "f"]);
     ok(&srv, &["resize-pane", "-t", "f:.0", "-L", "5"]);
-    assert_eq!(geometry(&srv, "f"), strings(&["2,2,32x20", "37,2,41x20"]));
-    wait_pty(&srv, "f:.1", "20 41");
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,32x21", "37,2,41x21"]));
+    wait_pty(&srv, "f:.1", "21 41");
     ok(&srv, &["resize-pane", "-t", "f:.0", "-x", "50"]);
-    assert_eq!(geometry(&srv, "f"), strings(&["2,2,50x20", "55,2,23x20"]));
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,50x21", "55,2,23x21"]));
     // A resize past what the frames leave stops where every pane keeps a
     // content cell.
     ok(&srv, &["resize-pane", "-t", "f:.0", "-R", "100"]);
     let g = geometry(&srv, "f");
-    assert_eq!(g[1].rsplit(',').next(), Some("1x20"), "{g:?}");
+    assert_eq!(g[1].rsplit(',').next(), Some("1x21"), "{g:?}");
     assert!(g[0].starts_with("2,2,"), "{g:?}");
 }
 
@@ -164,20 +193,20 @@ fn presets_are_framed() {
     ok(&srv, &["split-window", "-t", "f"]);
     ok(&srv, &["split-window", "-t", "f"]);
     ok(&srv, &["select-layout", "-t", "f", "even-vertical"]);
-    // 22 inner rows less 2 borders: 7, 7 and 6, each less 2.
+    // 23 inner rows less 2 borders: 7, 7 and 7, each less 2.
     assert_eq!(
         geometry(&srv, "f"),
-        strings(&["2,2,76x5", "2,10,76x5", "2,18,76x4"])
+        strings(&["2,2,76x5", "2,10,76x5", "2,18,76x5"])
     );
     ok(&srv, &["set", "-w", "-t", "f", "main-pane-width", "30"]);
     ok(&srv, &["select-layout", "-t", "f", "main-vertical"]);
     let g = geometry(&srv, "f");
-    assert_eq!(g[0], "2,2,30x20", "{g:?}");
+    assert_eq!(g[0], "2,2,30x21", "{g:?}");
     assert!(g[1].starts_with("35,2,43x"), "{g:?}");
     assert!(g[2].starts_with("35,"), "{g:?}");
     ok(&srv, &["select-layout", "-t", "f", "even-horizontal"]);
     let g = geometry(&srv, "f");
-    assert_eq!(g, strings(&["2,2,24x20", "29,2,23x20", "55,2,23x20"]));
+    assert_eq!(g, strings(&["2,2,24x21", "29,2,23x21", "55,2,23x21"]));
     // The framed layout string applies back as the layout it describes.
     let layout = ok(
         &srv,
@@ -205,11 +234,11 @@ fn a_zoomed_pane_is_one_framed_tile() {
             &format!("#{{window_zoomed_flag}} {GEOM}"),
         ],
     );
-    assert_eq!(zoomed, "1 2,2,76x20\n");
-    wait_pty(&srv, "f:.1", "20 76");
+    assert_eq!(zoomed, "1 2,2,76x21\n");
+    wait_pty(&srv, "f:.1", "21 76");
     ok(&srv, &["resize-pane", "-Z", "-t", "f:.1"]);
-    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x20", "42,2,36x20"]));
-    wait_pty(&srv, "f:.1", "20 36");
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x21", "42,2,36x21"]));
+    wait_pty(&srv, "f:.1", "21 36");
 }
 
 /// Frames off is today's geometry exactly, and turning frames on and off
@@ -235,8 +264,8 @@ fn frames_off_is_tmux_geometry() {
     );
     ok(&srv, &["set", "-g", "pane-frames", "on"]);
     let framed = geometry(&srv, "f");
-    assert_eq!(framed[0], "2,2,37x20", "{framed:?}");
-    wait_pty(&srv, "f:.0", "20 37");
+    assert_eq!(framed[0], "2,2,37x21", "{framed:?}");
+    wait_pty(&srv, "f:.0", "21 37");
     ok(&srv, &["set", "-g", "pane-gap", "0"]);
     assert_eq!(geometry(&srv, "f")[0], "1,1,38x22");
     ok(&srv, &["set", "-g", "pane-frames", "off"]);
@@ -263,13 +292,13 @@ fn a_too_small_window_falls_back_to_shared_borders() {
     );
     ok(&srv, &["split-window", "-h", "-t", "f"]);
     ok(&srv, &["split-window", "-h", "-t", "f:.1"]);
-    assert_eq!(geometry(&srv, "f")[0], "2,2,7x6");
+    assert_eq!(geometry(&srv, "f")[0], "2,2,7x7");
     ok(&srv, &["resize-window", "-t", "f", "-x", "8", "-y", "10"]);
     let g = geometry(&srv, "f");
     // Shared one-cell borders over the whole window, as tmux lays it out.
     assert_eq!(g, strings(&["0,0,3x10", "4,0,2x10", "7,0,1x10"]));
     ok(&srv, &["resize-window", "-t", "f", "-x", "20", "-y", "10"]);
-    assert_eq!(geometry(&srv, "f")[0], "2,2,7x6");
+    assert_eq!(geometry(&srv, "f")[0], "2,2,7x7");
     // A split that would leave a framed pane no content cell is refused.
     assert!(srv.cmd(&["split-window", "-h", "-t", "f:.2"]).is_err());
 }
@@ -309,8 +338,8 @@ fn grofe_frames_its_panes_by_default() {
     let srv = TestServer::builder().frames(true).start();
     session(&srv);
     ok(&srv, &["split-window", "-h", "-t", "f"]);
-    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x20", "42,2,36x20"]));
-    wait_pty(&srv, "f:.1", "20 36");
+    assert_eq!(geometry(&srv, "f"), strings(&["2,2,37x21", "42,2,36x21"]));
+    wait_pty(&srv, "f:.1", "21 36");
 }
 
 /// The harness pins every other suite to frames off through its `conf.d`
@@ -338,9 +367,9 @@ fn the_toml_config_frames_a_tmux_identity_server() {
     assert_eq!(show("pane-frame-title"), "off\n");
     session(&srv);
     ok(&srv, &["split-window", "-h", "-t", "f"]);
-    // Pad 3: the inner area is 77x21 at (3,3), split 38 and 38.
-    assert_eq!(geometry(&srv, "f"), strings(&["3,3,35x18", "42,3,35x18"]));
-    wait_pty(&srv, "f:.1", "18 35");
+    // Pad 3: the inner area is 77x23 at (3,3), split 38 and 38.
+    assert_eq!(geometry(&srv, "f"), strings(&["3,3,35x20", "42,3,35x20"]));
+    wait_pty(&srv, "f:.1", "20 35");
 }
 
 /// A `tmux` symlink to the grofe binary in the harness's own `bin/`.
@@ -415,7 +444,7 @@ fn a_framed_layout_survives_a_restore() {
     ok(&srv, &["split-window", "-v", "-t", "f:.1"]);
     ok(&srv, &["resize-pane", "-t", "f:.0", "-R", "7"]);
     let before = geometry(&srv, "f");
-    assert_eq!(before[0], "2,2,44x20", "{before:?}");
+    assert_eq!(before[0], "2,2,44x21", "{before:?}");
     ok(&srv, &["kill-server"]);
     wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
     ok(&srv, &["start-server", "--restore"]);
@@ -438,7 +467,7 @@ fn a_restored_window_takes_its_frames_from_the_options() {
         &["set", "--persist", "-w", "-t", "f", "pane-gap", "2"],
     );
     let before = geometry(&srv, "f");
-    assert_eq!(before[0], "3,3,35x18", "{before:?}");
+    assert_eq!(before[0], "3,3,35x20", "{before:?}");
     ok(&srv, &["kill-server"]);
     wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
     ok(&srv, &["start-server", "--restore"]);

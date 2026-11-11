@@ -256,6 +256,11 @@ pub struct LayoutTree {
     /// The pad `exact_for` was made under: `exact_for` is an inner area
     /// that much smaller than the window ([`Self::exact_size`]).
     exact_pad: u16,
+    /// Rows of outer gap left out at the top and the bottom: the edge the
+    /// status line sits on has none ([`Self::set_trim`]).
+    trim: (u16, u16),
+    /// The rows of `trim` in effect when `exact_for` was made.
+    exact_trim: u16,
 }
 
 /// Which axis a point-in-rect lookup runs along.
@@ -275,6 +280,8 @@ impl LayoutTree {
             last_preset: None,
             pad: 0,
             exact_pad: 0,
+            trim: (0, 0),
+            exact_trim: 0,
         }
     }
 
@@ -282,8 +289,10 @@ impl LayoutTree {
     /// [`Self::apply_tmux_layout`], the layout string's own size.
     pub fn exact_size(&self) -> Option<(u16, u16)> {
         let pad = self.exact_pad;
-        self.exact_for
-            .map(|(cols, rows)| (cols.saturating_add(pad), rows.saturating_add(pad)))
+        self.exact_for.map(|(cols, rows)| {
+            let rows = rows.saturating_add(pad).saturating_sub(self.exact_trim);
+            (cols.saturating_add(pad), rows)
+        })
     }
 
     /// Frames the tree's panes with `pad` cells each (`1 + pane-gap`; 0
@@ -291,6 +300,24 @@ impl LayoutTree {
     /// next render lays the panes out on the new inner area.
     pub fn set_pad(&mut self, pad: u16) {
         self.pad = pad;
+    }
+
+    /// Leaves `top` and `bottom` rows of the outer gap out, at most all of
+    /// it: the frames there meet the window's edge. Like [`Self::set_pad`],
+    /// nothing is rescaled.
+    pub fn set_trim(&mut self, top: u16, bottom: u16) {
+        self.trim = (top, bottom);
+    }
+
+    /// What [`Self::set_trim`] last gave.
+    pub fn trim(&self) -> (u16, u16) {
+        self.trim
+    }
+
+    /// The trim in effect under `pad`: none unframed, never into a frame.
+    fn trim_on(&self, pad: u16) -> (u16, u16) {
+        let gap = pad.saturating_sub(1);
+        (self.trim.0.min(gap), self.trim.1.min(gap))
     }
 
     /// The pad [`Self::set_pad`] last gave.
@@ -303,7 +330,7 @@ impl LayoutTree {
     // ponytail: a window too small to frame every pane is laid out
     // unframed as a whole, not framed where it fits.
     pub fn pad_on(&self, area: Rect) -> u16 {
-        match inner(area, self.pad) {
+        match inner(area, self.pad, self.trim_on(self.pad)) {
             Some(inner) if self.pad > 0 && self.fits(inner, self.pad) => self.pad,
             _ => 0,
         }
@@ -323,7 +350,8 @@ impl LayoutTree {
     /// `None`.
     fn framed<T>(&mut self, area: Rect, op: impl FnOnce(&mut Self, Rect, u16) -> T) -> Option<T> {
         let pad = self.pad_on(area);
-        let inner = inner(area, pad)?;
+        let trim = self.trim_on(pad);
+        let inner = inner(area, pad, trim)?;
         let before = (pad > 0).then(|| self.clone());
         let exact = self.exact_for;
         let out = op(self, inner, pad);
@@ -335,6 +363,7 @@ impl LayoutTree {
         }
         if self.exact_for != exact {
             self.exact_pad = pad;
+            self.exact_trim = trim.0 + trim.1;
         }
         Some(out)
     }
@@ -760,7 +789,8 @@ impl LayoutTree {
     /// centre line (deterministic: the far subtree's leaf whose span on the
     /// cross axis contains that centre coordinate).
     pub fn neighbour(&self, area: Rect, pane: PaneId, edge: Edge) -> Option<PaneId> {
-        let area = inner(area, self.pad_on(area))?;
+        let pad = self.pad_on(area);
+        let area = inner(area, pad, self.trim_on(pad))?;
         let mut path = Vec::new();
         if !find_path(&self.root, pane, &mut path) {
             return None;
@@ -797,7 +827,7 @@ impl LayoutTree {
     pub fn compute(&self, area: Rect) -> Vec<(PaneId, Rect)> {
         let pad = self.pad_on(area);
         let mut out = Vec::new();
-        if let Some(inner) = inner(area, pad) {
+        if let Some(inner) = inner(area, pad, self.trim_on(pad)) {
             collect_rects(&self.root, inner, &mut out);
         }
         for (_, r) in &mut out {
@@ -984,7 +1014,7 @@ impl LayoutTree {
     /// `1 + pad` cells apart.
     pub fn export(&self, area: Rect) -> LayoutGeometry {
         let pad = self.pad_on(area);
-        let Some(inner) = inner(area, pad) else {
+        let Some(inner) = inner(area, pad, self.trim_on(pad)) else {
             return export_node(&self.root, area);
         };
         let mut g = export_node(&self.root, inner);
@@ -1033,6 +1063,8 @@ impl LayoutTree {
         self.root = root;
         self.exact_for = Some((geometry.cols, geometry.rows));
         self.exact_pad = pad;
+        let trim = self.trim_on(pad);
+        self.exact_trim = trim.0 + trim.1;
         Ok(())
     }
 
@@ -1079,6 +1111,8 @@ impl LayoutTree {
             last_preset: None,
             pad: 0,
             exact_pad: pad,
+            trim: (0, 0),
+            exact_trim: 0,
         };
         // The bottom-right cell is the last child's last child and so on
         // down (tmux's `layout_find_bottomright`): found in O(depth).
@@ -1100,23 +1134,27 @@ impl LayoutTree {
         self.root = cells.root;
         self.exact_for = cells.exact_for;
         self.exact_pad = cells.exact_pad;
+        let trim = self.trim_on(self.exact_pad);
+        self.exact_trim = trim.0 + trim.1;
         self.order = panes.to_vec();
         Ok(())
     }
 }
 
 /// `area` less `pad` cells at its left and top: the area a framed tree's
-/// one-cell-border layout runs on (module docs). `None` when nothing is
-/// left.
-fn inner(area: Rect, pad: u16) -> Option<Rect> {
+/// one-cell-border layout runs on (module docs), given back `top` and
+/// `bottom` rows of the outer gap ([`LayoutTree::trim_on`]). `None` when
+/// nothing is left.
+fn inner(area: Rect, pad: u16, (top, bottom): (u16, u16)) -> Option<Rect> {
     if pad == 0 {
         return Some(area);
     }
+    let rows = area.rows.checked_sub(pad)?.saturating_add(top + bottom);
     Some(Rect {
         x: area.x.saturating_add(pad),
-        y: area.y.saturating_add(pad),
+        y: area.y.saturating_add(pad - top),
         cols: area.cols.checked_sub(pad).filter(|&c| c > 0)?,
-        rows: area.rows.checked_sub(pad).filter(|&r| r > 0)?,
+        rows: Some(rows).filter(|&r| r > 0)?,
     })
 }
 
@@ -1131,24 +1169,29 @@ fn shrink_cells(g: &mut LayoutGeometry, pad: u16) {
 }
 
 /// The pad a framed export ([`shrink_cells`]) was made with: its root's
-/// offset, the same on both axes; 0 for a root at the corner or off the
-/// diagonal, which is no framed export.
+/// column offset, its row offset that or less (a trimmed top gap); 0 for
+/// a root at the corner or off those, which is no framed export.
 fn framed_pad(g: &LayoutGeometry) -> u16 {
-    if g.x == g.y { g.x } else { 0 }
+    if g.y > 0 && g.y <= g.x { g.x } else { 0 }
 }
 
 /// A framed export back on an inner area at the origin: every cell `pad`
-/// cells wider and taller, and moved `pad` up and left. Nothing for 0.
+/// cells wider and taller, and moved `pad` left and up by the root's row
+/// offset. Nothing for 0.
 fn unframe(g: &mut LayoutGeometry, pad: u16) {
-    if pad == 0 {
-        return;
+    if pad > 0 {
+        let dy = g.y;
+        unframe_by(g, pad, dy);
     }
+}
+
+fn unframe_by(g: &mut LayoutGeometry, pad: u16, dy: u16) {
     g.x = g.x.saturating_sub(pad);
-    g.y = g.y.saturating_sub(pad);
+    g.y = g.y.saturating_sub(dy);
     g.cols = g.cols.saturating_add(pad);
     g.rows = g.rows.saturating_add(pad);
     if let GeometryCell::Split { children, .. } = &mut g.cell {
-        children.iter_mut().for_each(|c| unframe(c, pad));
+        children.iter_mut().for_each(|c| unframe_by(c, pad, dy));
     }
 }
 
