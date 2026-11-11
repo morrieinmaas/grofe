@@ -237,8 +237,9 @@ fn float_rect(
 }
 
 /// `float-pane` (grofe's own): the target tiled pane leaves the layout for
-/// a floating place, on top, with its process and history. The window needs
-/// another tiled pane to keep the layout.
+/// a floating place, on top, with its process and history. Without
+/// `-x -y -X -Y` it keeps its tiled size and place, lifted out where it is.
+/// The window needs another tiled pane to keep the layout.
 pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<String, String> {
     let model = &mut state.model;
     let pane = model.resolve_pane(&c.target, ctx)?;
@@ -250,7 +251,20 @@ pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<St
     if w.tiled_ids().len() < 2 {
         return Err("can't float the only tiled pane".to_string());
     }
-    let (x, y, cols, rows) = float_rect(w, (c.width, c.height), (c.x, c.y))?;
+    let tiled = w.tiled_rects().into_iter().find(|(id, _)| *id == pane);
+    let (x, y, cols, rows) = match (tiled, &c) {
+        (
+            Some((_, r)),
+            FloatPane {
+                width: None,
+                height: None,
+                x: None,
+                y: None,
+                ..
+            },
+        ) => (i32::from(r.x), i32::from(r.y), r.cols, r.rows),
+        _ => float_rect(w, (c.width, c.height), (c.x, c.y))?,
+    };
     let Some(w) = model.windows.get_mut(&window) else {
         return Ok(String::new());
     };

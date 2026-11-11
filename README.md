@@ -130,11 +130,12 @@ off every tile, and it stays floating there, at its size. A right click or
 Escape before the release puts it back. The program inside learns its new
 size once, on the release. Dragging a gap or any other frame edge
 resizes, as a border drag does in tmux. Panes can float above the tiles:
-`prefix F` floats the active pane or puts a floating one back
-(`float-pane`, `unfloat-pane`), the right-click pane menu has Float and
-Unfloat, and a Ctrl-drag of a floating pane drops it into the tiling. The
-Ctrl-drag, `prefix F` and the menu items are grofe-name defaults; under the
-`tmux` name the stock key table and menu stay. See
+`prefix f` (or `F`) floats the active pane where it is, at its tiled size,
+or puts a floating one back (`float-pane`, `unfloat-pane`), the right-click
+pane menu has Float and Unfloat, and a Ctrl-drag of a floating pane drops it
+into the tiling. The Ctrl-drag, `prefix f`/`F` and the menu items are
+grofe-name defaults; under the `tmux` name the stock key table (with `f` as
+`find-window`) and menu stay. See
 `docs/floating-pane-mouse.md`.
 
 ## Switching from tmux
