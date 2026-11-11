@@ -127,9 +127,9 @@ COPY grofe/tests/e2e/alias-day/ /opt/e2e/alias-day/
 COPY grofe/tests/e2e/scenarios/alias-day.sh /opt/e2e/alias-day.sh
 COPY grofe/tests/fixtures/compat/golden/tm_2/wrap.golden /opt/e2e/golden/tm_2/wrap.golden
 # TE.3's legs in this image (scripts/release-gate.sh): the rollback drill,
-# and the README whose alias-day steps readme.sh runs.
+# and docs/alias-day.md, whose steps readme.sh runs.
 COPY grofe/tests/e2e/scenarios/rollback.sh grofe/tests/e2e/scenarios/readme.sh /opt/e2e/scenarios/
-COPY grofe/README.md /opt/e2e/README.md
+COPY grofe/docs/alias-day.md /opt/e2e/alias-day.md
 COPY inputs/ /opt/e2e/inputs/
 RUN chmod -R a+rX /opt/e2e
 

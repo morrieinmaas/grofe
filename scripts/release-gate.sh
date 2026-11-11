@@ -11,7 +11,7 @@
 #   alias-day   scripts/e2e.sh alias-day (TA.1, standing in for T7.8)
 #   rollback    tests/e2e/scenarios/rollback.sh in the systemd image
 #   readme      tests/e2e/scenarios/readme.sh in the systemd image: the
-#               README's "Alias day" steps, as written
+#               "Alias day" steps in docs/alias-day.md, as written
 #
 #   GROFE_E2E_CANOPY_REPO=<canopy clone> GROFE_E2E_ATHOME_REPO=<athome clone> \
 #     scripts/release-gate.sh

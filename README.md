@@ -10,8 +10,9 @@ changes is the part you keep fighting: sessions that die with the machine, a
 config language nobody can debug, and a status line that forks a shell on every
 redraw.
 
-> grofe is in early development and not ready for daily use yet. If you want
-> to try it, follow along or help, read on.
+> grofe is an early preview (0.1). It is in daily use by its author and passes
+> a large tmux compatibility suite, but expect rough edges and keep real tmux
+> installed while you try it. Bug reports are very welcome.
 
 ## What's different
 
@@ -172,9 +173,10 @@ grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
 ```
 
 Options, key bindings, hooks and status formats come across, including `#()`
-segments, which become cached status sources; anything that cannot (plugin
-lines above all, which canopy's loader takes over) is listed with the reason,
-so you know exactly what is left to do.
+segments, which become cached status sources; anything that cannot is listed with
+the reason, so you know exactly what is left to do. TPM's `run` line becomes a
+direct load of each plugin you already have installed, so no plugin manager is
+needed.
 Your `tmux.conf` is never touched, and tmux keeps working alongside grofe while
 you try it.
 
@@ -201,101 +203,6 @@ tmux compatibility is a translation layer; grofe works differently underneath.
 Real tmux stays available by its full path. Inside a grofe pane, run it as
 `env -u TMUX /path/to/tmux`, because `$TMUX` there points at grofe.
 
-## Alias day
-
-Alias day is the day grofe becomes your `tmux` for good: on the release
-tag, and only after `scripts/release-gate.sh` is green. These are the
-owner's steps, for a machine set up with athome (chezmoi dotfiles that
-install grofe and canopy). Every step has a stand-in that the release gate
-runs in a container; the commands marked for it below are run there by
-`tests/e2e/scenarios/readme.sh`, exactly as written here.
-
-**1. Pin and apply.** In athome, set the `ref=` line (and the `ref:`
-comment above it) to the release commit in
-`run_onchange_17-install-grofe.sh.tmpl`, and to canopy's release tag in
-`run_onchange_18-install-canopy.sh.tmpl`. Then apply athome the way its
-`AGENTS.md` says: read the diff, copy anything precious out of the way, and
-apply.
-
-```sh
-chezmoi diff
-chezmoi apply
-```
-
-The apply links `~/.local/lib/grofe/bin/tmux` to grofe, puts that directory
-first on `PATH`, installs grofe's config and canopy's grofe fragments, and
-enables the login unit, `canopy-tmux.service`. Open a new shell so it picks
-up the new `PATH`.
-
-**2. Check the login.** At your next login the unit starts grofe as `tmux`.
-Check that it did, and that canopy and grofe agree on what a reboot would
-bring back:
-
-<!-- alias-day: begin -->
-```sh
-systemctl --user is-active canopy-tmux.service
-command -v tmux
-tmux display -p 'grofe #{grofe_version}, as tmux #{version}'
-~/.local/share/canopy/bin/canopy doctor
-grofe reboot-check
-```
-<!-- alias-day: end -->
-
-`command -v tmux` names `~/.local/lib/grofe/bin/tmux`, and `display` prints
-a grofe version: only grofe knows `#{grofe_version}`. athome does not put
-canopy on `PATH`, so these steps call it by its full path.
-
-**3. Reboot for real**, on each machine. Every session comes back with its
-panes' `uid`s, and every Claude Code pane is back in its own conversation.
-
-**4. Work under the alias for a week.** Write each difference from tmux in
-`docs/dogfood.md`, tagged `compat` or `copy`; each one becomes a scenario
-and then gets fixed. Read `compat-miss.log` in grofe's state directory each
-day.
-
-**5. Keep real tmux installed** until that week ends with no open entry.
-It stays reachable by its full path; inside a grofe pane run it as
-`env -u TMUX /usr/bin/tmux`, because `$TMUX` there points at grofe.
-Removing it is your call.
-
-### Rolling back
-
-At any point you can go back to real tmux. Stop the login unit, which ends
-the grofe server and every session in it, remove the `tmux` symlink (grofe
-itself and its state stay where they are), and switch canopy back to its
-tmux backend:
-
-<!-- alias-day: begin -->
-```sh
-systemctl --user stop canopy-tmux.service
-rm ~/.local/lib/grofe/bin/tmux
-hash -r
-tmux -V
-~/.local/share/canopy/bin/canopy install --yes
-systemctl --user start canopy-tmux.service
-tmux display -p 'tmux #{version}'
-~/.local/share/canopy/bin/canopy doctor
-```
-<!-- alias-day: end -->
-
-`tmux -V` now prints the real tmux's version. `canopy install --yes` takes
-over `~/.config/tmux/tmux.conf`: athome's copy is moved into
-`~/.config/canopy/user.conf`, and the original is kept in a restore point.
-Revert the athome change too, so the next machine you apply it to is not
-switched. grofe's state lives in its own directory and touches nothing of
-tmux's, so nothing else needs cleaning up.
-
-To undo `canopy install` later (before going back to grofe, or to hand
-`tmux.conf` back to chezmoi), stop the server and restore. Every file canopy
-changed comes back byte for byte:
-
-<!-- alias-day: begin -->
-```sh
-systemctl --user stop canopy-tmux.service
-~/.local/share/canopy/bin/canopy restore --all
-```
-<!-- alias-day: end -->
-
 ## Terminals
 
 grofe works in any modern terminal and is built and tested against two:
@@ -317,9 +224,11 @@ grofe asks the terminal what it supports when you attach.
 
 ## Install
 
-grofe runs on macOS and Linux and builds with Rust 1.88 or newer (get Rust
-from [rustup](https://rustup.rs)). There are no releases yet, so build it from
-a checkout of this repository:
+grofe runs on macOS and Linux. Each tagged release has prebuilt binaries
+(static on Linux) for x86_64 and arm64 on the
+[releases page](https://github.com/morrieinmaas/grofe/releases): unpack one
+and put `grofe` on your `PATH`. Or build it with Rust 1.88 or newer (get Rust
+from [rustup](https://rustup.rs)) from a checkout of this repository:
 
 <!-- readme-test: begin -->
 ```sh
@@ -328,6 +237,10 @@ cargo install --locked --path .
 <!-- readme-test: end -->
 
 That puts `grofe` in `~/.cargo/bin`, which needs to be on your `PATH`.
+
+A server keeps running the build it started with. After an upgrade, a client
+that attaches is told the server is still on the old build; stop it with
+`grofe kill-server` (or `prefix Q`) and start again to use the new one.
 
 grofe also answers to the name `tmux` (see [Switching from tmux](#switching-from-tmux)
 for what that covers and what it does not). A command it does not support
@@ -457,7 +370,7 @@ POSIX sh: it subscribes to every event and appends each as a JSON line to
 grofe is not a general reimplementation of tmux. It answers to the name `tmux`
 for everyday scripts and tools, but it does not read `tmux.conf` as its
 config: your setup moves over once, to grofe's own config, and your tmux
-plugins run unchanged through canopy's loader rather than TPM. It also does not
+plugins load directly rather than through TPM. It also does not
 run on Windows. It is also not trying to be Zellij: no modal
 interface, no WebAssembly plugins, just tmux's way of working with the rough
 edges taken off.
@@ -476,9 +389,9 @@ Sessions, windows and panes, the status line with cached `#()` sources, the
 mouse, the command prompt, popups and menus, hooks, clipboard and title
 passthrough, copy mode and paste buffers, the config described above,
 `import-tmux` and the tmux compatibility layer work today, and tmux plugins
-run unchanged through canopy's loader. Restoring sessions after a reboot (M4)
-and grofe's own plugin API (M6) are still to come. Agent features stay with
-tmux plugins and canopy rather than grofe. The
+load unchanged. Sessions come back after a reboot, framed and floating panes
+work, and grofe's own plugins run as supervised processes over
+[protocol v1](docs/protocol-v1.md). It runs on Linux and macOS. The
 [roadmap](docs/plans/2026-09-23-milestones.md) has the details and the
 [design document](docs/specs/2026-09-23-grofe-design.md) explains the
 reasoning behind every choice.
@@ -487,12 +400,18 @@ reasoning behind every choice.
 
 Issues and ideas are welcome. The design document is the best place to start;
 if something in it looks wrong, that is exactly the kind of feedback that is
-most useful right now. To build and test:
+most useful right now. When you report a bug, include `grofe -V`, your OS and
+terminal, and whether it happens under the `tmux` name too.
 
-```sh
-cargo test
-cargo clippy --all-targets -- -D warnings
-```
+The checks a change must pass are `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings`, `cargo test` and `bats tests/cli.bats`; with
+[just](https://github.com/casey/just) installed, `just check` runs all four.
+Integration tests start their own servers on private sockets, so they never
+touch a grofe or tmux you have running. The tmux compatibility suite
+(`tests/compat`) compares against recorded tmux output, so it mostly needs
+no tmux installed; the cases that replay real-world configs skip unless
+`GROFE_COMPAT_CANOPY` and `GROFE_COMPAT_ATHOME` point at checkouts of them. `docs/` holds the design, the milestone plans and the notes behind
+them.
 
 ## License
 

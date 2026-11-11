@@ -7,7 +7,7 @@
 # athome: canopy on grofe, grofe first on PATH as `tmux`, the login unit
 # (canopy-tmux.service) running a grofe server. Never run on a host.
 #
-# The drill is the README's rollback, step by step, each checked:
+# The drill is docs/alias-day.md's rollback, step by step, each checked:
 #
 #   1. canopy is on grofe: a login shell's `tmux` is the grofe symlink, and
 #      the login unit's server answers #{grofe_version}

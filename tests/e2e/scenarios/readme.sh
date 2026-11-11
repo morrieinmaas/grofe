@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# readme.sh: TE.3's README run, the in-container half. The README's "Alias
-# day" steps, extracted from the README and run as written, in a clean
+# readme.sh: TE.3's alias-day run, the in-container half. The "Alias
+# day" steps, extracted from docs/alias-day.md and run as written, in a clean
 # systemd container (tests/e2e/Containerfile.alias-day, a fresh one per
 # run). Run by scripts/release-gate.sh as the test user, never on a host.
 #
 # What runs: every fenced block between `<!-- alias-day: begin -->` and
-# `<!-- alias-day: end -->` in README.md, region by region, each with
+# `<!-- alias-day: end -->` in docs/alias-day.md, region by region, each with
 # `bash -euxo pipefail` in the test user's home, on the PATH a login zsh
 # has (athome's ~/.zsh/path.zsh), so any failing command fails its step.
-# The steps the README marks for the owner alone (step 1's athome edit and
+# The steps the doc marks for the owner alone (step 1's athome edit and
 # apply, the reboot, the week of work) have no markers and do not run.
 # Step 1's apply has its substitute run first by the gate: TA.1's stage 2,
 # which applies athome the way bootstrap does on a machine with no package
 # manager branch for Debian, as the plan names it.
 #
 # A region whose block is missing a command it must have (the commands
-# below) fails the run, so a step cannot drop out of the README unseen.
+# below) fails the run, so a step cannot drop out of the doc unseen.
 set -uo pipefail
 
 [ -e /run/.containerenv ] || { echo "readme.sh: refusing to run outside a container" >&2; exit 2; }
@@ -24,7 +24,7 @@ set -uo pipefail
 XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export XDG_RUNTIME_DIR
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-README=/opt/e2e/README.md
+README=/opt/e2e/alias-day.md
 OUT="$HOME/e2e-out/readme"
 REQUIRED=('canopy/bin/canopy doctor' 'grofe reboot-check' 'rm ~/.local/lib/grofe/bin/tmux'
   'canopy/bin/canopy install --yes' 'canopy/bin/canopy restore --all')
@@ -41,15 +41,15 @@ awk -v dir="$OUT" '
 
 steps=("$OUT"/step-*.sh)
 if [ ! -e "${steps[0]}" ]; then
-  echo "FAIL no <!-- alias-day: begin --> region in the README"
+  echo "FAIL no <!-- alias-day: begin --> region in docs/alias-day.md"
   exit 1
 fi
 all="$(cat "${steps[@]}")"
 for cmd in "${REQUIRED[@]}"; do
   if printf '%s\n' "$all" | grep -qF -- "$cmd"; then
-    echo "PASS the README's steps run '$cmd'"
+    echo "PASS the alias-day steps run '$cmd'"
   else
-    echo "FAIL the README's steps do not run '$cmd'"
+    echo "FAIL the alias-day steps do not run '$cmd'"
     fails=$((fails + 1))
   fi
 done
