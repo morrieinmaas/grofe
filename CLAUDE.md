@@ -32,7 +32,11 @@ Conventions for agents implementing tasks from `docs/plans/2026-09-23-milestones
 Never run `tmux` against the default server. Your shell is inside the user's live
 tmux session, and `tmux kill-session` with no target kills it along with every agent
 running there. To compare against real tmux, always pass a private socket,
-`tmux -L grofe-<task> ...`, and clean up with `tmux -L grofe-<task> kill-server`. A
+`tmux -L grofe-<task> ...`, and clean up with `tmux -L grofe-<task> kill-server`.
+Start it with `-f /dev/null` unless the test needs the user's config: that
+config loads tmux-resurrect and tmux-continuum, whose autosave writes the
+private server's sessions into the user's real resurrect directory and
+replaces the save their tmux restores at boot. A
 global hook blocks `tmux kill-*` without `-L`/`-S`, but `set-option`, `new-session`
 and the rest would still change the live server.
 
