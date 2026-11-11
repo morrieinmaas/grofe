@@ -133,10 +133,16 @@ pub const PANE_BORDER_FORMAT: &str = "#{?pane_active,#[reverse],}#{pane_index}#[
 /// `pane-border-format`: the same less its buttons, which the frame's
 /// control tab takes over (`render::frame_tab`), and with the pane index
 /// between the tab's `ends` (`render::tab_ends`) in place of reversed, so
-/// the two match.
+/// the two match. A pane whose title no program has set (empty, or the
+/// hostname tmux gives it) shows its command and folder instead.
 pub fn frame_title_format(ends: &str) -> String {
     let (l, r) = crate::server::render::tab_ends(ends);
-    format!("{l}#{{pane_index}}{r} \"#{{pane_title}}\"")
+    format!(
+        "{l} #{{pane_index}} {r} \
+         #{{?#{{||:#{{==:#{{pane_title}},}},#{{||:#{{==:#{{pane_title}},#{{host}}}},\
+         #{{==:#{{pane_title}},#{{host_short}}}}}}}},\
+         #{{pane_current_command}} · #{{b:pane_current_path}},\"#{{pane_title}}\"}}"
+    )
 }
 
 /// Whether `name` is a built-in tmux's CLI must not see ([`GROFE_ONLY`]).

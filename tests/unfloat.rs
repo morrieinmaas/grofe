@@ -318,10 +318,10 @@ fn the_pane_menu_floats_and_unfloats_the_pane_clicked() {
     client.send("f");
     wait_until(floating("1"), WAIT).expect("the menu floats %0");
     client.send("\x1b[<2;11;6m");
-    // The floating pane keeps its tiled place, (0, 0): cell (10, 4) is
-    // over it.
+    // The floating pane is its tiled place moved to (2, 1): cell (10, 4)
+    // is over it.
     let (l, t, _, _) = rect(&srv, "%0");
-    assert_eq!((l, t), (0, 0));
+    assert_eq!((l, t), (2, 1));
     std::thread::sleep(Duration::from_millis(400));
     client.send(right_press(11, 5));
     client.wait_until("the floating pane's menu", WAIT, |t| t.contains("Unfloat"));
@@ -455,8 +455,8 @@ fn unfloat_keeps_the_uid_and_resume_and_the_snapshot_saves_the_pane_again() {
     assert_eq!(got[1..], ["notes".to_string()]);
 }
 
-/// `float-pane` with no size or place lifts the pane out where it is: the
-/// floating pane keeps its tiled size and top-left cell.
+/// `float-pane` with no size or place keeps the pane's tiled size, moved 2
+/// right and 1 down so the lift shows, and cut to stay in the window.
 #[test]
 fn float_pane_by_default_keeps_the_panes_tiled_size_and_place() {
     let srv = TestServer::start();
@@ -474,8 +474,8 @@ fn float_pane_by_default_keeps_the_panes_tiled_size_and_place() {
     .expect("new-session");
     srv.cmd(&["split-window", "-h", "-t", "%0", "cat"])
         .expect("split");
-    let tiled = rect(&srv, "%1");
+    assert_eq!(rect(&srv, "%1"), (41, 0, 39, 23));
     srv.cmd(&["float-pane", "-t", "%1"]).expect("float-pane");
     assert_eq!(var(&srv, "%1", "#{pane_floating_flag}"), "1");
-    assert_eq!(rect(&srv, "%1"), tiled);
+    assert_eq!(rect(&srv, "%1"), (43, 1, 37, 22));
 }

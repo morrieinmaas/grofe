@@ -786,7 +786,7 @@ fn click(a: &mut Harness, at: (u16, u16)) {
 }
 
 /// Under grofe identity a frame's title ends in a tab of three controls in
-/// the frame's colours, `(z f x)`, with the pane index between the same
+/// the frame's colours, `( z f x )`, with the pane index between the same
 /// ends, in place of the default
 /// `pane-border-format`'s `[z][x]`: zoom (`MouseDown1Control8`), float
 /// (`MouseDown1Control7`) and close (`MouseDown1Control9`, which asks).
@@ -806,9 +806,17 @@ fn the_frame_tab_zooms_floats_and_closes() {
         .nth(row as usize)
         .unwrap_or_default()
         .to_string();
-    assert!(ends.contains("(z f x)"), "{ends:?}");
+    assert!(ends.contains("( z f x )"), "{ends:?}");
     let index = var(&srv, "%0", "#{pane_index}");
-    assert!(ends.contains(&format!("({index}) \"")), "{ends:?}");
+    assert!(ends.contains(&format!("( {index} ) ")), "{ends:?}");
+    // No program set a title, so the frame shows the command and folder,
+    // not the hostname tmux defaults a title to.
+    let cmd = var(
+        &srv,
+        "%0",
+        "#{pane_current_command} · #{b:pane_current_path}",
+    );
+    assert!(ends.contains(&cmd), "{cmd:?} in {ends:?}");
     // Zoom, then unzoom with the same control, now `u`.
     click(&mut a, (at, row));
     let zoomed = wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "1", WAIT);
@@ -852,7 +860,7 @@ fn the_tab_ends_are_an_option() {
     );
     let mut a = attach(&srv);
     let row = rect(&srv, "%0").1 - 1;
-    tab_at(&mut a, row, "\u{e0b6}z f x\u{e0b4}");
+    tab_at(&mut a, row, "\u{e0b6} z f x \u{e0b4}");
     ok(&srv, &["set", "-g", "pane-frame-tab-ends", ""]);
-    tab_at(&mut a, row, "─ z f x ─");
+    tab_at(&mut a, row, "─  z f x  ─");
 }

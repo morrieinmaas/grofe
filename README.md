@@ -80,11 +80,11 @@ with its own frame, its title drawn in the frame's top edge, and a cell of
 gap between tiles and around the outside:
 
 ```
- ╭─ 1: nvim ──────── (z f x) ─╮ ╭─ 2: zsh ─────── (z f x) ─╮
+ ╭─ 1: nvim ────── ( z f x ) ─╮ ╭─ 2: zsh ────── ( z f x ) ─╮
  │                            │ │                           │
  │                            │ ╰───────────────────────────╯
  │                            │
- │                            │ ╭─ 3: cargo ───── (z f x) ─╮
+ │                            │ ╭─ 3: cargo ──── ( z f x ) ─╮
  │                            │ │                           │
  ╰────────────────────────────╯ ╰───────────────────────────╯
 ```
@@ -97,7 +97,8 @@ pane back in the tiling) and `x` closes it, after asking. They are the mouse
 keys `MouseDown1Control8`, `Control7` and `Control9`, so they can be rebound.
 The default `pane-border-format`'s `[z][x]` buttons give way to the tab.
 The tab and the pane index in the title are outlined in the frame's colour,
-with no background. `pane-frame-tab-ends` sets their two end glyphs: `()` by
+with no background. A pane whose title no program has set (tmux gives it
+the hostname) shows its command and folder instead, `zsh · grofe`. `pane-frame-tab-ends` sets their two end glyphs: `()` by
 default, which any font has; with a Nerd font `""` gives thin rounded
 ends, and an empty value blank ones. `#{pane_width}`,
 the pty size and `#{window_layout}` are the content, inside the frames. A
@@ -130,7 +131,8 @@ off every tile, and it stays floating there, at its size. A right click or
 Escape before the release puts it back. The program inside learns its new
 size once, on the release. Dragging a gap or any other frame edge
 resizes, as a border drag does in tmux. Panes can float above the tiles:
-`prefix f` (or `F`) floats the active pane where it is, at its tiled size,
+`prefix f` (or `F`) floats the active pane at its tiled size, nudged 2 right
+and 1 down so the change shows,
 or puts a floating one back (`float-pane`, `unfloat-pane`), the right-click
 pane menu has Float and Unfloat, and a Ctrl-drag of a floating pane drops it
 into the tiling. The Ctrl-drag, `prefix f`/`F` and the menu items are
@@ -181,7 +183,11 @@ starts with no sessions takes them from your running tmux server (names,
 windows, layouts and directories, with fresh shells, since the programs are
 still running in tmux), or, with no tmux running, from tmux-resurrect's
 newest save in `resurrect-dir`, where a pane saved with a command runs it
-again.
+again. Only the default server does this; one started with `-L preview` (or
+any other socket) starts from its own snapshot, so you can try a new build
+next to your main server. When bare `grofe` starts the server and it comes
+up with restored sessions, you are attached to them rather than to a new
+empty session on top.
 
 grofe sets `TMUX` and `TMUX_PANE` in its panes and answers the commands,
 aliases and formats that scripts and tools send, so things like `fzf --tmux`
@@ -400,7 +406,8 @@ a file and line, or `runtime` for one made with `bind-key` since the server
 started. A command string can run several commands in a row, separated by
 `;`, and so can the command line: `grofe split-window -h ';' select-pane -L`.
 
-When you are done, stop the server and every session in it:
+When you are done, stop the server and every session in it, with
+`prefix Q` (it asks first) or:
 
 <!-- readme-test: begin -->
 ```sh

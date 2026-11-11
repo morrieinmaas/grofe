@@ -1755,6 +1755,18 @@ pub fn default_bindings() -> KeyTables {
     // of grofe's prefix defaults ([`KeyTables::use_tmux_stock`]) and gets
     // tmux's `f` (find-window) back. `f` is the main key; `F` stays for
     // configs that bind `f` themselves.
+    // grofe's own: tmux 3.7b has no key for `kill-server`.
+    bind(
+        "Q",
+        &[
+            "confirm-before",
+            "-p",
+            "kill-server: stop grofe and every session? (y/n)",
+            "kill-server",
+        ],
+        false,
+        "Stop the server and every session",
+    );
     for key in ["f", "F"] {
         bind(
             key,
@@ -4779,6 +4791,19 @@ mod tests {
         assert!(t.exact(PREFIX_TABLE, &k("F")).is_none());
         let f = t.exact(PREFIX_TABLE, &k("f")).expect("tmux's f");
         assert!(words(f)[1].contains("find-window"), "{:?}", words(f));
+    }
+
+    /// grofe identity binds `prefix Q` to stop the server after asking
+    /// (owner review 2026-11-11); tmux 3.7b has no key for `kill-server`.
+    #[test]
+    fn prefix_q_kills_the_server_after_asking_under_grofe_identity_only() {
+        let mut t = default_bindings();
+        let q = t.exact(PREFIX_TABLE, &k("Q")).expect("grofe's Q");
+        let w = words(q);
+        assert_eq!(w[0], "confirm-before");
+        assert_eq!(w.last(), Some(&"kill-server"));
+        t.use_tmux_stock();
+        assert!(t.exact(PREFIX_TABLE, &k("Q")).is_none());
     }
 
     // ---- default key table (T2.5b) ----

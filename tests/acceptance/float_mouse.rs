@@ -630,6 +630,7 @@ fn float_pane_unzooms_and_relays_the_tiled_panes() {
     assert_eq!(var(&srv, "%0", "#{window_zoomed_flag}"), "0");
     assert_eq!(rect(&srv, "%0"), (0, 0, 40, 23));
     assert_eq!(rect(&srv, "%2"), (41, 0, 39, 23));
-    // Lifted where it was tiled, at its size there: the top right.
-    assert_eq!(rect(&srv, "%1"), (41, 0, 39, 11));
+    // Its tiled size and place, (41, 0, 39, 11), moved 2 right and 1 down
+    // and cut at the window's right edge.
+    assert_eq!(rect(&srv, "%1"), (43, 1, 37, 11));
 }

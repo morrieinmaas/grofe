@@ -238,7 +238,8 @@ fn float_rect(
 
 /// `float-pane` (grofe's own): the target tiled pane leaves the layout for
 /// a floating place, on top, with its process and history. Without
-/// `-x -y -X -Y` it keeps its tiled size and place, lifted out where it is.
+/// `-x -y -X -Y` it keeps its tiled size, moved 2 right and 1 down so the
+/// lift shows, and cut to stay inside the window.
 /// The window needs another tiled pane to keep the layout.
 pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<String, String> {
     let model = &mut state.model;
@@ -262,7 +263,12 @@ pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<St
                 y: None,
                 ..
             },
-        ) => (i32::from(r.x), i32::from(r.y), r.cols, r.rows),
+        ) => {
+            let (x, y) = (r.x + 2, r.y + 1);
+            let cols = r.cols.min(w.cols.saturating_sub(x)).max(1);
+            let rows = r.rows.min(w.rows.saturating_sub(y)).max(1);
+            (i32::from(x), i32::from(y), cols, rows)
+        }
         _ => float_rect(w, (c.width, c.height), (c.x, c.y))?,
     };
     let Some(w) = model.windows.get_mut(&window) else {

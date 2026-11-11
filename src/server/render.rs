@@ -135,25 +135,25 @@ pub struct PaneLook {
 }
 
 /// How many cells the control tab ([`frame_tab`]) covers.
-pub const TAB_WIDTH: i32 = 7;
+pub const TAB_WIDTH: i32 = 9;
 
 /// The control tab of a frame's title (grofe identity, spec
 /// 2026-11-05-frames.md "Drawing"): zoom (`u` to unzoom), float (`t` to
 /// tile a floating pane) and close, as the click ranges `control|8`,
-/// `control|7` and `control|9`, between `ends`' two end glyphs, all in the
-/// frame's style with no background of their own: an outlined pill of the
-/// frame's colour on any theme. `ends` other than two one-cell glyphs
-/// gives blank ends. Always [`TAB_WIDTH`] cells.
+/// `control|7` and `control|9`, a space inside each of `ends`' two end
+/// glyphs, all in the frame's style with no background of their own: an
+/// outlined tab of the frame's colour on any theme. `ends` other than two
+/// one-cell glyphs gives blank ends. Always [`TAB_WIDTH`] cells.
 pub fn frame_tab(ends: &str, zoomed: bool, floating: bool) -> String {
     let (left, right) = tab_ends(ends);
     let zoom = if zoomed { 'u' } else { 'z' };
     let float = if floating { 't' } else { 'f' };
     // A range runs one cell past its `#[norange]`, as in tmux, so each
-    // control is targeted on two or three cells: zoom on the left end and
-    // `z`, float on ` f `, close on `x` and the right end.
+    // control is targeted on three cells: zoom on the left end, its space
+    // and `z`, float on ` f `, close on `x`, its space and the right end.
     format!(
-        "#[range=control|8]{left}#[norange]{zoom}#[range=control|7] {float}#[norange] \
-         #[range=control|9]x#[norange]{right}"
+        "#[range=control|8]{left} #[norange]{zoom}#[range=control|7] {float}#[norange] \
+         #[range=control|9]x #[norange]{right}"
     )
 }
 
