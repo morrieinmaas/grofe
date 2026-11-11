@@ -2336,6 +2336,20 @@ mod tests {
         );
     }
 
+    /// A global `session-created` hook runs for a session made with
+    /// `new-session -d`, as tmux runs it; `session-name.sh` names new
+    /// sessions from it.
+    #[tokio::test]
+    async fn a_global_session_created_hook_runs_for_a_detached_new_session() {
+        let mut state = test_state();
+        let hook = "set-option -gF @made '#{hook_session_name}'";
+        fire(&mut state, &["set-hook", "-g", "session-created", hook]).unwrap();
+        fire(&mut state, &["new-session", "-d", "-s", "a"]).unwrap();
+        fire(&mut state, &["list-sessions"]).unwrap();
+        fire(&mut state, &["list-sessions"]).unwrap();
+        assert_eq!(state.model.options.lookup("@made", &[]), Some("a"));
+    }
+
     #[tokio::test]
     async fn a_session_hook_does_not_fire_for_the_session_it_makes() {
         let mut state = test_state();
