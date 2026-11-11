@@ -2537,13 +2537,15 @@ fn pane_looks(
         let (fg, bg) = window_style_colours(&opt, &vars, *id == w.active);
         let format = match opt("pane-border-format") {
             // The tab takes the place of the default format's buttons.
-            f if tabbed && f == options::PANE_BORDER_FORMAT => options::FRAME_TITLE_FORMAT,
-            f => f,
+            f if tabbed && f == options::PANE_BORDER_FORMAT => {
+                options::frame_title_format(opt("pane-frame-tab-ends"))
+            }
+            f => f.to_string(),
         };
         let title = if !titled {
             String::new()
         } else {
-            status::expand_time(format, &vars, &now)
+            status::expand_time(&format, &vars, &now)
         };
         let tab = tabbed.then(|| {
             render::frame_tab(

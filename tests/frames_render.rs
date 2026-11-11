@@ -263,26 +263,26 @@ fn the_active_frame_takes_the_active_style_and_the_others_the_border_style() {
 }
 
 /// The control tab sits at the right end of a frame's top edge, one edge
-/// cell before the corner, in the frame's own style: its ends plain, its
-/// controls reversed, so it reads as a pill of the frame's colour. The
-/// title keeps the left and is cut before the tab.
+/// cell before the corner, all in the frame's own style with no reverse,
+/// so it reads as an outlined pill of the frame's colour. The title keeps
+/// the left and is cut before the tab.
 #[test]
 fn the_control_tab_ends_the_title_edge_in_the_frames_colours() {
     let mut inputs = three(Some(1), PaneLines::Rounded, true);
     for l in inputs.look.panes.values_mut() {
-        l.tab = Some(frame_tab("▐▌", false, false));
+        l.tab = Some(frame_tab("()", false, false));
     }
     let screen = compose(&inputs);
     for (id, f) in inputs.look.frames.clone() {
         let (y, x1) = (f.y, f.x + f.cols - 1);
         let tab: String = (x1 - 8..x1 - 1).map(|x| at(&screen, x, y).c).collect();
-        assert_eq!(tab, "▐z f x▌", "{id}:\n{}", text(&screen));
+        assert_eq!(tab, "(z f x)", "{id}:\n{}", text(&screen));
         assert_eq!(at(&screen, x1 - 1, y).c, '─');
         assert_eq!(at(&screen, x1, y).c, '╮');
         let end = at(&screen, x1 - 8, y);
         let z = at(&screen, x1 - 7, y);
         assert!(!end.flags.contains(CellFlags::INVERSE), "{id}");
-        assert!(z.flags.contains(CellFlags::INVERSE), "{id}");
+        assert!(!z.flags.contains(CellFlags::INVERSE), "{id}");
         assert_eq!(is_active(end), id == PaneId(1), "{id}");
         assert_eq!(is_active(z), id == PaneId(1), "{id}");
         let row = text(&screen)
@@ -302,7 +302,7 @@ fn the_control_tab_ends_the_title_edge_in_the_frames_colours() {
 #[test]
 fn the_control_tabs_cells_are_its_controls() {
     use grofe::server::status::RangeKind;
-    let tab = frame_tab("▐▌", false, false);
+    let tab = frame_tab("()", false, false);
     let edge = frame_title((0, 30), 80, "t", Some(&tab), Style::default(), '─');
     let (tx, _) = edge.tab.as_ref().expect("a tab");
     assert_eq!(*tx, 30 - 1 - 7);
@@ -530,7 +530,7 @@ fn attached(config: &str) -> (TestServer, Harness) {
 fn an_attached_client_sees_rounded_frames_with_titles() {
     let (_srv, mut client) = attached("pane-frames = true\n");
     client.wait_until("three titled frames", harness::DEFAULT_TIMEOUT, |t| {
-        t.matches(": ca").count() == 3 && t.matches("▐z f x▌").count() == 3
+        t.matches(": ca").count() == 3 && t.matches("(z f x)").count() == 3
     });
     let shown = client.text();
     assert_eq!(shown.matches("╭─ ").count(), 3, "{shown}");
@@ -604,7 +604,7 @@ fn grofe_identity_with_an_explicit_single_draws_single_frames() {
 fn a_zoomed_framed_window_draws_one_framed_tile() {
     let (srv, mut client) = attached("pane-frames = true\n");
     client.wait_until("three titled frames", harness::DEFAULT_TIMEOUT, |t| {
-        t.matches(": ca").count() == 3 && t.matches("▐z f x▌").count() == 3
+        t.matches(": ca").count() == 3 && t.matches("(z f x)").count() == 3
     });
     srv.cmd(&["resize-pane", "-Z", "-t", "f:.1"]).expect("zoom");
     client.wait_until("one framed tile", harness::DEFAULT_TIMEOUT, |t| {

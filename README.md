@@ -80,11 +80,11 @@ with its own frame, its title drawn in the frame's top edge, and a cell of
 gap between tiles and around the outside:
 
 ```
- ╭─ 1: nvim ──────── ▐z f x▌ ─╮ ╭─ 2: zsh ─────── ▐z f x▌ ─╮
+ ╭─ 1: nvim ──────── (z f x) ─╮ ╭─ 2: zsh ─────── (z f x) ─╮
  │                            │ │                           │
  │                            │ ╰───────────────────────────╯
  │                            │
- │                            │ ╭─ 3: cargo ───── ▐z f x▌ ─╮
+ │                            │ ╭─ 3: cargo ───── (z f x) ─╮
  │                            │ │                           │
  ╰────────────────────────────╯ ╰───────────────────────────╯
 ```
@@ -96,9 +96,10 @@ colour: `z` zooms the pane (`u` unzooms), `f` floats it (`t` puts a floating
 pane back in the tiling) and `x` closes it, after asking. They are the mouse
 keys `MouseDown1Control8`, `Control7` and `Control9`, so they can be rebound.
 The default `pane-border-format`'s `[z][x]` buttons give way to the tab.
-`pane-frame-tab-ends` sets the tab's two end glyphs: half blocks `▐▌` by
-default, which any font has; with a Powerline or Nerd font
-`""` gives rounded ends, and an empty value plain ones. `#{pane_width}`,
+The tab and the pane index in the title are outlined in the frame's colour,
+with no background. `pane-frame-tab-ends` sets their two end glyphs: `()` by
+default, which any font has; with a Nerd font `""` gives thin rounded
+ends, and an empty value blank ones. `#{pane_width}`,
 the pty size and `#{window_layout}` are the content, inside the frames. A
 window too small to frame every pane falls back to tmux's shared borders.
 The keys in `config.toml`:
@@ -107,7 +108,7 @@ The keys in `config.toml`:
 pane-frames = true          # false: tmux's shared one-cell borders
 pane-gap = 1                # cells between frames and around them, 0 to 8
 pane-frame-title = true     # false: a plain top edge
-pane-frame-tab-ends = "▐▌"  # the control tab's end glyphs
+pane-frame-tab-ends = "()"  # the control tab's end glyphs
 
 [pane-border]
 lines = "rounded"           # the default with frames; single, double, heavy, ...

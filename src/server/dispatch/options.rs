@@ -131,9 +131,13 @@ pub const PANE_BORDER_FORMAT: &str = "#{?pane_active,#[reverse],}#{pane_index}#[
 
 /// What a framed title under grofe identity draws for the default
 /// `pane-border-format`: the same less its buttons, which the frame's
-/// control tab takes over (`render::frame_tab`).
-pub const FRAME_TITLE_FORMAT: &str =
-    "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"";
+/// control tab takes over (`render::frame_tab`), and with the pane index
+/// between the tab's `ends` (`render::tab_ends`) in place of reversed, so
+/// the two match.
+pub fn frame_title_format(ends: &str) -> String {
+    let (l, r) = crate::server::render::tab_ends(ends);
+    format!("{l}#{{pane_index}}{r} \"#{{pane_title}}\"")
+}
 
 /// Whether `name` is a built-in tmux's CLI must not see ([`GROFE_ONLY`]).
 pub fn is_grofe_only(name: &str) -> bool {
@@ -558,15 +562,15 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "on",
     },
-    // The two end glyphs of a framed title's control tab under grofe
-    // identity: half blocks, which any terminal font has; a Powerline
-    // font's rounded `\u{e0b6}\u{e0b4}` are the usual choice there, and
-    // anything but two one-cell glyphs gives plain ends.
+    // The two end glyphs of a framed title's control tab and pane index
+    // under grofe identity: brackets, which any terminal font has; a Nerd
+    // font's thin rounded `\u{e0b7}\u{e0b5}` are the usual choice there,
+    // and anything but two one-cell glyphs gives blank ends.
     Builtin {
         name: "pane-frame-tab-ends",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "▐▌",
+        default: "()",
     },
     Builtin {
         name: "status-position",

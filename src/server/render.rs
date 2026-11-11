@@ -140,17 +140,12 @@ pub const TAB_WIDTH: i32 = 7;
 /// The control tab of a frame's title (grofe identity, spec
 /// 2026-11-05-frames.md "Drawing"): zoom (`u` to unzoom), float (`t` to
 /// tile a floating pane) and close, as the click ranges `control|8`,
-/// `control|7` and `control|9`, between `ends`' two end glyphs. The ends
-/// are drawn in the frame's style and the controls in it reversed, a pill
-/// of the frame's colour on any theme; `ends` other than two one-cell
-/// glyphs gives a pill with plain ends. Always [`TAB_WIDTH`] cells.
+/// `control|7` and `control|9`, between `ends`' two end glyphs, all in the
+/// frame's style with no background of their own: an outlined pill of the
+/// frame's colour on any theme. `ends` other than two one-cell glyphs
+/// gives blank ends. Always [`TAB_WIDTH`] cells.
 pub fn frame_tab(ends: &str, zoomed: bool, floating: bool) -> String {
-    let one = |c: &char| UnicodeWidthChar::width(*c) == Some(1);
-    let glyphs: Vec<char> = ends.chars().collect();
-    let (left, right) = match glyphs[..] {
-        [l, r] if one(&l) && one(&r) => (format!("{l}#[reverse]"), format!("#[noreverse]{r}")),
-        _ => ("#[reverse] ".to_string(), " #[noreverse]".to_string()),
-    };
+    let (left, right) = tab_ends(ends);
     let zoom = if zoomed { 'u' } else { 'z' };
     let float = if floating { 't' } else { 'f' };
     // A range runs one cell past its `#[norange]`, as in tmux, so each
@@ -160,6 +155,23 @@ pub fn frame_tab(ends: &str, zoomed: bool, floating: bool) -> String {
         "#[range=control|8]{left}#[norange]{zoom}#[range=control|7] {float}#[norange] \
          #[range=control|9]x#[norange]{right}"
     )
+}
+
+/// `pane-frame-tab-ends`' two glyphs, escaped for a format; a space each
+/// when it is not two one-cell glyphs.
+pub fn tab_ends(ends: &str) -> (String, String) {
+    let one = |c: &char| UnicodeWidthChar::width(*c) == Some(1);
+    let esc = |c: char| {
+        if c == '#' {
+            "##".to_string()
+        } else {
+            c.to_string()
+        }
+    };
+    match ends.chars().collect::<Vec<_>>()[..] {
+        [l, r] if one(&l) && one(&r) => (esc(l), esc(r)),
+        _ => (" ".to_string(), " ".to_string()),
+    }
 }
 
 /// The window's border options and each pane's [`PaneLook`].
