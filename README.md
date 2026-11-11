@@ -376,6 +376,10 @@ side by side, `"` splits top and bottom, `c` opens a window, the arrows move
 between panes, `:` opens the command prompt and `d` detaches. The session
 keeps running after you detach, and `grofe attach -t demo` brings it back.
 
+A session started without `-s` is named after the git repository it starts
+in, else its folder (`home` for `~`), with `-2`, `-3` for more in the same
+place. Under the `tmux` name sessions are numbered, as in tmux.
+
 Configuration lives in `~/.config/grofe/` (or `$XDG_CONFIG_HOME/grofe/`).
 `config.toml` loads first, then every `conf.d/*.toml` in name order, then
 `user.toml`, and each one overrides the ones before. Write a small config,

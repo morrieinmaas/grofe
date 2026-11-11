@@ -53,8 +53,23 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
             .or_else(|| found.map(|s| model.sessions[&s].name.clone()))
             .unwrap_or_else(|| word.clone())
     });
+    let here = ctx.pane.filter(|p| model.panes.contains_key(p));
+    let cwd = resolve_cwd(model, ctx, here, c.cwd.as_deref(), &ctx.cwd);
     let name = match (c.name, &prefix) {
         (Some(name), _) => name,
+        (None, None) if model.identity != crate::compat::Identity::Tmux => {
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+            match place_name(&cwd, home.as_deref()) {
+                Some(base) => std::iter::once(base.clone())
+                    .chain((2..).map(|n| format!("{base}-{n}")))
+                    .find(|n| model.session_by_name(n).is_none())
+                    .unwrap_or(base),
+                None => (id.0..)
+                    .map(|n| n.to_string())
+                    .find(|n| model.session_by_name(n).is_none())
+                    .unwrap_or_else(|| id.0.to_string()),
+            }
+        }
         (None, Some(prefix)) => (id.0..)
             .map(|n| format!("{prefix}-{n}"))
             .find(|n| model.session_by_name(n).is_none())
@@ -75,8 +90,6 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
             c.format.as_deref(),
         );
     }
-    let here = ctx.pane.filter(|p| model.panes.contains_key(p));
-    let cwd = resolve_cwd(model, ctx, here, c.cwd.as_deref(), &ctx.cwd);
     // A missing -x or -y is `default-size`'s, as tmux's detached sessions.
     let default = model
         .options
@@ -167,6 +180,26 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         "{}\n",
         cmd::expand(format, &ServerVars::new(state, pane, &vars))
     ))
+}
+
+/// The name grofe gives a session made without `-s` in `cwd`: the git
+/// repository it is in (the nearest folder above with a `.git`), else the
+/// folder itself; `home` for `home`, so `~` and a repository at `~` give
+/// it. `.`, `:` and spaces, which a target cannot hold, become `_`. `None`
+/// for the root folder, which keeps tmux's number.
+pub fn place_name(cwd: &std::path::Path, home: Option<&std::path::Path>) -> Option<String> {
+    let repo = cwd
+        .ancestors()
+        .find(|d| d.join(".git").exists())
+        .unwrap_or(cwd);
+    if Some(repo) == home {
+        return Some("home".to_string());
+    }
+    let base = repo
+        .file_name()?
+        .to_string_lossy()
+        .replace(['.', ':', ' '], "_");
+    (!base.is_empty()).then_some(base)
 }
 
 /// `new-session -t`: session `id` joins `target`'s group (made, named
@@ -435,4 +468,31 @@ fn neighbour_session(
         (pos + n - 1) % n
     };
     Some(sessions[pos])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::place_name;
+    use std::fs;
+
+    /// A session is named after its git repository from anywhere inside
+    /// it, else after its folder; `~` is `home`, and `/` keeps a number.
+    #[test]
+    fn a_session_is_named_after_its_repository_or_folder() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().join("me");
+        let repo = home.join("code").join("my.app");
+        let deep = repo.join("src").join("bin");
+        let plain = home.join("notes");
+        for d in [&deep, &plain] {
+            fs::create_dir_all(d).expect("mkdir");
+        }
+        fs::create_dir(repo.join(".git")).expect("mkdir .git");
+        let name = |p: &std::path::Path| place_name(p, Some(&home));
+        assert_eq!(name(&repo).as_deref(), Some("my_app"));
+        assert_eq!(name(&deep).as_deref(), Some("my_app"));
+        assert_eq!(name(&plain).as_deref(), Some("notes"));
+        assert_eq!(name(&home).as_deref(), Some("home"));
+        assert_eq!(place_name(std::path::Path::new("/"), Some(&home)), None);
+    }
 }
