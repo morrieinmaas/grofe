@@ -29,7 +29,8 @@
 //!   (D8, TC.4), registered by a `__register-source` run first. Anywhere
 //!   else (`display -p`, `list-* -F`, `if -F`, `run-shell`) it is empty,
 //!   as tmux's CLI prints it: a job tmux starts for a CLI client is never
-//!   read back.
+//!   read back. tmux-continuum's `continuum_save.sh` job is dropped:
+//!   grofe's snapshot does its job.
 //!
 //! tmux's other modifiers (`E:`, `T:`, `q:`, `=N:`, `s/a/b/:`, `n:`, `w:`,
 //! the loops and the rest) are grofe's own too, and pass through as they are
@@ -255,7 +256,10 @@ impl Rewriter {
     // ponytail: tmux expands `cmd` as a format before it runs it; a source
     // runs it as written.
     fn job(&mut self, cmd: &str) -> String {
-        if self.jobs == Jobs::Empty {
+        // continuum autosaves through a status job. grofe's snapshot
+        // replaces it, and running it would write grofe's sessions into
+        // tmux's resurrect directory, racing tmux's own saves there.
+        if self.jobs == Jobs::Empty || cmd.trim_end().ends_with("/continuum_save.sh") {
             return String::new();
         }
         let key = crate::server::sources::inline_key(cmd);
@@ -1031,6 +1035,17 @@ mod tests {
         let pet = crate::server::sources::inline_key("pet (x)");
         assert_eq!(nested.value, format!("#{{?@pet,#{{@{pet}}} ,}}"));
         assert_eq!(native("a#(date)b"), "ab");
+    }
+
+    #[test]
+    fn continuums_autosave_job_is_dropped() {
+        let got = to_native(
+            "a#(/x/tmux-continuum/scripts/continuum_save.sh)b#(date)",
+            Jobs::Sources,
+        );
+        let key = crate::server::sources::inline_key("date");
+        assert_eq!(got.value, format!("ab#{{@{key}}}"));
+        assert_eq!(got.before.len(), 1);
     }
 
     #[test]
