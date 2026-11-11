@@ -22,6 +22,7 @@ mod m2_gate;
 mod m2_robust;
 mod plugin_rig;
 mod self_test;
+mod stale_build;
 mod t2_5a;
 mod t2_5b;
 mod t3_0;

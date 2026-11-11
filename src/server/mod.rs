@@ -14,6 +14,7 @@ pub mod adopt;
 pub mod alerts;
 pub mod borders;
 pub mod buffers;
+pub mod build;
 pub mod clients;
 pub mod clock;
 pub mod copy;
@@ -277,6 +278,9 @@ pub struct State {
     connections: usize,
     /// (dev, ino) of the socket we bound, so we only ever remove our own.
     socket_id: Option<(u64, u64)>,
+    /// The binary this server started from (`build`), to warn attaching
+    /// clients once it has been replaced.
+    pub binary: Option<build::Binary>,
 }
 
 impl State {
@@ -617,6 +621,7 @@ async fn serve(
         exit_when_empty,
         connections: 0,
         socket_id,
+        binary: build::Binary::at_start(),
     };
 
     let (msg_tx, msg_rx) = mpsc::channel(64);
@@ -1338,6 +1343,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         exit_when_empty: false,
         connections: 0,
         socket_id,
+        binary: None,
     };
     (state, jobs_rx)
 }

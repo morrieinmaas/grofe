@@ -599,6 +599,10 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     if !req_created {
         hooks::client_attached(state, id);
     }
+    if state.binary.as_ref().is_some_and(|b| b.replaced()) {
+        let text = status::escape_hashes(crate::server::build::STALE);
+        display_message(state, id, &text, Some(Duration::from_secs(10)), false);
+    }
     Ok(Accepted {
         id,
         output,
