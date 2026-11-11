@@ -996,6 +996,16 @@ impl Model {
                 let windows = &self.sessions[&sid].windows;
                 Ok(step(windows, current, *n))
             }
+            (s, WindowRef::First | WindowRef::Last) => {
+                let sid = self.session_ref(s, ctx)?;
+                let windows = &self.sessions[&sid].windows;
+                let edge = if *w == WindowRef::First {
+                    windows.first()
+                } else {
+                    windows.last()
+                };
+                edge.copied().ok_or_else(|| "can't find window".to_string())
+            }
             (s, WindowRef::Name(name)) => {
                 let sid = self.session_ref(s, ctx)?;
                 let matches: Vec<WindowId> = self.sessions[&sid]

@@ -13,10 +13,11 @@
 //!
 //! The tmux front end (FE.1, spec §4.5) also reads targets the tmux way
 //! through [`with_tmux_targets`]: `+`/`-` offsets in the window and pane
-//! parts are relative to the active window or pane, and a bare `=` (tmux's
-//! mouse target, which mouse keys replace before parsing, M36-R3) fails
-//! when it is resolved, as in tmux, so a mouse binding that holds one still
-//! binds. The native grammar never builds those two.
+//! parts are relative to the active window or pane, `^`/`{start}` and
+//! `$`/`{end}` in the window part are the first and last window, and a
+//! bare `=` (tmux's mouse target, which mouse keys replace before parsing,
+//! M36-R3) fails when it is resolved, as in tmux, so a mouse binding that
+//! holds one still binds. The native grammar never builds any of these.
 //!
 //! Parsing here is purely syntactic: it decides the *shape* of a target
 //! string, not whether the session/window/pane it names exists. Existence
@@ -69,6 +70,10 @@ pub enum WindowRef {
     /// tmux's `+N`/`-N`: that many windows after or before the session's
     /// current one, wrapping. Built only by the tmux front end.
     Offset(i32),
+    /// tmux's `^`/`{start}` and `$`/`{end}`: the session's lowest and
+    /// highest window index. Built only by the tmux front end.
+    First,
+    Last,
 }
 
 /// The pane part of a `session:window.pane` target: always by id or
@@ -148,6 +153,19 @@ fn tmux_targets() -> bool {
 
 /// tmux's `+`, `-`, `+N`, `-N` in a window or pane part, read only for the
 /// tmux front end.
+/// A tmux window part with no plain reading: a `+`/`-` offset
+/// ([`tmux_offset`]) or a first or last window token.
+fn tmux_window(s: &str) -> Option<WindowRef> {
+    if !tmux_targets() {
+        return None;
+    }
+    match s {
+        "^" | "{start}" => Some(WindowRef::First),
+        "$" | "{end}" => Some(WindowRef::Last),
+        _ => tmux_offset(s).map(WindowRef::Offset),
+    }
+}
+
 fn tmux_offset(s: &str) -> Option<i32> {
     if !tmux_targets() {
         return None;
@@ -284,8 +302,8 @@ fn parse_position(s: &str) -> Result<Target, ParseError> {
 
     let mut dot_positions = rest.match_indices('.');
     let Some((dot_idx, _)) = dot_positions.next() else {
-        if let Some(n) = tmux_offset(rest) {
-            return Ok(Target::Window(session, WindowRef::Offset(n)));
+        if let Some(w) = tmux_window(rest) {
+            return Ok(Target::Window(session, w));
         }
         if is_unsupported_token(rest) {
             return Err(ParseError::UnsupportedTarget(s.to_string()));
@@ -302,7 +320,7 @@ fn parse_position(s: &str) -> Result<Target, ParseError> {
 
     let window_part = &rest[..dot_idx];
     let pane_part = &rest[dot_idx + 1..];
-    let window_offset = tmux_offset(window_part);
+    let window_offset = tmux_window(window_part);
     if is_unsupported_token(window_part) && window_offset.is_none() {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
     }
@@ -314,8 +332,8 @@ fn parse_position(s: &str) -> Result<Target, ParseError> {
         }
         let window = if window_part.is_empty() {
             WindowRef::Current
-        } else if let Some(n) = window_offset {
-            WindowRef::Offset(n)
+        } else if let Some(w) = window_offset {
+            w
         } else {
             parse_window_ref(window_part)?
         };
@@ -324,8 +342,8 @@ fn parse_position(s: &str) -> Result<Target, ParseError> {
     // Empty window part ("`sess:.1`", "`:.1`"): the current window.
     let window = if window_part.is_empty() {
         WindowRef::Current
-    } else if let Some(n) = window_offset {
-        WindowRef::Offset(n)
+    } else if let Some(w) = window_offset {
+        w
     } else {
         parse_window_ref(window_part)?
     };
@@ -345,8 +363,8 @@ fn tmux_bare(s: &str) -> Result<Target, ParseError> {
     if window.is_empty() || pane.is_empty() || pane.contains('.') {
         return Err(ParseError::UnsupportedTarget(s.to_string()));
     }
-    let window = match tmux_offset(window) {
-        Some(n) => WindowRef::Offset(n),
+    let window = match tmux_window(window) {
+        Some(w) => w,
         None => parse_window_ref(window)?,
     };
     Ok(Target::Pane(PaneRef {
@@ -743,6 +761,28 @@ mod tests {
                 session: SessionRef::Name("w".to_string()),
                 window: WindowRef::Offset(2),
                 pane: PanePart::Offset(-1),
+            })
+        );
+        // `^`/`{start}` and `$`/`{end}`: the session's first and last
+        // window (cmd-find.c).
+        for (word, want) in [
+            ("w:^", WindowRef::First),
+            ("w:{start}", WindowRef::First),
+            ("w:$", WindowRef::Last),
+            ("w:{end}", WindowRef::Last),
+        ] {
+            assert_eq!(
+                t(word).unwrap(),
+                Target::Window(SessionRef::Name("w".to_string()), want),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            t(":^.1").unwrap(),
+            Target::Pane(PaneRef {
+                session: SessionRef::Current,
+                window: WindowRef::First,
+                pane: PanePart::Index(1),
             })
         );
         assert_eq!(t("=").unwrap(), Target::Session(SessionRef::Mouse));

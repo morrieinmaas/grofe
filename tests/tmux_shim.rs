@@ -33,3 +33,28 @@ fn a_pane_calling_tmux_reaches_this_server() {
     )
     .expect("the pane's tmux set the option");
 }
+
+/// tmux's `^` and `$` window targets (cmd-find.c) name a session's first
+/// and last window; plugins use them, and start-from-tmux's tests did.
+#[test]
+fn tmux_reads_the_first_and_last_window_targets() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "s"])
+        .expect("new-session");
+    srv.cmd(&["new-window", "-d", "-t", "s:5"])
+        .expect("new-window");
+    srv.cmd(&["new-window", "-d", "-t", "s:9"])
+        .expect("new-window");
+    srv.cmd(&[
+        "run-shell",
+        "tmux set -g @first \"$(tmux display -p -t 's:^' '##{window_index}')\"; \
+         tmux set -g @last \"$(tmux display -p -t 's:$' '##{window_index}')\"",
+    ])
+    .expect("run-shell");
+    let show = |name: &str| srv.cmd(&["show-options", "-gv", name]);
+    let first = srv.cmd(&["list-windows", "-t", "s", "-F", "#{window_index}"]);
+    let first = first.expect("list-windows");
+    let first = first.lines().next().expect("a window").to_string();
+    assert_eq!(show("@first").as_deref(), Ok(format!("{first}\n").as_str()));
+    assert_eq!(show("@last").as_deref(), Ok("9\n"));
+}
