@@ -129,9 +129,13 @@ pub fn at_start(state: &mut State) {
 
 /// `start-from-tmux` (`server::adopt`): the sessions of a running tmux
 /// server, else of tmux-resurrect's newest save, restored in place of
-/// grofe's own snapshot. Whether it restored anything.
+/// grofe's own snapshot. Only the default server (`default.sock`) takes
+/// them; one started with `-L preview` or another socket starts from its
+/// own snapshot. Whether it restored anything.
 fn from_tmux(state: &mut State) -> bool {
-    if state.model.options.lookup("start-from-tmux", &[]) != Some("on") {
+    if state.model.options.lookup("start-from-tmux", &[]) != Some("on")
+        || state.socket.file_name() != Some(std::ffi::OsStr::new("default.sock"))
+    {
         return false;
     }
     let (snap, from) = match adopt::from_live_tmux() {

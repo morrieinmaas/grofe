@@ -393,6 +393,50 @@ fn new_session_a_attaches_the_restored_session() {
     );
 }
 
+/// Bare `grofe` that starts the server attaches to what it restored, as
+/// tmux-resurrect does, rather than adding an empty session to it: closing
+/// the one session you see then really ends the server's work.
+#[test]
+fn bare_grofe_attaches_the_restored_sessions_without_adding_one() {
+    let srv = TestServer::builder().restore_on_start(true).start();
+    kill(&srv);
+    write_snapshot(&srv, &sample(&home(&srv)));
+    let mut cmd = srv.command();
+    cmd.env("TERM", "xterm-256color");
+    let _client = Harness::spawn(cmd, 80, 24);
+    wait_until(
+        || {
+            srv.cmd(&["list-clients", "-F", "#{client_session}"])
+                .is_ok_and(|out| !out.trim().is_empty())
+        },
+        WAIT,
+    )
+    .expect("a client attached");
+    assert_eq!(
+        ok(&srv, &["list-sessions", "-F", "#{session_name}"]),
+        "main\nwork\n"
+    );
+}
+
+/// Bare `grofe` against a running server makes a new session, as bare
+/// tmux does, even though the server has sessions.
+#[test]
+fn bare_grofe_on_a_running_server_makes_a_new_session() {
+    let srv = TestServer::start();
+    ok(&srv, &["new-session", "-d", "-s", "first"]);
+    let mut cmd = srv.command();
+    cmd.env("TERM", "xterm-256color");
+    let _client = Harness::spawn(cmd, 80, 24);
+    wait_until(
+        || {
+            srv.cmd(&["list-sessions", "-F", "#{session_name}"])
+                .is_ok_and(|out| out.lines().count() == 2)
+        },
+        WAIT,
+    )
+    .expect("a second session");
+}
+
 /// `restore-on-start = false` in the config: a starting server restores
 /// nothing, but `start-server --restore` still does.
 #[test]

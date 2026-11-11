@@ -147,7 +147,8 @@ fn main() -> ExitCode {
         }
     };
     // Bare `grofe`, like bare `tmux`, means `new-session`.
-    let rest = if rest.is_empty() {
+    let bare = rest.is_empty();
+    let rest = if bare {
         vec!["new-session".to_string()]
     } else {
         rest
@@ -249,7 +250,7 @@ fn main() -> ExitCode {
         "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
-        "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest),
+        "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest, bare),
         _ => {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
@@ -647,13 +648,24 @@ fn attaches(argv: &[String]) -> bool {
 /// panes, so the trailing `display-message` names the session just made
 /// (the one with the latest activity) rather than the pane's; the new
 /// session's cwd is then the CLI's own, as in tmux.
-fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
+///
+/// `bare` (`grofe` with no arguments) that starts the server makes no
+/// session when the server restored some at start: it attaches to the
+/// restored one used last, as tmux-resurrect leaves no extra session.
+fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     if !io::stdin().is_terminal() {
         return fail("open terminal failed: not a terminal");
     }
     let (socket, own_dir) = globals.resolve();
-    let mut create = vec![argv[0].clone(), "-d".to_string()];
-    create.extend(argv[1..].iter().cloned());
+    let mut new_cmd = vec![argv[0].clone(), "-d".to_string()];
+    new_cmd.extend(argv[1..].iter().cloned());
+    let mut create = if bare && UnixStream::connect(&socket).is_err() {
+        ["if-shell", "-F", "#{server_sessions}", "", "new-session -d"]
+            .map(String::from)
+            .to_vec()
+    } else {
+        new_cmd.clone()
+    };
     create.extend([";", "display-message", "-p", "#{session_id}"].map(String::from));
     let hello = match hello_for(&socket, false) {
         Ok(h) => h,
@@ -672,7 +684,7 @@ fn new_and_attach(globals: &Globals, argv: &[String]) -> ExitCode {
     };
     let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
     // `new-session -f`: client flags for the client it attaches.
-    if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&create[..create.len() - 4]) {
+    if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&new_cmd) {
         argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
     }
     match attach_to(&socket, &argv, true) {

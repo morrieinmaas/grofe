@@ -15,7 +15,9 @@ fn with_no_tmux_running_the_newest_resurrect_save_is_restored() {
     let empty = tempfile::tempdir().expect("tempdir");
     // SAFETY: this file's only test; nothing else reads the environment.
     unsafe { std::env::set_var("TMUX_TMPDIR", empty.path()) };
-    let srv = TestServer::builder().restore_on_start(true).unstarted();
+    // tmux's sessions go only to the default server (`-L default`).
+    let mut srv = TestServer::builder().restore_on_start(true).unstarted();
+    srv.socket = srv.runtime_dir.join("default.sock");
     let save_dir = srv.home.join("saves");
     fs::create_dir_all(&save_dir).expect("mkdir");
     let cwd = srv.home.display().to_string();

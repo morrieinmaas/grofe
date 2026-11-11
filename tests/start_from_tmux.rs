@@ -82,7 +82,24 @@ fn an_empty_server_starts_with_the_running_tmux_sessions() {
 
     // SAFETY: this file's only test; nothing else reads the environment.
     unsafe { std::env::set_var("TMUX_TMPDIR", tmpdir.path()) };
-    let srv = TestServer::builder().restore_on_start(true).unstarted();
+    // Any other server (`-L preview`) starts from its own snapshot only;
+    // tmux's sessions go to the default one.
+    let other = TestServer::builder().restore_on_start(true).unstarted();
+    fs::write(
+        other.config_home.join("grofe").join("config.toml"),
+        "start-from-tmux = true\n",
+    )
+    .expect("write config");
+    ok(&other, &["start-server"]);
+    assert_eq!(
+        other.cmd(&["list-sessions"]).unwrap_or_default(),
+        "",
+        "server log:\n{}",
+        other.log()
+    );
+
+    let mut srv = TestServer::builder().restore_on_start(true).unstarted();
+    srv.socket = srv.runtime_dir.join("default.sock");
     fs::write(
         srv.config_home.join("grofe").join("config.toml"),
         "start-from-tmux = true\n",
