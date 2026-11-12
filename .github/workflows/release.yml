@@ -2,7 +2,8 @@ name: Release
 
 # A `v*` tag builds grofe for Linux (static, musl) and macOS, on x86_64 and
 # arm64, and publishes the tarballs and their SHA-256 sums as that tag's
-# GitHub release. The tag must match Cargo.toml's version.
+# GitHub release, or adds them to a release already made for it. The tag
+# must match Cargo.toml's version.
 
 on:
   push:
@@ -72,7 +73,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # A release made by hand first (with the builds made elsewhere) gets
+      # these added, replacing any of the same name.
       - name: Publish the release
         run: |
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "grofe $TAG" \
-            --generate-notes --prerelease grofe-*.tar.gz grofe-*.tar.gz.sha256
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+              grofe-*.tar.gz grofe-*.tar.gz.sha256
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "grofe $TAG" \
+              --generate-notes --prerelease grofe-*.tar.gz grofe-*.tar.gz.sha256
+          fi
