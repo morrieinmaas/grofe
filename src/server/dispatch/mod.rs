@@ -34,6 +34,7 @@ pub mod pane;
 pub mod persist;
 pub mod plugins;
 pub mod popup;
+pub mod scratch;
 pub mod session;
 pub mod sorting;
 pub mod structure;
@@ -401,11 +402,11 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::UnfloatPane(c) => popup::unfloat_pane(state, ctx, c),
         Command::DragPane(_) => server::mouse::drag_pane(state),
         Command::PlacePane(c) => popup::place_pane(state, ctx, c),
-        Command::NewScratchpad(_) => Err("new-scratchpad: not implemented".to_string()),
-        Command::ToggleScratchpad(_) => Err("toggle-scratchpad: not implemented".to_string()),
-        Command::ShowScratchpad(_) => Err("show-scratchpad: not implemented".to_string()),
-        Command::ListScratchpads => Err("list-scratchpads: not implemented".to_string()),
-        Command::ChooseScratchpad => Err("choose-scratchpad: not implemented".to_string()),
+        Command::NewScratchpad(c) => scratch::new(state, ctx, c),
+        Command::ToggleScratchpad(c) => scratch::toggle(state, ctx, c),
+        Command::ShowScratchpad(c) => scratch::show(state, ctx, c),
+        Command::ListScratchpads => scratch::list(state, ctx),
+        Command::ChooseScratchpad => scratch::choose(state, ctx),
         Command::DisplayMenu(c) => menu::display_menu(state, ctx, c),
         Command::DisplayPanes(c) => menu::display_panes(state, ctx, c),
         Command::ConfirmBefore(c) => menu::confirm_before(state, ctx, c),
