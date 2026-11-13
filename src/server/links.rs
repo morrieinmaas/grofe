@@ -13,7 +13,7 @@
 //! last window.
 
 use crate::server::dispatch::options::Owner;
-use crate::server::model::{Model, Removed};
+use crate::server::model::{Floating, Model, Removed};
 use crate::types::{SessionId, WindowId};
 
 /// A session group: its name is fixed when it is made.
@@ -384,8 +384,19 @@ impl Model {
             return Vec::new();
         };
         let sessions: Vec<SessionId> = w.links.iter().map(|(s, _)| *s).collect();
+        let mut hidden: Vec<Floating> = w.floating.iter().copied().filter(|f| f.scratch).collect();
+        hidden.sort_by_key(|f| f.z);
+        let mut removed = Removed::new();
+        for f in hidden {
+            if let Some(pane) = self.panes.remove(&f.pane) {
+                removed.extend(self.push_stash(pane, f));
+            }
+        }
+        let Some(w) = self.windows.get(&window) else {
+            return removed;
+        };
         let ids = self.panes_in(|p| p.window == window);
-        let mut removed = self.take_panes(&ids, Some(w.session));
+        removed.extend(self.take_panes(&ids, Some(w.session)));
         for s in sessions {
             if self.has_link(s, window) {
                 self.detach_window(s, window);
