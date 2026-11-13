@@ -418,6 +418,35 @@ fn bare_grofe_attaches_the_restored_sessions_without_adding_one() {
     );
 }
 
+/// The session used last before the server stopped is the most recently
+/// active one after the restore, so bare `grofe` returns to it rather than
+/// to whichever session the restore happened to make last.
+#[test]
+fn the_session_used_last_is_the_most_recent_after_a_restore() {
+    let srv = TestServer::builder().restore_on_start(true).start();
+    ok(&srv, &["new-session", "-d", "-s", "a"]);
+    ok(&srv, &["new-session", "-d", "-s", "b"]);
+    let mut cmd = srv.command();
+    cmd.args(["attach-session", "-t", "a"])
+        .env("TERM", "xterm-256color");
+    let client = Harness::spawn(cmd, 80, 24);
+    wait_until(
+        || {
+            srv.cmd(&["list-clients", "-F", "#{client_session}"])
+                .is_ok_and(|out| out.trim() == "a")
+        },
+        WAIT,
+    )
+    .expect("a attached");
+    drop(client);
+    kill(&srv);
+    let srv = srv.restart();
+    assert_eq!(
+        ok(&srv, &["display-message", "-p", "#{session_name}"]),
+        "a\n"
+    );
+}
+
 /// Bare `grofe` against a running server makes a new session, as bare
 /// tmux does, even though the server has sessions.
 #[test]

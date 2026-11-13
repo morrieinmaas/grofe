@@ -264,9 +264,13 @@ fn persisted(model: &Model, owner: Owner) -> Vec<OptionSnap> {
 /// `cwds` holds each pane's last sampled cwd; a pane not sampled yet has
 /// the cwd it was spawned in.
 pub fn build(model: &Model, cwds: &HashMap<PaneId, PathBuf>) -> Snapshot {
-    let sessions = model
-        .sessions
-        .values()
+    // Least recently used first: the restore makes them in this order, each
+    // more recent than the one before, so the session used last is the one
+    // a bare `grofe` attaches to again.
+    let mut by_use: Vec<_> = model.sessions.values().collect();
+    by_use.sort_by_key(|s| s.activity);
+    let sessions = by_use
+        .into_iter()
         .map(|s| SessionSnap {
             name: s.name.clone(),
             cwd: s.cwd.clone(),
