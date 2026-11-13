@@ -20,8 +20,13 @@ pub fn new(state: &mut State, ctx: &ClientCtx, c: NewScratchpad) -> Result<Strin
     let target = model.resolve_pane(&c.target, ctx)?;
     let window = model.panes[&target].window;
     let w = &model.windows[&window];
-    let (cols, rows) = (w.cols * 60 / 100, w.rows * 50 / 100);
-    let (x, y) = ((w.cols - cols) / 2, (w.rows - rows) / 2);
+    // At least one cell, or a 1x1 window's 0x0 pad fails `new-pane`'s checks.
+    let pct = |n: u16, p: u32| ((u32::from(n) * p / 100) as u16).max(1);
+    let (cols, rows) = (pct(w.cols, 60), pct(w.rows, 50));
+    let (x, y) = (
+        w.cols.saturating_sub(cols) / 2,
+        w.rows.saturating_sub(rows) / 2,
+    );
     let float = NewPane {
         print: false,
         format: None,
@@ -100,10 +105,15 @@ fn label(pane: &crate::server::model::Pane) -> String {
         )
     };
     let what = match &pane.argv {
-        Some(argv) => argv.join(" "),
-        None => base(Path::new(&pane.shell)),
+        Some(argv) if !argv.is_empty() => argv.join(" "),
+        _ => base(Path::new(&pane.shell)),
     };
     format!("{what} · {}", base(&pane.cwd))
+}
+
+/// A menu label is a format: double each `#` so it shows as written.
+fn menu_label(label: &str) -> String {
+    label.replace('#', "##")
 }
 
 /// `list-scratchpads`: one `<n>: <pane-id> <label>` line per hidden
@@ -124,7 +134,7 @@ pub(crate) fn menu_items(model: &Model) -> Vec<MenuEntry> {
         .iter()
         .enumerate()
         .map(|(n, s)| MenuEntry::Item {
-            name: label(&s.pane),
+            name: menu_label(&label(&s.pane)),
             key: if n < 10 { n.to_string() } else { String::new() },
             command: format!("show-scratchpad {}", s.pane.id),
         })
@@ -316,6 +326,114 @@ mod tests {
             ids[0], ids[1]
         );
         assert_eq!(run(&mut state, &["list-scratchpads"]), Ok(want));
+    }
+
+    fn sized(cols: &str, rows: &str) -> State {
+        let mut state = test_state();
+        let made = run(
+            &mut state,
+            &[
+                "new-session",
+                "-d",
+                "-x",
+                cols,
+                "-y",
+                rows,
+                "-s",
+                "a",
+                "sleep 600",
+            ],
+        );
+        assert!(made.is_ok(), "{made:?}");
+        state
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn new_in_small_windows_does_not_fail() {
+        for (c, r) in [("10", "4"), ("1", "1"), ("2", "1")] {
+            let mut state = sized(c, r);
+            let got = run(&mut state, &["new-scratchpad", "sleep", "600"]);
+            assert_eq!(got, Ok(String::new()), "{c}x{r}");
+            let w = &state.model.windows[&window_of(&state)];
+            let f = w.floating[0];
+            assert!(f.scratch && f.cols >= 1 && f.rows >= 1, "{c}x{r}");
+            assert!(f.x >= 0 && f.y >= 0, "{c}x{r}");
+            let hide = run(&mut state, &["toggle-scratchpad"]);
+            assert_eq!(hide, Ok(String::new()), "{c}x{r}");
+            assert_eq!(hidden(&state).len(), 1);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn new_passes_cwd_and_command() {
+        let mut state = state();
+        run(&mut state, &["new-scratchpad", "-c", "/tmp", "sleep", "9"]).expect("new");
+        let sp = state.model.windows[&window_of(&state)].floating[0].pane;
+        let p = &state.model.panes[&sp];
+        assert_eq!(p.cwd, std::path::PathBuf::from("/tmp"));
+        assert_eq!(
+            p.argv.as_deref(),
+            Some(&["sleep".to_string(), "9".to_string()][..])
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn show_visible_pane_errors() {
+        let mut state = state();
+        let tiled = state.model.windows[&window_of(&state)].active;
+        assert_eq!(
+            run(&mut state, &["show-scratchpad", &id(tiled)]),
+            Err(format!("no such scratchpad: {tiled}"))
+        );
+        assert!(state.model.panes.contains_key(&tiled));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn toggle_without_target_uses_the_current_pane() {
+        let mut state = state();
+        run(&mut state, &["new-scratchpad", "sleep", "600"]).expect("new");
+        let sp = state.model.windows[&window_of(&state)].floating[0].pane;
+        // The scratchpad is the window's active pane, so it is the default target.
+        run(&mut state, &["toggle-scratchpad"]).expect("hide");
+        assert_eq!(hidden(&state), vec![sp]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn labels_fall_back_and_survive_odd_cwds() {
+        let mut state = state();
+        run(&mut state, &["new-scratchpad", "sleep", "600"]).expect("new");
+        run(&mut state, &["toggle-scratchpad"]).expect("hide");
+        let pane = &mut state.model.scratch[0].pane;
+        pane.argv = Some(Vec::new());
+        pane.shell = "/bin/zsh".to_string();
+        pane.cwd = std::path::PathBuf::from("/");
+        let want = format!("0: {} zsh · /\n", state.model.scratch[0].pane.id);
+        assert_eq!(run(&mut state, &["list-scratchpads"]), Ok(want));
+        state.model.scratch[0].pane.argv = None;
+        let want = format!("0: {} zsh · /\n", state.model.scratch[0].pane.id);
+        assert_eq!(run(&mut state, &["list-scratchpads"]), Ok(want));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn menu_labels_survive_format_expansion() {
+        let mut state = state();
+        run(&mut state, &["new-scratchpad", "sleep", "600"]).expect("new");
+        run(&mut state, &["toggle-scratchpad"]).expect("hide");
+        let pane = &mut state.model.scratch[0].pane;
+        pane.argv = Some(vec!["echo".into(), "#{pane_id}".into(), "\"q\"".into()]);
+        pane.cwd = std::path::PathBuf::from("/tmp/#h");
+        let items = super::menu_items(&state.model);
+        let crate::cmd::MenuEntry::Item { name, command, .. } = &items[0] else {
+            panic!("not an item");
+        };
+        let ctx = test_ctx();
+        let shown = crate::server::prompt::expand_command(&state, &ctx, name);
+        assert_eq!(shown, "echo #{pane_id} \"q\" · #h");
+        let run_it = crate::server::prompt::expand_command(&state, &ctx, command);
+        assert_eq!(
+            run_it,
+            format!("show-scratchpad {}", state.model.scratch[0].pane.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
