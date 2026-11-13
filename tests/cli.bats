@@ -109,3 +109,26 @@ wait_for_line() {
     run g has-session -t m
     [ "$status" -ne 0 ]
 }
+
+@test "scratchpad: new, hide, list, show" {
+    g new-session -d -s m /bin/sh
+    g new-scratchpad -t m /bin/sh
+    run g display-message -p -t m '#{pane_id}'
+    [ "$status" -eq 0 ]
+    pad="$output"
+    run g display-message -p -t "$pad" '#{pane_floating_flag}'
+    [ "$output" = "1" ]
+
+    g toggle-scratchpad -t "$pad"
+    run g list-panes -t m
+    [ "${#lines[@]}" -eq 1 ]
+    run g list-scratchpads
+    [ "$status" -eq 0 ]
+    [ "$output" = "0: $pad /bin/sh · home" ]
+
+    g toggle-scratchpad -t m
+    run g list-scratchpads
+    [ -z "$output" ]
+    run g list-panes -t m
+    [ "${#lines[@]}" -eq 2 ]
+}
