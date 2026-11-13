@@ -5913,6 +5913,27 @@ mod tests {
     }
 
     #[test]
+    fn scratchpad_history_range_is_0_to_100() {
+        let mut o = Options::new(false);
+        for ok in ["0", "100"] {
+            assert!(
+                o.set(Owner::Global, "scratchpad-history", ok, false)
+                    .is_ok(),
+                "{ok}"
+            );
+            assert_eq!(o.lookup("scratchpad-history", &[]), Some(ok));
+        }
+        for bad in ["-1", "101", "x"] {
+            assert!(
+                o.set(Owner::Global, "scratchpad-history", bad, false)
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(o.lookup("scratchpad-history", &[]), Some("100"));
+    }
+
+    #[test]
     fn scratchpad_history_default_is_ten() {
         assert_eq!(
             Options::new(false).lookup("scratchpad-history", &[]),

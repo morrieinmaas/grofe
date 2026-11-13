@@ -4823,6 +4823,26 @@ mod tests {
         }
     }
 
+    /// The bound argv must parse as the scratchpad commands, so a press runs
+    /// the handlers and not an unknown-command error.
+    #[test]
+    fn scratchpad_keys_parse_as_their_commands() {
+        use crate::cmd::{Command, parse};
+        let t = default_bindings();
+        for (key, want) in [("a", "new"), ("S", "toggle"), ("A", "choose")] {
+            let b = t.exact(PREFIX_TABLE, &k(key)).expect(key);
+            let argv: Vec<String> = b.cmds[0].clone();
+            let got = parse(&argv).unwrap_or_else(|e| panic!("{key}: {e}"));
+            let ok = match (want, &got) {
+                ("new", Command::NewScratchpad(_))
+                | ("toggle", Command::ToggleScratchpad(_))
+                | ("choose", Command::ChooseScratchpad) => true,
+                _ => false,
+            };
+            assert!(ok, "{key} parsed as {got:?}");
+        }
+    }
+
     #[test]
     fn tmux_identity_drops_scratchpad_keys() {
         let mut t = default_bindings();

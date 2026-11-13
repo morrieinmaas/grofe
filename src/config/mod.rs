@@ -663,6 +663,27 @@ mod tests {
     }
 
     #[test]
+    fn scratchpad_history_toml_range_is_0_to_100() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for ok in ["0", "100"] {
+            std::fs::write(&path, format!("scratchpad-history = {ok}\n")).unwrap();
+            let resolved = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+                .expect("in range loads");
+            assert_eq!(resolved.get("scratchpad-history"), Some(ok));
+        }
+        for bad in ["-1", "101"] {
+            std::fs::write(&path, format!("scratchpad-history = {bad}\n")).unwrap();
+            let errors = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+                .expect_err("out of range is refused");
+            assert!(
+                errors.iter().any(|e| e.key == "scratchpad-history"),
+                "{bad}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
     fn scratchpad_history_toml_is_int() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");

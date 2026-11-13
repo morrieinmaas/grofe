@@ -1976,6 +1976,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rehide_promotes_to_the_front_and_show_removes() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let a = add_scratch(&mut m, w, (5, 5, 20, 10));
+        let b = add_scratch(&mut m, w, (5, 5, 20, 10));
+        m.stash_pane(a).expect("stash");
+        m.stash_pane(b).expect("stash");
+        assert_eq!(hidden(&m), vec![b, a]);
+        m.unstash_pane(a, w).expect("show");
+        assert_eq!(hidden(&m), vec![b], "showing removes it from the history");
+        m.stash_pane(a).expect("stash");
+        assert_eq!(hidden(&m), vec![a, b], "hiding again puts it at the front");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lowering_the_limit_applies_at_the_next_hide() {
+        let mut m = Model::new(true);
+        history(&mut m, "3");
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let ids: Vec<PaneId> = (0..4)
+            .map(|_| add_scratch(&mut m, w, (5, 5, 20, 10)))
+            .collect();
+        for id in &ids[..3] {
+            m.stash_pane(*id).expect("stash");
+        }
+        history(&mut m, "1");
+        assert_eq!(hidden(&m).len(), 3, "nothing is dropped until a hide");
+        let removed = m.stash_pane(ids[3]).expect("stash");
+        assert_eq!(hidden(&m), vec![ids[3]]);
+        let gone: Vec<PaneId> = removed.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(
+            gone,
+            vec![ids[0], ids[1], ids[2]],
+            "oldest first, only the oldest"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stash_limit_zero_closes() {
         let mut m = Model::new(true);
         history(&mut m, "0");

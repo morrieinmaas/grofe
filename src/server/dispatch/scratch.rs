@@ -399,6 +399,69 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn toggle_from_a_client_pane_acts_on_its_window() {
+        let mut state = state();
+        run(&mut state, &["new-scratchpad", "sleep", "600"]).expect("new");
+        let a = window_of(&state);
+        let sp = state.model.windows[&a].floating[0].pane;
+        run(&mut state, &["toggle-scratchpad"]).expect("hide");
+        run(
+            &mut state,
+            &[
+                "new-session",
+                "-d",
+                "-x",
+                "80",
+                "-y",
+                "24",
+                "-s",
+                "b",
+                "sleep 600",
+            ],
+        )
+        .expect("b");
+        let b = *state
+            .model
+            .windows
+            .keys()
+            .find(|w| **w != a)
+            .expect("window b");
+        let tiled_b = state.model.windows[&b].pane_ids()[0];
+        let mut ctx = test_ctx();
+        ctx.pane = Some(tiled_b);
+        let argv = vec!["toggle-scratchpad".to_string()];
+        dispatch::run(&mut state, &ctx, &argv).expect("show");
+        assert_eq!(state.model.panes[&sp].window, b);
+        assert_eq!(state.model.windows[&b].active, sp);
+        assert!(state.model.windows[&a].floating.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hidden_pane_is_unknown_to_everything_else() {
+        let mut state = state();
+        run(&mut state, &["new-scratchpad", "sleep", "600"]).expect("new");
+        run(&mut state, &["toggle-scratchpad"]).expect("hide");
+        let sp = id(hidden(&state)[0]);
+        for words in [
+            vec!["select-pane", "-t", &sp],
+            vec!["kill-pane", "-t", &sp],
+            vec!["display-message", "-p", "-t", &sp, "#{pane_id}"],
+            vec!["send-keys", "-t", &sp, "x"],
+            vec!["capture-pane", "-p", "-t", &sp],
+            vec!["resize-pane", "-t", &sp, "-x", "10"],
+            vec!["swap-pane", "-t", &sp],
+            vec!["float-pane", "-t", &sp],
+        ] {
+            assert!(run(&mut state, &words).is_err(), "{words:?}");
+        }
+        let listed = run(&mut state, &["list-panes", "-a", "-F", "#{pane_id}"]).expect("list");
+        assert!(!listed.contains(&sp), "{listed}");
+        assert_eq!(hidden(&state).len(), 1, "no command disturbed the history");
+        run(&mut state, &["list-sessions"]).expect("still serving");
+        run(&mut state, &["list-windows", "-a"]).expect("still serving");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn labels_fall_back_and_survive_odd_cwds() {
         let mut state = state();
         run(&mut state, &["new-scratchpad", "sleep", "600"]).expect("new");
