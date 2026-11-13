@@ -368,9 +368,31 @@ impl Model {
                 continue;
             };
             let session = w.session;
+            removed.extend(self.hide_scratchpads(*window));
             let ids = self.panes_in(|p| p.window == *window);
             removed.extend(self.take_panes(&ids, Some(session)));
             self.windows.remove(window);
+        }
+        removed
+    }
+
+    /// Hides the visible scratchpads of `window`, which is going, lowest
+    /// layer first so the topmost heads the history. Returns the panes the
+    /// history's limit evicted.
+    fn hide_scratchpads(&mut self, window: WindowId) -> Removed {
+        let Some(w) = self.windows.get(&window) else {
+            return Vec::new();
+        };
+        let mut hidden: Vec<Floating> = w.floating.iter().copied().filter(|f| f.scratch).collect();
+        hidden.sort_by_key(|f| f.z);
+        let mut removed = Removed::new();
+        for f in hidden {
+            if let Some(pane) = self.panes.remove(&f.pane) {
+                // A dead pane (`remain-on-exit`) has no process to show again.
+                if pane.dead.is_none() {
+                    removed.extend(self.push_stash(pane, f));
+                }
+            }
         }
         removed
     }
@@ -384,14 +406,7 @@ impl Model {
             return Vec::new();
         };
         let sessions: Vec<SessionId> = w.links.iter().map(|(s, _)| *s).collect();
-        let mut hidden: Vec<Floating> = w.floating.iter().copied().filter(|f| f.scratch).collect();
-        hidden.sort_by_key(|f| f.z);
-        let mut removed = Removed::new();
-        for f in hidden {
-            if let Some(pane) = self.panes.remove(&f.pane) {
-                removed.extend(self.push_stash(pane, f));
-            }
-        }
+        let mut removed = self.hide_scratchpads(window);
         let Some(w) = self.windows.get(&window) else {
             return removed;
         };

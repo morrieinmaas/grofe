@@ -795,7 +795,12 @@ impl Model {
         let Some(taken) = self.panes.remove(&pane) else {
             return Ok(Vec::new());
         };
-        let mut removed = self.push_stash(taken, place);
+        // A dead pane (`remain-on-exit`) has no process to show again.
+        let mut removed = if taken.dead.is_none() {
+            self.push_stash(taken, place)
+        } else {
+            Vec::new()
+        };
         if last {
             removed.extend(self.remove_window(window_id));
         }
@@ -2049,6 +2054,85 @@ mod tests {
         assert_eq!(hidden(&m), vec![sp]);
         assert!(!m.windows.contains_key(&w1));
         assert!(!m.panes.contains_key(&sp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stash_dead_pane_is_not_kept() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        if let Some(p) = m.panes.get_mut(&sp) {
+            p.dead = Some(Some(0));
+        }
+        assert_eq!(m.stash_pane(sp), Ok(Vec::new()));
+        assert!(m.scratch.is_empty());
+        assert!(!m.panes.contains_key(&sp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unstash_goes_on_top_and_active() {
+        let mut m = Model::new(true);
+        let (_, a, _) = scratch_window(&mut m, "a", (80, 24));
+        let (_, b, p_b) = scratch_window(&mut m, "b", (80, 24));
+        let other = add_scratch(&mut m, b, (1, 1, 10, 5));
+        let sp = add_scratch(&mut m, a, (5, 5, 20, 10));
+        m.stash_pane(sp).expect("stash");
+        m.unstash_pane(sp, b).expect("unstash");
+        let w = &m.windows[&b];
+        assert!(w.floating(sp).map(|f| f.z) > w.floating(other).map(|f| f.z));
+        assert_eq!(w.active, sp);
+        assert!(w.last_panes.contains(&p_b) || w.last_panes.contains(&other));
+        assert!(!m.windows[&a].pane_ids().contains(&sp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unstash_into_missing_window_keeps_the_stash() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        m.stash_pane(sp).expect("stash");
+        assert_eq!(
+            m.unstash_pane(sp, WindowId(99)),
+            Err("can't find window: @99".to_string())
+        );
+        assert_eq!(hidden(&m), vec![sp]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_window_hides_topmost_scratchpad_first() {
+        let mut m = Model::new(true);
+        let (_, w1, _) = scratch_window(&mut m, "a", (80, 24));
+        let low = add_scratch(&mut m, w1, (5, 5, 20, 10));
+        let high = add_scratch(&mut m, w1, (6, 6, 20, 10));
+        let (_, _w2, _) = scratch_window(&mut m, "b", (80, 24));
+        m.remove_window(w1);
+        assert_eq!(hidden(&m), vec![high, low]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_session_hides_scratchpads() {
+        let mut m = Model::new(true);
+        let (s, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        let _ = scratch_window(&mut m, "b", (80, 24));
+        let removed = m.remove_session(s);
+        assert!(removed.iter().all(|(id, _, _)| *id != sp));
+        assert_eq!(hidden(&m), vec![sp]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_window_over_limit_returns_evicted_scratchpad() {
+        let mut m = Model::new(true);
+        history(&mut m, "1");
+        let (_, w1, p1) = scratch_window(&mut m, "a", (80, 24));
+        let low = add_scratch(&mut m, w1, (5, 5, 20, 10));
+        let high = add_scratch(&mut m, w1, (6, 6, 20, 10));
+        let (_, _w2, _) = scratch_window(&mut m, "b", (80, 24));
+        let removed = m.remove_window(w1);
+        let mut gone: Vec<PaneId> = removed.iter().map(|(id, _, _)| *id).collect();
+        gone.sort();
+        assert_eq!(gone, vec![p1, low]);
+        assert_eq!(hidden(&m), vec![high]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
