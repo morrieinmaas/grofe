@@ -121,6 +121,7 @@ const GROFE_ONLY: &[&str] = &[
     "pane-gap",
     "pane-frame-title",
     "pane-frame-tab-ends",
+    "scratchpad-history",
 ];
 
 /// `pane-border-format`'s default, tmux 3.7b's: its `[z]` and `[x]`
@@ -620,6 +621,13 @@ const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Global,
         default: "1000",
+    },
+    // grofe's own: how many hidden scratchpads the server keeps.
+    Builtin {
+        name: "scratchpad-history",
+        kind: Kind::Number { max: 100 },
+        scope: OptionScope::Global,
+        default: "10",
     },
     // grofe's own names: a server that starts empty takes its sessions
     // from a running tmux, else from tmux-resurrect's newest save, found
@@ -5902,6 +5910,14 @@ mod tests {
             .config_base
             .insert("pane-border-lines".into(), "single".into());
         assert!(fresh.set_globally("pane-border-lines"));
+    }
+
+    #[test]
+    fn scratchpad_history_default_is_ten() {
+        assert_eq!(
+            Options::new(false).lookup("scratchpad-history", &[]),
+            Some("10")
+        );
     }
 
     /// TM.7: mouse keys sort as tmux 3.7b's key codes do (recorded in
