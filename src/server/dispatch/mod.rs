@@ -323,6 +323,15 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         | Command::ListPanes(_) => options::run(state, ctx, cmd),
 
         Command::KillServer(_) => {
+            // Who stopped the server, since nothing else in the log says.
+            eprintln!(
+                "grofe server: kill-server at {} from {} in {} ({:?})",
+                crate::server::snapshot::rfc3339(std::time::SystemTime::now()),
+                ctx.pane
+                    .map_or("outside any pane".to_string(), |p| format!("pane {p}")),
+                ctx.cwd.display(),
+                ctx.dialect,
+            );
             let live = state.model.live_panes();
             state.events.panes_killed(live);
             state.exit = true;

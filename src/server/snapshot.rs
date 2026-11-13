@@ -222,7 +222,7 @@ pub fn write_atomic(path: &Path, snap: &Snapshot) -> io::Result<()> {
 }
 
 /// `t` as RFC 3339, UTC, whole seconds.
-fn rfc3339(t: SystemTime) -> String {
+pub(crate) fn rfc3339(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Howard Hinnant's civil_from_days.
