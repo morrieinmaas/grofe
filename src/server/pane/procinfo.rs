@@ -510,10 +510,22 @@ mod tests {
         assert_eq!(stopped, before);
     }
 
+    /// Not a test of its own: the process `reads_a_child_s_environment`
+    /// reads, so that it does not depend on a system binary.
+    #[test]
+    #[ignore = "the child process of reads_a_child_s_environment"]
+    fn child_that_sleeps() {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+
+    /// The child is this test binary, not `sleep`: macOS 27 hides the
+    /// environment of Apple's own binaries (/bin/sleep, /bin/zsh) from
+    /// other processes, and the test is about grofe's reader.
     #[test]
     fn reads_a_child_s_environment() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("5")
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "--quiet"])
+            .arg("server::pane::procinfo::tests::child_that_sleeps")
             .env_clear()
             .env("PATH", "/x/bin:/usr/bin:/bin")
             .env("GROFE_T42", "a=b")
