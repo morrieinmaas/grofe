@@ -4833,12 +4833,12 @@ mod tests {
             let b = t.exact(PREFIX_TABLE, &k(key)).expect(key);
             let argv: Vec<String> = b.cmds[0].clone();
             let got = parse(&argv).unwrap_or_else(|e| panic!("{key}: {e}"));
-            let ok = match (want, &got) {
+            let ok = matches!(
+                (want, &got),
                 ("new", Command::NewScratchpad(_))
-                | ("toggle", Command::ToggleScratchpad(_))
-                | ("choose", Command::ChooseScratchpad) => true,
-                _ => false,
-            };
+                    | ("toggle", Command::ToggleScratchpad(_))
+                    | ("choose", Command::ChooseScratchpad)
+            );
             assert!(ok, "{key} parsed as {got:?}");
         }
     }
