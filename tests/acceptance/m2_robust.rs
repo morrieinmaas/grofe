@@ -435,7 +435,9 @@ fn a_resize_storm_is_coalesced() {
         .expect("encode");
     client.write_all(&burst).expect("send burst");
     let during = control.median_list();
-    let bound = (base * 5).max(Duration::from_millis(200));
+    // A floor of 1 s: a shared CI runner took 264 ms. Uncoalesced, a
+    // thousand reflows of 50000 lines of history take many seconds.
+    let bound = (base * 5).max(Duration::from_secs(1));
     assert!(
         during < bound,
         "list-sessions took {during:?} after the burst, {base:?} before"

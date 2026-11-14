@@ -317,6 +317,11 @@ fn three_agents(srv: &TestServer, agent: &Agent) -> Vec<(String, String)> {
             ),
         );
         wait_agent(srv, agent, target, &format!("--session-id {id}"));
+        // Its argv shows before it writes the transcript, and the first run
+        // of a freshly copied script can take a few hundred ms on macOS.
+        let launched = format!("launch {id}\n");
+        srv.wait_for(|| agent.transcript(id) == launched, WAIT)
+            .unwrap_or_else(|e| panic!("{id} launched: {e}: {:?}", agent.transcript(id)));
         let pane = fmt(srv, target, "#{pane_id}");
         ok(
             srv,
@@ -338,9 +343,6 @@ fn three_agents(srv: &TestServer, agent: &Agent) -> Vec<(String, String)> {
             fmt(srv, target, "#{window_index}"),
             fmt(srv, target, "#{pane_uid}"),
         ));
-    }
-    for id in ["a", "b", "c"] {
-        assert_eq!(agent.transcript(id), format!("launch {id}\n"));
     }
     let uids: Vec<String> = placed.iter().map(|(_, u)| u.clone()).collect();
     srv.wait_for(
