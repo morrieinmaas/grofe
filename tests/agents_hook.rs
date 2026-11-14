@@ -135,7 +135,17 @@ fn hook_and_cli_text_reach_the_server_sanitised() {
         .expect("pane id")
         .trim()
         .to_string();
-    let x = srv.home.join("X");
+    // Short marker path: agent text is capped at 200 chars, and a long temp
+    // path would cut the probes off.
+    let short = std::path::PathBuf::from(format!(
+        "/tmp/g{}{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos())
+    ));
+    std::fs::create_dir_all(&short).expect("short dir");
+    let x = short.join("X");
     let evil = format!(
         "A\x1b]2;PWN\x07B\u{85}C#(touch {})D##[range=user|x]E$(touch {})",
         x.display(),
@@ -146,8 +156,6 @@ fn hook_and_cli_text_reach_the_server_sanitised() {
         x.display(),
         x.display()
     );
-    // The server caps agent text at 200 chars; a long temp path hits that.
-    let want: String = want.chars().take(200).collect();
     let payload = serde_json::json!({"message": evil, "session_id": "s;touch X"}).to_string();
     let mut cmd = srv.command();
     cmd.args(["agent", "report", "blocked", "--hook", "bad kind!"])
@@ -189,6 +197,7 @@ fn hook_and_cli_text_reach_the_server_sanitised() {
     assert_eq!(shown.trim_end(), want);
     std::thread::sleep(Duration::from_millis(300));
     assert!(!x.exists(), "agent text ran a command");
+    let _ = std::fs::remove_dir_all(&short);
 }
 
 #[test]

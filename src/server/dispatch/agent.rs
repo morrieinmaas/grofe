@@ -926,7 +926,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn agent_text_is_inert_in_osc9_and_notifier_argv() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let x = dir.path().join("X");
+        // Short marker path: agent text is capped at 200 chars, and a long
+        // temp path would cut the probes off.
+        let short = std::path::PathBuf::from(format!(
+            "/tmp/g{}{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos())
+        ));
+        std::fs::create_dir_all(&short).expect("short dir");
+        let x = short.join("X");
         let (mut state, pane) = state_with_pane();
         let mut accepted = attach_unfocused(&mut state);
         state.notify.cfg.delivery = "auto".into();
@@ -954,11 +964,10 @@ mod tests {
             .map(String::from)
             .to_vec(),
         );
-        // Short payloads come first: the server caps text at 200 chars, and a
-        // long temp path must not cut them off.
         let msg = format!(
-            "{} $(touch /nonexistent/X) `touch /nonexistent/X` {}",
-            evil(std::path::Path::new("")),
+            "{} $(touch {}) `touch {}`",
+            evil(&x),
+            x.display(),
             x.display()
         );
         apply(&mut state, pane, blocked(&msg, 1));
@@ -976,6 +985,7 @@ mod tests {
         assert!(got.contains("$(touch") && got.contains("`touch"), "{got:?}");
         assert!(!got.chars().any(char::is_control), "{got:?}");
         assert!(!x.exists(), "the notifier argv went through a shell");
+        let _ = std::fs::remove_dir_all(&short);
     }
 
     #[test]
