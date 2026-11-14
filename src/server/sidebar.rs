@@ -43,6 +43,13 @@ pub struct Sidebars {
     clients: BTreeMap<ClientId, Entry>,
 }
 
+#[cfg(test)]
+impl Sidebars {
+    pub(crate) fn has(&self, id: ClientId) -> bool {
+        self.clients.contains_key(&id)
+    }
+}
+
 fn shown(state: &State, client: ClientId) -> bool {
     state
         .sidebars
@@ -243,8 +250,8 @@ impl InputHook for SidebarHook {
             .unwrap_or_default();
         list.page = (usize::from(height) / 2).max(1);
         match input {
-            Input::Mouse(m) if m.col >= x0 => {
-                if m.kind == MouseKind::Down(MouseButton::Left) && m.row >= top {
+            Input::Mouse(m) if m.col >= x0 && m.row >= top && m.row - top < height => {
+                if m.kind == MouseKind::Down(MouseButton::Left) {
                     let y = usize::from(m.row - top);
                     let (_, slots) = layout(&rows, &list, usize::from(height));
                     let hit = slots.iter().find_map(|(at, slot)| match slot {

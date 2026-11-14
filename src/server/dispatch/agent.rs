@@ -208,6 +208,7 @@ pub fn configure(state: &mut State, r: &Resolved) {
                     matches: vec![name.clone()],
                     command: None,
                     resume: None,
+                    worktree: None,
                 });
                 all.len() - 1
             }
@@ -221,6 +222,9 @@ pub fn configure(state: &mut State, r: &Resolved) {
         }
         if c.resume.is_some() {
             kind.resume = c.resume.clone();
+        }
+        if c.worktree.is_some() {
+            kind.worktree = c.worktree.clone();
         }
     }
     state.agent_kinds = all;
@@ -268,9 +272,29 @@ fn jumping_client(state: &State, ctx: &ClientCtx) -> Option<ClientId> {
 }
 
 /// The binding for `pane`'s foreground process, if it has one.
+///
+/// A report typed in a plain shell is made by the short-lived `grofe` (or
+/// `tmux`) CLI, which is then the foreground leader; the record binds to the
+/// pane's root process (the shell) instead, or the sweep would drop it.
 fn foreground_binding(state: &State, pane: PaneId) -> Option<Binding> {
     let p = state.model.panes.get(&pane)?;
-    Binding::of(p.handle.foreground_group()?)
+    let group = p.handle.foreground_group()?;
+    let argv = crate::server::pane::procinfo::leader(group).argv;
+    let root = p.handle.pid().and_then(|pid| i32::try_from(pid).ok());
+    Binding::of(bind_pid(group, argv.as_deref(), root))
+}
+
+/// The process a new record binds to: the foreground group, unless its
+/// leader is the reporter itself and the pane's root process is known.
+fn bind_pid(group: i32, leader_argv: Option<&[String]>, root: Option<i32>) -> i32 {
+    let reporter = leader_argv
+        .and_then(|a| a.first())
+        .and_then(|a0| a0.rsplit('/').next())
+        .is_some_and(|b| b == "grofe" || b == "tmux");
+    match root {
+        Some(root) if reporter => root,
+        _ => group,
+    }
 }
 
 /// Sets `pane`'s resume from its kind's template and session id (spec
@@ -628,5 +652,34 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         apply(&mut state, pane, set(AgentState::Done, 4));
         assert_eq!(state.notify.items().len(), 1);
+    }
+
+    #[test]
+    fn configure_merges_kind_worktree() {
+        let mut state = test_state();
+        let mut resolved = Resolved::default();
+        resolved
+            .agents
+            .kinds
+            .entry("claude".into())
+            .or_default()
+            .worktree = Some("always".into());
+        configure(&mut state, &resolved);
+        let find = |n: &str| state.agent_kinds.iter().find(|k| k.name == n);
+        assert_eq!(
+            find("claude").and_then(|k| k.worktree.as_deref()),
+            Some("always")
+        );
+        assert_eq!(find("codex").and_then(|k| k.worktree.clone()), None);
+    }
+
+    #[test]
+    fn a_reporting_cli_binds_to_the_pane_root() {
+        let argv = |s: &str| Some(vec![s.to_string(), "agent".to_string()]);
+        assert_eq!(bind_pid(50, argv("/usr/bin/grofe").as_deref(), Some(7)), 7);
+        assert_eq!(bind_pid(50, argv("tmux").as_deref(), Some(7)), 7);
+        assert_eq!(bind_pid(50, argv("claude").as_deref(), Some(7)), 50);
+        assert_eq!(bind_pid(50, argv("grofe").as_deref(), None), 50);
+        assert_eq!(bind_pid(50, None, Some(7)), 50);
     }
 }

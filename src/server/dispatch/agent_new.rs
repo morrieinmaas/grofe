@@ -81,9 +81,11 @@ pub fn run(state: &mut State, ctx: &ClientCtx, c: AgentNew) -> Result<String, St
     let wanted = match c.worktree {
         Some(true) => Policy::Always,
         Some(false) => Policy::Never,
-        // ponytail: the kind's own `worktree` is not on `agents::kinds::Kind`
-        // yet, so only `[agents.new] worktree` decides here.
-        None => policy(&state.agents_new.worktree),
+        None => policy(
+            kind.worktree
+                .as_deref()
+                .unwrap_or(&state.agents_new.worktree),
+        ),
     };
     let launch = Launch {
         ctx: ctx.clone(),
@@ -291,6 +293,7 @@ mod tests {
             matches: vec!["demo".into()],
             command: Some("sleep 60".into()),
             resume: None,
+            worktree: None,
         });
         (state, rx, ctx)
     }
@@ -516,5 +519,25 @@ mod tests {
         );
         assert!(routed.is_some());
         assert_eq!(state.model.panes.len(), before + 1);
+    }
+
+    /// The kind's own `worktree` wins over `[agents.new] worktree`.
+    #[tokio::test]
+    async fn kind_worktree_beats_config() {
+        let (mut state, _rx, mut ctx) = setup();
+        ctx.client = None;
+        state.agents_new.worktree = "never".into();
+        let kind = state
+            .agent_kinds
+            .iter_mut()
+            .find(|k| k.name == "demo")
+            .expect("kind");
+        kind.worktree = Some("always".into());
+        // `always` without a branch and without a client is the error;
+        // `never` would have opened a window.
+        assert_eq!(
+            run(&mut state, &ctx, new("demo")),
+            Err("a worktree needs a branch (-b)".to_string())
+        );
     }
 }

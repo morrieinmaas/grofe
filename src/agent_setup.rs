@@ -311,6 +311,32 @@ fn confirm(opts: &Opts, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<
     Ok(true)
 }
 
+/// Refuses a file whose shape merging would have to overwrite: a root that
+/// is not an object, or a `hooks` or event entry of the wrong type.
+fn check_shape(kind: &Kind, settings: &Value, path: &Path) -> Result<(), String> {
+    let bad = |what: &str| format!("{}: {what}; not changed", path.display());
+    let Some(root) = settings.as_object() else {
+        return Err(bad("not a JSON object"));
+    };
+    let hooks = if is_bare(root, kind) {
+        Some(settings)
+    } else {
+        root.get("hooks")
+    };
+    let Some(hooks) = hooks else {
+        return Ok(());
+    };
+    let Some(map) = hooks.as_object() else {
+        return Err(bad("\"hooks\" is not an object"));
+    };
+    for (event, _, _) in kind.hooks {
+        if map.get(*event).is_some_and(|g| !g.is_array()) {
+            return Err(bad(&format!("hooks.{event} is not an array")));
+        }
+    }
+    Ok(())
+}
+
 /// Applies or removes `kind`'s hooks in `path`, asking on `input` unless `opts.yes`.
 fn setup_json(
     kind: &Kind,
@@ -323,6 +349,9 @@ fn setup_json(
     let io = |e: std::io::Error| e.to_string();
     let target = real_path(path);
     let before = read_settings(&target)?;
+    if !opts.remove {
+        check_shape(kind, &before, &target)?;
+    }
     let after = if opts.remove {
         remove(kind, before.clone())
     } else {
@@ -414,7 +443,11 @@ fn setup_opencode(
 ) -> Result<(), String> {
     let io = |e: std::io::Error| e.to_string();
     let target = real_path(path);
-    let existing = std::fs::read_to_string(&target).ok();
+    let existing = match std::fs::read_to_string(&target) {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("{}: {e}", target.display())),
+    };
     if opts.remove {
         if !has_marker(&target) {
             writeln!(out, "{}: nothing to remove", target.display()).map_err(io)?;
@@ -925,5 +958,29 @@ mod tests {
                 .contains("already installed")
         );
         assert_eq!(std::fs::read_to_string(&p).unwrap(), first);
+    }
+
+    #[test]
+    fn foreign_shapes_and_unreadable_plugin_are_not_clobbered() {
+        let dir = tempfile::tempdir().unwrap();
+        for (kind, text) in [
+            (&CLAUDE, "[1,2]"),
+            (&CLAUDE, r#"{"hooks":"x"}"#),
+            (&GEMINI, r#"{"hooks":{"SessionStart":{"a":1}}}"#),
+            (&CODEX, r#"{"SessionStart":"x"}"#),
+        ] {
+            let p = dir.path().join("s.json");
+            std::fs::write(&p, text).unwrap();
+            let mut out = Vec::new();
+            let r = setup_json(kind, &p, G, &yes(), &mut std::io::empty(), &mut out);
+            assert!(r.is_err(), "{text}");
+            assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
+        }
+        // a plugin path that cannot be read as text is foreign, not absent
+        let p = dir.path().join("bin.js");
+        std::fs::write(&p, [0xff, 0xfe, 0x00]).unwrap();
+        let mut out = Vec::new();
+        assert!(setup_opencode(&p, G, &yes(), &mut std::io::empty(), &mut out).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), [0xff, 0xfe, 0x00]);
     }
 }

@@ -1441,6 +1441,8 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     crate::server::popup::client_gone(state, id);
     crate::server::tree::client_gone(state, id);
     crate::server::picker::client_gone(state, id);
+    crate::server::sidebar::client_gone(state, id);
+    crate::server::grid::client_gone(state, id);
     crate::server::keymenu::client_gone(state, id);
     crate::server::mouse::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
@@ -1857,6 +1859,7 @@ pub fn deadline(state: &State) -> Option<Instant> {
         r.names_at,
         dispatch::lock::deadline(state),
         crate::server::picker::deadline(state),
+        crate::server::grid::deadline(state),
         state.notify.mute_deadline(),
     ]
     .into_iter()
@@ -1873,6 +1876,15 @@ pub fn deadline(state: &State) -> Option<Instant> {
     .chain(clients)
     .flatten()
     .min()
+}
+
+/// Reads and clears client `id`'s redraw flag, for tests in other modules.
+#[cfg(test)]
+pub(crate) fn take_dirty(state: &mut State, id: ClientId) -> bool {
+    state
+        .clients
+        .get_mut(&id)
+        .is_some_and(|c| std::mem::take(&mut c.dirty))
 }
 
 /// Runs whatever is due at `now` (see [`deadline`]).
@@ -1966,6 +1978,7 @@ pub fn tick(state: &mut State, now: Instant) {
     }
     dispatch::lock::tick(state, now);
     crate::server::picker::tick(state, now);
+    crate::server::grid::tick(state, now);
     arm_status_clock(state, now);
 }
 
@@ -5358,5 +5371,19 @@ mod tests {
         // Unchanged: nothing is sent.
         assert!(outbox.offer(screen_with('b'), &caps));
         assert!(rx.try_recv().is_err());
+    }
+
+    /// A removed client takes its sidebar and grid state with it.
+    #[tokio::test]
+    async fn remove_drops_sidebar_and_grid_state() {
+        let (mut state, id, _session) = sidebar_state((160, 50));
+        show_sidebar(&mut state, id);
+        crate::server::grid::open(&mut state, id).expect("grid");
+        assert!(state.grids.is_open(id));
+        remove(&mut state, id, None);
+        assert!(!state.grids.is_open(id));
+        assert_eq!(crate::server::grid::deadline(&state), None);
+        assert!(!crate::server::sidebar::is_focused(&state, id));
+        assert!(!state.sidebars.has(id));
     }
 }

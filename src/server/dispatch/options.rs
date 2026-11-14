@@ -2661,6 +2661,7 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     crate::server::hooks::configure(state, resolved);
     crate::server::menu::configure(state, resolved);
     crate::server::dispatch::agent::configure(state, resolved);
+    crate::server::configure_surfaces(state, resolved);
     crate::server::clients::set_scan_interval(state, resolved.agents.scan_interval);
     // `[environment]`, then `load-commands` (TP.0), as tmux runs a config
     // file's `set-environment` and other commands each time it reads it.
@@ -6849,5 +6850,18 @@ mod tests {
         ] {
             assert_eq!(quote(value), shown, "{value:?}");
         }
+    }
+
+    #[test]
+    fn apply_config_copies_agent_surface_tables() {
+        let mut state = crate::server::test_state();
+        let mut resolved = Resolved::default();
+        resolved.agents.sidebar.width = 40;
+        resolved.agents.picker.width_pct = 55;
+        resolved.agents.grid.tile_width = 33;
+        apply_config(&mut state, &resolved);
+        assert_eq!(state.agents_sidebar.width, 40);
+        assert_eq!(state.agents_picker.width_pct, 55);
+        assert_eq!(state.agents_grid.tile_width, 33);
     }
 }

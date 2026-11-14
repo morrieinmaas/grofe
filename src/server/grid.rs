@@ -23,6 +23,8 @@ use crate::types::{ClientId, PaneId};
 #[derive(Default)]
 pub struct Grids {
     open: BTreeMap<ClientId, ListState>,
+    /// When a shown time next changes (see [`deadline`]).
+    at: Option<Instant>,
 }
 
 impl Grids {
@@ -36,13 +38,40 @@ pub fn open(state: &mut State, client: ClientId) -> Result<(), String> {
         return Err("no current client".to_string());
     }
     state.grids.open.insert(client, ListState::default());
+    rearm(state, Instant::now());
     clients::mark_dirty(state, client);
     Ok(())
+}
+
+/// When the open grids next need a redraw for their times.
+pub fn deadline(state: &State) -> Option<Instant> {
+    state.grids.at
+}
+
+/// Redraws the open grids when a shown time has changed.
+pub fn tick(state: &mut State, now: Instant) {
+    if !state.grids.at.is_some_and(|at| at <= now) {
+        return;
+    }
+    let ids: Vec<ClientId> = state.grids.open.keys().copied().collect();
+    for id in ids {
+        clients::mark_dirty(state, id);
+    }
+    rearm(state, now);
+}
+
+fn rearm(state: &mut State, now: Instant) {
+    state.grids.at = if state.grids.open.is_empty() {
+        None
+    } else {
+        super::picker::next_time_change(state, now)
+    };
 }
 
 /// A client that detached takes its grid with it.
 pub fn client_gone(state: &mut State, id: ClientId) {
     state.grids.open.remove(&id);
+    rearm(state, Instant::now());
 }
 
 /// How the tiles sit on a client: columns, tile width, tile height, and the
@@ -95,13 +124,22 @@ fn glyph(a: &Agent) -> &'static str {
 }
 
 fn title(state: &State, pane: PaneId, a: &Agent) -> String {
-    format!(
+    let head = format!(
         "{} {} {} {}",
         glyph(a),
         target_label(state, pane),
         a.kind.clone().unwrap_or_default(),
         age(a.since)
-    )
+    );
+    match message(a) {
+        "" => head,
+        m => format!("{head} {m}"),
+    }
+}
+
+/// What the agent last said: its blocked reason, else its message.
+fn message(a: &Agent) -> &str {
+    a.blocked.as_deref().or(a.msg.as_deref()).unwrap_or("")
 }
 
 /// The agent panes in display order that match `query`, with their titles.
@@ -226,6 +264,7 @@ pub fn selected_pane(state: &State, client: ClientId) -> Option<PaneId> {
 
 fn close(state: &mut State, client: ClientId) -> Routed {
     state.grids.open.remove(&client);
+    rearm(state, Instant::now());
     clients::mark_dirty(state, client);
     Routed::Consumed
 }
@@ -569,5 +608,37 @@ mod tests {
         let cut: String = label.chars().take(lay.tile_w).collect();
         assert_eq!(row[..lay.tile_w].iter().collect::<String>(), cut);
         assert_eq!(row[lay.tile_w], '○', "next tile starts at its own column");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn time_in_state_has_a_deadline_tick() {
+        let (mut state, client, _panes, _out) = setup(2, (130, 40));
+        assert_eq!(deadline(&state), None);
+        open(&mut state, client).expect("open");
+        let at = deadline(&state).expect("a deadline");
+        clients::take_dirty(&mut state, client);
+        tick(&mut state, at - std::time::Duration::from_millis(1));
+        assert!(!clients::take_dirty(&mut state, client), "not yet");
+        tick(&mut state, at);
+        assert!(clients::take_dirty(&mut state, client), "the time changed");
+        assert!(deadline(&state).is_some_and(|next| next > at));
+        press(&mut state, client, "Escape");
+        assert_eq!(deadline(&state), None);
+        open(&mut state, client).expect("open");
+        client_gone(&mut state, client);
+        assert_eq!(deadline(&state), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn filter_matches_the_message() {
+        let (mut state, _client, panes, _out) = setup(2, (130, 40));
+        let mut r = report(AgentState::Idle);
+        r.msg = Some("refactoring zebra".into());
+        r.ts = 2;
+        state.agents.apply(panes[1], r, true, Instant::now());
+        let hit = view(&state, "zebra");
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].0, panes[1]);
+        assert!(hit[0].1.ends_with("refactoring zebra"));
     }
 }

@@ -7,6 +7,8 @@ pub struct Kind {
     pub matches: Vec<String>,
     pub command: Option<String>,
     pub resume: Option<String>,
+    /// `ask`, `always` or `never`, over `[agents.new] worktree`.
+    pub worktree: Option<String>,
 }
 
 const LAUNCHERS: &[&str] = &[
@@ -21,6 +23,7 @@ fn kind(name: &str, resume: Option<&str>) -> Kind {
         matches: vec![name.into()],
         command: None,
         resume: resume.map(Into::into),
+        worktree: None,
     }
 }
 

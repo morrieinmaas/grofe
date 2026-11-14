@@ -20,10 +20,6 @@ use crate::cmd::expand;
 use crate::protocol::Dialect;
 use crate::types::{ClientId, PaneId, Rect};
 
-/// Width and height of the picker, percent of the client.
-const WIDTH_PCT: u16 = 80;
-const HEIGHT_PCT: u16 = 70;
-
 /// Open pickers, per client. Lives on `State.pickers`.
 #[derive(Default)]
 pub struct Pickers {
@@ -78,28 +74,32 @@ pub fn tick(state: &mut State, now: Instant) {
     rearm(state, now);
 }
 
-/// Sets the next time change: the next whole second of the shortest time
-/// shown under a minute, minute under an hour, else hour.
+/// The next whole second of the shortest agent time shown under a minute,
+/// minute under an hour, else hour. Shared with the grid.
+pub(super) fn next_time_change(state: &State, now: Instant) -> Option<Instant> {
+    state
+        .agents
+        .by_urgency()
+        .into_iter()
+        .filter(|p| state.model.panes.contains_key(p))
+        .filter_map(|p| state.agents.get(p))
+        .map(|a| {
+            let secs = now.saturating_duration_since(a.since).as_secs();
+            let step = match secs {
+                0..60 => 1,
+                60..3600 => 60,
+                _ => 3600,
+            };
+            a.since + Duration::from_secs((secs / step + 1) * step)
+        })
+        .min()
+}
+
 fn rearm(state: &mut State, now: Instant) {
     state.pickers.at = if state.pickers.open.is_empty() {
         None
     } else {
-        state
-            .agents
-            .by_urgency()
-            .into_iter()
-            .filter(|p| state.model.panes.contains_key(p))
-            .filter_map(|p| state.agents.get(p))
-            .map(|a| {
-                let secs = now.saturating_duration_since(a.since).as_secs();
-                let step = match secs {
-                    0..60 => 1,
-                    60..3600 => 60,
-                    _ => 3600,
-                };
-                a.since + Duration::from_secs((secs / step + 1) * step)
-            })
-            .min()
+        next_time_change(state, now)
     };
 }
 
@@ -195,8 +195,12 @@ fn view(state: &State, query: &str) -> View {
 }
 
 /// The list box and the preview box under it, for a client of `size`.
-fn layout(size: (u16, u16)) -> (Rect, Rect) {
-    let area = centred(size, WIDTH_PCT, HEIGHT_PCT);
+fn layout(state: &State, size: (u16, u16)) -> (Rect, Rect) {
+    let area = centred(
+        size,
+        state.agents_picker.width_pct,
+        state.agents_picker.height_pct,
+    );
     let list_rows = (area.rows * 2 / 5).max(5).min(area.rows);
     let list = Rect {
         rows: list_rows,
@@ -212,8 +216,8 @@ fn layout(size: (u16, u16)) -> (Rect, Rect) {
 
 /// Rows of the list box that hold agents: the box less its border and the
 /// query line.
-fn list_height(size: (u16, u16)) -> usize {
-    usize::from(layout(size).0.rows).saturating_sub(3)
+fn list_height(state: &State, size: (u16, u16)) -> usize {
+    usize::from(layout(state, size).0.rows).saturating_sub(3)
 }
 
 pub struct PickerHook;
@@ -240,10 +244,10 @@ impl InputHook for PickerHook {
         };
         let mut st = state.pickers.open.get(&client).cloned()?;
         let count = view(state, &st.query).visible.len();
-        st.clamp(count, list_height(size));
+        st.clamp(count, list_height(state, size));
         let action = st.on_key(key, count, true);
         let count = view(state, &st.query).visible.len();
-        st.clamp(count, list_height(size));
+        st.clamp(count, list_height(state, size));
         state.pickers.open.insert(client, st);
         clients::mark_dirty(state, client);
         let pane = selected_pane(state, client);
@@ -318,7 +322,7 @@ impl Overlay for PickerOverlay {
         let Some(st) = state.pickers.open.get(&client) else {
             return;
         };
-        let (list, preview) = layout((screen.cols, screen.rows));
+        let (list, preview) = layout(state, (screen.cols, screen.rows));
         let v = view(state, &st.query);
         draw_list(screen, list, "choose-agent", &v.rows, &v.visible, st, true);
         screen.cursor = None;
@@ -642,5 +646,17 @@ mod tests {
         clients::detach(&mut state, client);
         assert!(!state.pickers.is_open(client));
         assert_eq!(deadline(&state), None);
+    }
+
+    #[test]
+    fn layout_uses_configured_percent() {
+        let mut state = crate::server::test_state();
+        let wide = layout(&state, (100, 50)).0.cols;
+        state.agents_picker.width_pct = 40;
+        assert!(layout(&state, (100, 50)).0.cols < wide);
+        let (list, preview) = layout(&state, (100, 50));
+        state.agents_picker.height_pct = 20;
+        let (list2, preview2) = layout(&state, (100, 50));
+        assert!(list2.rows + preview2.rows < list.rows + preview.rows);
     }
 }

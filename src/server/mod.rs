@@ -399,7 +399,6 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(menu::MenuOverlay));
     register_input_hook(state, Arc::new(popup::PopupHook));
     register_overlay(state, Arc::new(popup::PopupOverlay));
-    register_input_hook(state, Arc::new(sidebar::SidebarHook));
     register_overlay(state, Arc::new(sidebar::SidebarOverlay));
     register_input_hook(state, Arc::new(grid::GridHook));
     register_overlay(state, Arc::new(grid::GridOverlay));
@@ -413,6 +412,10 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(keymenu::KeyMenuOverlay));
     register_input_hook(state, Arc::new(tree::TreeHook));
     register_overlay(state, Arc::new(tree::TreeOverlay));
+    // After every overlay hook, so a grid or picker keeps its keys and
+    // clicks while the strip is focused; before the mouse, so the strip's
+    // clicks never reach a pane.
+    register_input_hook(state, Arc::new(sidebar::SidebarHook));
     register_input_hook(state, Arc::new(mouse::MouseHook));
     clock::register(state);
     copy::register(state);
