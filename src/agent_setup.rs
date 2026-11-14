@@ -24,12 +24,13 @@ const CLAUDE_HOOKS: &[(&str, Option<&str>, &str)] = &[
 
 const KINDS: &[&str] = &["claude", "codex", "opencode", "pi", "gemini"];
 
-fn prefix(grofe: &str) -> String {
-    format!("{grofe} agent report")
+/// Single-quotes `s` for a shell, since Claude Code runs hook commands through one.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn command(grofe: &str, args: &str) -> String {
-    format!("{} {args} --hook claude", prefix(grofe))
+    format!("{} agent report {args} --hook claude", shell_quote(grofe))
 }
 
 fn hooks_of(group: &Value) -> &[Value] {
@@ -39,13 +40,21 @@ fn hooks_of(group: &Value) -> &[Value] {
         .map_or(&[], Vec::as_slice)
 }
 
-fn is_ours(hook: &Value, grofe: &str) -> bool {
+/// Whether `hook` is a grofe hook for `args`, found by the tail of its command so
+/// a hook installed from another path, quoted or not, still counts.
+fn is_ours_with(hook: &Value, args: &str) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
-        .is_some_and(|c| c.starts_with(&prefix(grofe)))
+        .and_then(|c| c.strip_suffix(&format!(" agent report {args} --hook claude")))
+        .is_some_and(|head| !head.trim().is_empty())
+}
+
+fn is_ours(hook: &Value) -> bool {
+    CLAUDE_HOOKS.iter().any(|(_, _, a)| is_ours_with(hook, a))
 }
 
 /// Adds grofe's hooks to Claude settings, leaving everything else and the key order alone.
+/// A grofe hook from another path is pointed at `grofe` in place.
 pub fn merge_claude(mut settings: Value, grofe: &str) -> Value {
     if !settings.is_object() {
         settings = json!({});
@@ -69,10 +78,27 @@ pub fn merge_claude(mut settings: Value, grofe: &str) -> Value {
         let Some(groups) = groups.as_array_mut() else {
             continue;
         };
-        let present = groups
-            .iter()
-            .any(|g| hooks_of(g).iter().any(|h| h["command"] == cmd.as_str()));
-        if present {
+        let mut found = false;
+        groups.retain_mut(|g| {
+            let Some(list) = g.get_mut("hooks").and_then(Value::as_array_mut) else {
+                return true;
+            };
+            let n = list.len();
+            list.retain_mut(|h| {
+                if !is_ours_with(h, args) {
+                    return true;
+                }
+                // The first one is updated, any duplicate from an older install goes.
+                let keep = !found;
+                found = true;
+                if keep {
+                    h["command"] = json!(cmd);
+                }
+                keep
+            });
+            list.len() == n || !list.is_empty()
+        });
+        if found {
             continue;
         }
         let mut group = json!({});
@@ -85,8 +111,8 @@ pub fn merge_claude(mut settings: Value, grofe: &str) -> Value {
     settings
 }
 
-/// Removes exactly the hooks whose command starts with `<grofe> agent report`.
-pub fn remove_claude(mut settings: Value, grofe: &str) -> Value {
+/// Removes grofe's hooks, whatever path they were installed from.
+pub fn remove_claude(mut settings: Value) -> Value {
     let Some(root) = settings.as_object_mut() else {
         return settings;
     };
@@ -104,7 +130,7 @@ pub fn remove_claude(mut settings: Value, grofe: &str) -> Value {
                 return true;
             };
             let n = list.len();
-            list.retain(|h| !is_ours(h, grofe));
+            list.retain(|h| !is_ours(h));
             list.len() == n || !list.is_empty()
         });
         if groups.is_empty() && before > 0 {
@@ -122,12 +148,12 @@ pub fn remove_claude(mut settings: Value, grofe: &str) -> Value {
 }
 
 /// Every grofe command in the settings, as "event: command".
-fn ours(settings: &Value, grofe: &str) -> BTreeSet<String> {
+fn ours(settings: &Value) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     if let Some(hooks) = settings.get("hooks").and_then(Value::as_object) {
         for (event, groups) in hooks {
             for h in groups.as_array().into_iter().flatten().flat_map(hooks_of) {
-                if is_ours(h, grofe) {
+                if is_ours(h) {
                     found.insert(format!("{event}: {}", h["command"].as_str().unwrap_or("")));
                 }
             }
@@ -172,7 +198,7 @@ fn setup_claude(
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let before = read_settings(&target)?;
     let after = if opts.remove {
-        remove_claude(before.clone(), grofe)
+        remove_claude(before.clone())
     } else {
         merge_claude(before.clone(), grofe)
     };
@@ -185,7 +211,7 @@ fn setup_claude(
         writeln!(out, "{}: {msg}", target.display()).map_err(io)?;
         return Ok(());
     }
-    let (old, new) = (ours(&before, grofe), ours(&after, grofe));
+    let (old, new) = (ours(&before), ours(&after));
     writeln!(out, "{}", target.display()).map_err(io)?;
     for line in new.difference(&old) {
         writeln!(out, "+ {line}").map_err(io)?;
@@ -219,7 +245,7 @@ fn setup_claude(
     writeln!(out, "done").map_err(io)
 }
 
-fn status(path: Option<&Path>, grofe: &str, on_path: bool) -> String {
+fn status(path: Option<&Path>, on_path: bool) -> String {
     let mut s = String::new();
     for kind in KINDS {
         let state = if *kind != "claude" {
@@ -228,7 +254,7 @@ fn status(path: Option<&Path>, grofe: &str, on_path: bool) -> String {
             let settings = path.and_then(|p| read_settings(p).ok());
             let found = path.is_some_and(|p| p.exists()) || on_path;
             match settings {
-                Some(v) if ours(&v, grofe).len() == CLAUDE_HOOKS.len() => "installed",
+                Some(v) if ours(&v).len() == CLAUDE_HOOKS.len() => "installed",
                 _ if found => "not installed",
                 _ => "agent not found",
             }
@@ -274,7 +300,7 @@ pub fn run(args: &[String]) -> ExitCode {
     }
     let path = env_settings_path();
     if want_status {
-        print!("{}", status(path.as_deref(), &grofe, claude_on_path()));
+        print!("{}", status(path.as_deref(), claude_on_path()));
         return ExitCode::SUCCESS;
     }
     match kind.as_deref() {
@@ -332,7 +358,7 @@ mod tests {
         let v = merge_claude(json!({}), G);
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["command"],
-            "/b/grofe agent report done --hook claude"
+            "'/b/grofe' agent report done --hook claude"
         );
         assert_eq!(
             v["hooks"]["Notification"][0]["matcher"],
@@ -410,17 +436,99 @@ mod tests {
         let foreign = json!({"matcher": "x", "hooks": [{"type": "command", "command": "/other agent report done"}]});
         let start = json!({"theme": "dark", "hooks": {"Stop": [foreign]}});
         let merged = merge_claude(start.clone(), G);
-        assert_eq!(remove_claude(merged, G), start);
+        assert_eq!(remove_claude(merged), start);
         // a foreign hook sharing a group with ours survives
         let mut shared = merge_claude(json!({}), G);
         shared["hooks"]["Stop"][0]["hooks"]
             .as_array_mut()
             .unwrap()
             .push(json!({"type": "command", "command": "echo hi"}));
-        let left = remove_claude(shared, G);
+        let left = remove_claude(shared);
         assert_eq!(left["hooks"]["Stop"][0]["hooks"][0]["command"], "echo hi");
         assert!(left["hooks"].get("SessionEnd").is_none());
-        assert_eq!(remove_claude(json!({"a": 1}), G), json!({"a": 1}));
+        assert_eq!(remove_claude(json!({"a": 1})), json!({"a": 1}));
+    }
+
+    fn commands(v: &Value, event: &str) -> Vec<String> {
+        v["hooks"][event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(hooks_of)
+            .map(|h| h["command"].as_str().unwrap_or("").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn path_is_shell_quoted() {
+        let v = merge_claude(json!({}), "/my bin/grofe");
+        assert_eq!(
+            v["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "'/my bin/grofe' agent report done --hook claude"
+        );
+        let v = merge_claude(json!({}), "/it's/grofe");
+        assert_eq!(
+            v["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "'/it'\\''s/grofe' agent report done --hook claude"
+        );
+    }
+
+    #[test]
+    fn quoted_command_runs_in_a_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("a b's");
+        std::fs::create_dir(&bin).unwrap();
+        let exe = bin.join("grofe");
+        std::fs::write(&exe, "#!/bin/sh\necho \"$@\"\n").unwrap();
+        std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let v = merge_claude(json!({}), &exe.to_string_lossy());
+        let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        let out = std::process::Command::new("sh")
+            .args(["-c", cmd])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "agent report done --hook claude"
+        );
+    }
+
+    #[test]
+    fn rerun_with_new_path_replaces_in_place() {
+        let old = merge_claude(
+            json!({"hooks": {"Stop": [
+                {"hooks": [{"type": "command", "command": "/old/grofe agent report done --hook claude"}]}
+            ]}}),
+            "/older/grofe",
+        );
+        let moved = merge_claude(old, "/new bin/grofe");
+        for (event, ..) in CLAUDE_HOOKS {
+            let n = CLAUDE_HOOKS.iter().filter(|(e, ..)| e == event).count();
+            let cmds = commands(&moved, event);
+            assert_eq!(cmds.len(), n, "{event}: {cmds:?}");
+            assert!(
+                cmds.iter().all(|c| c.starts_with("'/new bin/grofe' ")),
+                "{cmds:?}"
+            );
+        }
+        // idempotent after the move, and a doubled install from the old bug collapses
+        assert_eq!(merge_claude(moved.clone(), "/new bin/grofe"), moved);
+        let mut doubled = moved.clone();
+        doubled["hooks"]["Stop"].as_array_mut().unwrap().push(
+            json!({"hooks": [{"type": "command", "command": "/old/grofe agent report done --hook claude"}]}),
+        );
+        assert_eq!(merge_claude(doubled, "/new bin/grofe"), moved);
+    }
+
+    #[test]
+    fn remove_after_move_removes_old_entries() {
+        let installed = merge_claude(json!({"theme": "dark"}), "/old/grofe");
+        assert_eq!(remove_claude(installed), json!({"theme": "dark"}));
+        let quoted = merge_claude(json!({}), "/it's/grofe");
+        assert_eq!(remove_claude(quoted), json!({}));
     }
 
     #[test]
@@ -434,7 +542,7 @@ mod tests {
                 ..Opts::default()
             },
         );
-        assert!(out.contains("+ Stop: /b/grofe agent report done --hook claude"));
+        assert!(out.contains("+ Stop: '/b/grofe' agent report done --hook claude"));
         assert!(!p.exists());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
@@ -453,12 +561,12 @@ mod tests {
     fn status_lists_kinds() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
-        let s = status(Some(&p), G, false);
+        let s = status(Some(&p), false);
         assert!(s.contains("claude: agent not found"));
         assert!(s.contains("codex: not supported yet"));
         go(&p, &yes());
-        assert!(status(Some(&p), G, false).contains("claude: installed"));
+        assert!(status(Some(&p), false).contains("claude: installed"));
         std::fs::write(&p, "{}").unwrap();
-        assert!(status(Some(&p), G, false).contains("claude: not installed"));
+        assert!(status(Some(&p), false).contains("claude: not installed"));
     }
 }
