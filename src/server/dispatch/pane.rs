@@ -549,6 +549,7 @@ pub(crate) fn respawn(
         // actor ignores.
         p.handle = handle;
         p.dead = None;
+        p.dead_time = None;
         p.cwd = cwd;
         p.argv = argv.clone();
         before = (p.resume.take(), p.expect.clone());

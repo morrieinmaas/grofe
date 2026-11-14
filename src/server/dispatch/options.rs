@@ -4958,6 +4958,7 @@ impl FormatVars for FormatCtx<'_> {
             "pane_pipe_pid" => p.handle.pipe_pid()?.to_string(),
             // Empty for a live pane and for one a signal killed, as tmux.
             "pane_dead_status" => p.dead.flatten()?.to_string(),
+            "pane_dead_time" => epoch_secs(p.dead_time?),
             "pane_start_command" => p
                 .argv
                 .as_deref()

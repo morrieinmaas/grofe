@@ -406,6 +406,8 @@ pub struct Pane {
     /// `Some(status)` once the child exited and the master drained;
     /// `status` is `None` when a signal killed it.
     pub dead: Option<Option<i32>>,
+    /// When the pane died (`#{pane_dead_time}`); set with `dead`.
+    pub dead_time: Option<std::time::SystemTime>,
     /// The size last given to the pty.
     pub cols: u16,
     pub rows: u16,
@@ -641,6 +643,16 @@ impl Model {
         }
     }
 
+    /// The text of a dead pane: its `remain-on-exit-format` expanded.
+    pub fn dead_pane_text(&self, pane: PaneId) -> String {
+        let chain = options::chain(self, pane);
+        let format = self
+            .options
+            .lookup("remain-on-exit-format", &chain)
+            .unwrap_or_default();
+        crate::cmd::expand(format, &options::FormatCtx::new(self, pane))
+    }
+
     pub fn session_by_name(&self, name: &str) -> Option<SessionId> {
         self.sessions
             .values()
@@ -732,6 +744,7 @@ impl Model {
         if self.remain_on_exit(pane, status) {
             if let Some(p) = self.panes.get_mut(&pane) {
                 p.dead = Some(status);
+                p.dead_time = Some(std::time::SystemTime::now());
             }
         } else {
             self.remove_pane(pane);
@@ -1458,6 +1471,7 @@ mod tests {
                 expect: None,
                 restored: false,
                 dead: None,
+                dead_time: None,
                 cols: 80,
                 rows: 24,
                 input_off: false,

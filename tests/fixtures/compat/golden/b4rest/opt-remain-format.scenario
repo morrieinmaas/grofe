@@ -1,6 +1,7 @@
 # B4 rest: remain-on-exit-format is the text of a dead pane.
-$ new-session -d -s main -n w0 -x 60 -y 8 'sh -c "echo hello; exit 3"'
+$ new-session -d -s main -n w0 -x 60 -y 8 'sh -c "read x; echo hello; exit 3"'
 $ set -g remain-on-exit on
+$ send-keys -t main:w0 Enter
 $ new-window -d -n w1 'sh -c "echo hi; exit 5"'
 $ run-shell 'sleep 0.5'
 $ capture-pane -p -t main:w1

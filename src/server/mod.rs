@@ -404,6 +404,18 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
             // A restored pane whose resumed process exited is kept (T4.4).
             if !restore::on_pane_exited(state, pane) {
                 state.model.pane_exited(pane, status);
+                // A kept pane shows its `remain-on-exit-format` text.
+                if state
+                    .model
+                    .panes
+                    .get(&pane)
+                    .is_some_and(|p| p.dead.is_some())
+                {
+                    let text = state.model.dead_pane_text(pane);
+                    if !text.is_empty() {
+                        state.model.panes[&pane].handle.show_dead_text(&text);
+                    }
+                }
                 hooks::pane_exited(state, pane, window);
                 if state.model.closed() {
                     state.exit = true;

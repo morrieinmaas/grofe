@@ -571,6 +571,7 @@ pub(crate) fn spawn_pane_delayed(
             shell,
             cwd,
             dead: None,
+            dead_time: None,
             cols,
             rows,
             input_off: false,
