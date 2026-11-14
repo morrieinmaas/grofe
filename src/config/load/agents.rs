@@ -2,7 +2,8 @@
 //!
 //! The tables merge key by key across layers: `user.toml` can set
 //! `resume` on a kind a fragment declared. Keys of the later `[agents.*]`
-//! tables are not read yet and warn like any unknown key.
+//! tables are not read yet and warn like any unknown key. `[agents.sidebar]`,
+//! `[agents.grid]`, `[agents.picker]` and `[agents.new]` are plain tables.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -19,6 +20,38 @@ pub struct ConfigKind {
     pub command: Option<String>,
     pub resume: Option<String>,
     pub enabled: Option<bool>,
+    /// `worktree`: `ask`, `always` or `never`, over `[agents.new]`.
+    pub worktree: Option<String>,
+}
+
+/// `[agents.sidebar]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSidebar {
+    pub width: u16,
+    pub show_on_attach: bool,
+    pub min_client_width: u16,
+}
+
+/// `[agents.grid]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigGrid {
+    pub tile_width: u16,
+    pub preview_lines: u16,
+}
+
+/// `[agents.picker]`, sizes in percent of the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigPicker {
+    pub width_pct: u16,
+    pub height_pct: u16,
+}
+
+/// `[agents.new]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigNew {
+    /// `ask`, `always` or `never`.
+    pub worktree: String,
+    pub worktree_command: Vec<String>,
 }
 
 /// The merged `[agents]` table.
@@ -27,6 +60,10 @@ pub struct ConfigAgents {
     pub enabled: bool,
     pub scan_interval: Duration,
     pub kinds: BTreeMap<String, ConfigKind>,
+    pub sidebar: ConfigSidebar,
+    pub grid: ConfigGrid,
+    pub picker: ConfigPicker,
+    pub new: ConfigNew,
 }
 
 impl Default for ConfigAgents {
@@ -35,6 +72,27 @@ impl Default for ConfigAgents {
             enabled: true,
             scan_interval: Duration::from_secs(1),
             kinds: BTreeMap::new(),
+            sidebar: ConfigSidebar {
+                width: 32,
+                show_on_attach: false,
+                min_client_width: 120,
+            },
+            grid: ConfigGrid {
+                tile_width: 60,
+                preview_lines: 12,
+            },
+            picker: ConfigPicker {
+                width_pct: 80,
+                height_pct: 70,
+            },
+            new: ConfigNew {
+                worktree: "never".to_string(),
+                worktree_command: [
+                    "git", "-C", "{dir}", "worktree", "add", "-b", "{branch}", "{path}",
+                ]
+                .map(String::from)
+                .to_vec(),
+            },
         }
     }
 }
@@ -45,21 +103,36 @@ pub(super) struct Merge {
     enabled: Option<bool>,
     scan_interval: Option<Duration>,
     kinds: BTreeMap<String, ConfigKind>,
+    /// The tables over the defaults; a key no layer set keeps its default.
+    tables: Option<ConfigAgents>,
 }
 
 impl Merge {
     pub(super) fn resolved(&self) -> ConfigAgents {
-        let d = ConfigAgents::default();
+        let d = self.tables.clone().unwrap_or_default();
         ConfigAgents {
             enabled: self.enabled.unwrap_or(d.enabled),
             scan_interval: self.scan_interval.unwrap_or(d.scan_interval),
             kinds: self.kinds.clone(),
+            ..d
         }
     }
 }
 
-const KEYS: [&str; 3] = ["enabled", "scan-interval", "kinds"];
-const KIND_KEYS: [&str; 4] = ["match", "command", "resume", "enabled"];
+const KEYS: [&str; 7] = [
+    "enabled",
+    "scan-interval",
+    "kinds",
+    "sidebar",
+    "grid",
+    "picker",
+    "new",
+];
+const KIND_KEYS: [&str; 5] = ["match", "command", "resume", "enabled", "worktree"];
+const SIDEBAR_KEYS: [&str; 3] = ["width", "show-on-attach", "min-client-width"];
+const GRID_KEYS: [&str; 2] = ["tile-width", "preview-lines"];
+const PICKER_KEYS: [&str; 2] = ["width", "height"];
+const NEW_KEYS: [&str; 2] = ["worktree", "worktree-command"];
 
 impl Loader {
     /// `[agents]`.
@@ -88,6 +161,11 @@ impl Loader {
                     continue;
                 }
                 ("kinds", _) => Err(wrong("a table of kinds")),
+                ("sidebar" | "grid" | "picker" | "new", DeValue::Table(t)) => {
+                    self.agents_table(f, field, t);
+                    continue;
+                }
+                ("sidebar" | "grid" | "picker" | "new", _) => Err(wrong("a table")),
                 (other, _) => {
                     self.unknown_key(f, at, &key, other, &KEYS);
                     continue;
@@ -148,6 +226,10 @@ impl Loader {
                     Ok(())
                 }
                 ("enabled", _) => Err(wrong("a boolean")),
+                ("worktree", DeValue::String(s)) => {
+                    worktree_mode(s).map(|m| seen.worktree = Some(m))
+                }
+                ("worktree", _) => Err(wrong("a string")),
                 (other, _) => {
                     self.unknown_key(f, at, &key, other, &KIND_KEYS);
                     continue;
@@ -163,6 +245,58 @@ impl Loader {
         merged.command = seen.command.or(merged.command.take());
         merged.resume = seen.resume.or(merged.resume.take());
         merged.enabled = seen.enabled.or(merged.enabled);
+        merged.worktree = seen.worktree.or(merged.worktree.take());
+    }
+
+    /// `[agents.sidebar]`, `[agents.grid]`, `[agents.picker]`, `[agents.new]`.
+    fn agents_table(&mut self, f: &FileCtx, table: &str, t: &DeTable) {
+        let mut cfg = self.agents.tables.take().unwrap_or_default();
+        let known: &[&str] = match table {
+            "sidebar" => &SIDEBAR_KEYS,
+            "grid" => &GRID_KEYS,
+            "picker" => &PICKER_KEYS,
+            _ => &NEW_KEYS,
+        };
+        for (k, v) in entries(t) {
+            let field = k.get_ref().as_ref();
+            let at = f.line(k.span().start);
+            let key = format!("agents.{table}.{field}");
+            let v = v.get_ref();
+            let result = match (table, field) {
+                ("sidebar", "width") => num(v, 1, 200).map(|n| cfg.sidebar.width = n),
+                ("sidebar", "show-on-attach") => flag(v).map(|b| cfg.sidebar.show_on_attach = b),
+                ("sidebar", "min-client-width") => {
+                    num(v, 0, 10_000).map(|n| cfg.sidebar.min_client_width = n)
+                }
+                ("grid", "tile-width") => num(v, 1, 200).map(|n| cfg.grid.tile_width = n),
+                ("grid", "preview-lines") => num(v, 1, 200).map(|n| cfg.grid.preview_lines = n),
+                ("picker", "width") => percent(v).map(|n| cfg.picker.width_pct = n),
+                ("picker", "height") => percent(v).map(|n| cfg.picker.height_pct = n),
+                ("new", "worktree") => match v {
+                    DeValue::String(s) => worktree_mode(s).map(|m| cfg.new.worktree = m),
+                    _ => Err(format!("expected a string, found {}", v.type_str())),
+                },
+                ("new", "worktree-command") => match v {
+                    DeValue::Array(a) if a.is_empty() => {
+                        Err("the worktree command must not be empty".to_string())
+                    }
+                    DeValue::Array(a) => words(a).map(|w| cfg.new.worktree_command = w),
+                    _ => Err(format!(
+                        "expected an array of strings, found {}",
+                        v.type_str()
+                    )),
+                },
+                _ => {
+                    self.unknown_key(f, at, &key, field, known);
+                    continue;
+                }
+            };
+            match result {
+                Ok(()) => self.provenance.set(&key, f.source(at)),
+                Err(msg) => self.error(f.path, at, &key, msg),
+            }
+        }
+        self.agents.tables = Some(cfg);
     }
 
     /// An unknown key is a warning: a later step's table must not break an
@@ -191,6 +325,45 @@ fn words(a: &[toml::Spanned<DeValue>]) -> Result<Vec<String>, String> {
             )),
         })
         .collect()
+}
+
+fn worktree_mode(s: &str) -> Result<String, String> {
+    match s {
+        "ask" | "always" | "never" => Ok(s.to_string()),
+        _ => Err("expected ask, always or never".to_string()),
+    }
+}
+
+/// A whole number in `lo..=hi`.
+fn num(v: &DeValue, lo: i64, hi: i64) -> Result<u16, String> {
+    match v {
+        DeValue::Integer(i) => match i.to_string().parse::<i64>() {
+            Ok(n) if (lo..=hi).contains(&n) => Ok(n as u16),
+            _ => Err(format!("expected a number from {lo} to {hi}")),
+        },
+        other => Err(format!("expected a number, found {}", other.type_str())),
+    }
+}
+
+fn flag(v: &DeValue) -> Result<bool, String> {
+    match v {
+        DeValue::Boolean(b) => Ok(*b),
+        other => Err(format!("expected a boolean, found {}", other.type_str())),
+    }
+}
+
+/// `"80%"`: 1 to 100 percent.
+fn percent(v: &DeValue) -> Result<u16, String> {
+    let DeValue::String(s) = v else {
+        return Err(format!(
+            "expected a percentage like \"80%\", found {}",
+            v.type_str()
+        ));
+    };
+    s.strip_suffix('%')
+        .and_then(|n| n.parse::<u16>().ok())
+        .filter(|n| (1..=100).contains(n))
+        .ok_or_else(|| "expected a percentage like \"80%\", from 1% to 100%".to_string())
 }
 
 /// `500ms`, `1s`, `2m`: a positive whole number and a unit.
@@ -308,5 +481,104 @@ mod tests {
         assert_eq!(k.resume.as_deref(), Some("b {id}"));
         let src = r.provenance.get("agents.kinds.claude.resume").expect("src");
         assert_eq!(src.layer, Layer::User);
+    }
+
+    #[test]
+    fn defaults() {
+        let a = one("").expect("loads").agents;
+        assert_eq!(
+            (
+                a.sidebar.width,
+                a.sidebar.show_on_attach,
+                a.sidebar.min_client_width
+            ),
+            (32, false, 120)
+        );
+        assert_eq!((a.grid.tile_width, a.grid.preview_lines), (60, 12));
+        assert_eq!((a.picker.width_pct, a.picker.height_pct), (80, 70));
+        assert_eq!(a.new.worktree, "never");
+        assert_eq!(a.new.worktree_command[..3], ["git", "-C", "{dir}"]);
+        assert_eq!(
+            a.new.worktree_command.last().map(String::as_str),
+            Some("{path}")
+        );
+    }
+
+    #[test]
+    fn tables_parse_merge_and_record_provenance() {
+        let r = load(&[
+            (
+                Layer::Config,
+                "[agents.sidebar]\nwidth = 40\nshow-on-attach = true\n\
+                 [agents.picker]\nwidth = \"90%\"\n[agents.grid]\ntile-width = 50",
+            ),
+            (Layer::User, "[agents.sidebar]\nmin-client-width = 80\n[agents.new]\nworktree-command = [\"wt\", \"{branch}\"]"),
+        ])
+        .expect("loads");
+        let a = &r.agents;
+        assert_eq!(
+            (
+                a.sidebar.width,
+                a.sidebar.show_on_attach,
+                a.sidebar.min_client_width
+            ),
+            (40, true, 80)
+        );
+        assert_eq!((a.picker.width_pct, a.picker.height_pct), (90, 70));
+        assert_eq!((a.grid.tile_width, a.grid.preview_lines), (50, 12));
+        assert_eq!(a.new.worktree_command, ["wt", "{branch}"]);
+        let src = r
+            .provenance
+            .get("agents.sidebar.min-client-width")
+            .expect("src");
+        assert_eq!(src.layer, Layer::User);
+        assert!(r.provenance.get("agents.sidebar.width").is_some());
+    }
+
+    #[test]
+    fn worktree_values() {
+        for m in ["ask", "always", "never"] {
+            let r = one(&format!(
+                "[agents.new]\nworktree = \"{m}\"\n[agents.kinds.x]\nworktree = \"{m}\""
+            ))
+            .expect("loads");
+            assert_eq!(r.agents.new.worktree, m);
+            assert_eq!(r.agents.kinds["x"].worktree.as_deref(), Some(m));
+        }
+        assert!(one("[agents.new]\nworktree = \"maybe\"").is_err());
+        assert!(one("[agents.kinds.x]\nworktree = \"yes\"").is_err());
+        assert!(one("[agents.kinds.x]\nworktree = true").is_err());
+    }
+
+    #[test]
+    fn bad_width_errors() {
+        for text in [
+            "[agents.sidebar]\nwidth = 0",
+            "[agents.sidebar]\nwidth = 201",
+            "[agents.sidebar]\nwidth = \"32\"",
+            "[agents.grid]\ntile-width = 0",
+            "[agents.grid]\ntile-width = 201",
+            "[agents.grid]\npreview-lines = 0",
+            "[agents.picker]\nwidth = \"0%\"",
+            "[agents.picker]\nheight = \"101%\"",
+            "[agents.picker]\nwidth = 80",
+            "[agents.new]\nworktree-command = []",
+            "[agents.sidebar]\nshow-on-attach = 1",
+            "[agents]\nsidebar = 3",
+        ] {
+            assert!(one(text).is_err(), "{text}");
+        }
+        let r = one("[agents.sidebar]\nwidth = 200\n[agents.grid]\ntile-width = 1").expect("edges");
+        assert_eq!(r.agents.sidebar.width, 200);
+    }
+
+    #[test]
+    fn unknown_table_key_warns() {
+        let r = one("[agents.sidebar]\nwidht = 3").expect("loads");
+        assert!(
+            r.warnings[0].contains("did you mean width?"),
+            "{:?}",
+            r.warnings
+        );
     }
 }

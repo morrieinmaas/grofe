@@ -379,7 +379,7 @@ fn agents_lines(
             kind_value(k)
         ));
         if explain {
-            for field in ["match", "command", "resume", "enabled"] {
+            for field in ["match", "command", "resume", "enabled", "worktree"] {
                 let path = format!("agents.kinds.{name}.{field}");
                 if let Some(src) = r.provenance.get(&path) {
                     out.push_str(&format!("  {field} set by {}\n", src.describe(home)));
@@ -400,6 +400,45 @@ fn agents_lines(
         };
         scalar(&mut out, "agents.scan-interval", quote(&text));
     }
+    let list =
+        |v: &[String]| toml::Value::Array(v.iter().cloned().map(toml::Value::String).collect());
+    let rows = [
+        ("agents.sidebar.width", a.sidebar.width.to_string()),
+        (
+            "agents.sidebar.show-on-attach",
+            a.sidebar.show_on_attach.to_string(),
+        ),
+        (
+            "agents.sidebar.min-client-width",
+            a.sidebar.min_client_width.to_string(),
+        ),
+        ("agents.grid.tile-width", a.grid.tile_width.to_string()),
+        (
+            "agents.grid.preview-lines",
+            a.grid.preview_lines.to_string(),
+        ),
+        (
+            "agents.picker.width",
+            quote(&format!("{}%", a.picker.width_pct)),
+        ),
+        (
+            "agents.picker.height",
+            quote(&format!("{}%", a.picker.height_pct)),
+        ),
+        ("agents.new.worktree", quote(&a.new.worktree)),
+        (
+            "agents.new.worktree-command",
+            list(&a.new.worktree_command).to_string(),
+        ),
+    ];
+    let mut shown = false;
+    for (k, v) in rows {
+        let table = k.rsplit_once('.').map_or("", |(t, _)| t);
+        if want(k) || key == table {
+            scalar(&mut out, k, v);
+            shown = true;
+        }
+    }
     if key == "agents" || key == "agents.kinds" {
         for (name, k) in &a.kinds {
             kind(&mut out, name, k);
@@ -410,7 +449,7 @@ fn agents_lines(
             .get(name)
             .ok_or_else(|| format!("show-config: no kind {key}"))?;
         kind(&mut out, name, k);
-    } else if !want("agents.enabled") && !want("agents.scan-interval") {
+    } else if !want("agents.enabled") && !want("agents.scan-interval") && !shown {
         return Err(format!("show-config: unknown key {key}"));
     }
     Ok(out)
@@ -488,6 +527,9 @@ fn kind_value(k: &ConfigKind) -> String {
     if let Some(e) = k.enabled {
         fields.push(format!("enabled = {e}"));
     }
+    if let Some(w) = &k.worktree {
+        fields.push(format!("worktree = {}", quote(w)));
+    }
     format!("{{ {} }}", fields.join(", "))
 }
 
@@ -530,6 +572,11 @@ mod tests {
         assert_eq!(
             out,
             "agents.enabled = true\nagents.scan-interval = \"500ms\"\n\
+             agents.sidebar.width = 32\nagents.sidebar.show-on-attach = false\n\
+             agents.sidebar.min-client-width = 120\nagents.grid.tile-width = 60\n\
+             agents.grid.preview-lines = 12\nagents.picker.width = \"80%\"\n\
+             agents.picker.height = \"70%\"\nagents.new.worktree = \"never\"\n\
+             agents.new.worktree-command = [\"git\", \"-C\", \"{dir}\", \"worktree\", \"add\", \"-b\", \"{branch}\", \"{path}\"]\n\
              agents.kinds.claude = { match = [\"claude\"], resume = \"claude -r {id}\" }\n"
         );
         let one = agents_lines(&r, None, true, "agents.kinds.claude").expect("lines");

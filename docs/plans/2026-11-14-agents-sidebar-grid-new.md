@@ -128,7 +128,7 @@ e.g. `parse(["agent","new","claude","-w","-b","feat/x"]) -> Agent(New{kind:"clau
 **Notes:** `SidebarOp` lives in cmd (T1 uses it). Temporary route arms only if demanded, marked `// T7 replaces this arm`.
 
 ### T6 config tables · Complexity 3 · Est. context 30k
-**Owns:** src/config/load/agents.rs
+**Owns:** src/config/load/agents.rs, src/config/mod.rs, src/config/cli.rs
 **Components:** 1
 **LOC owned:** 140
 **Tests:** fast

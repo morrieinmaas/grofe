@@ -21,7 +21,9 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use cli::show_config;
-pub use load::agents::{ConfigAgents, ConfigKind};
+pub use load::agents::{
+    ConfigAgents, ConfigGrid, ConfigKind, ConfigNew, ConfigPicker, ConfigSidebar,
+};
 pub use load::plugins::{ConfigPlugin, Restart};
 pub use load::{load, load_one, load_with_file};
 pub use provenance::{Layer, Provenance, Source};
