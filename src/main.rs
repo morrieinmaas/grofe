@@ -247,6 +247,26 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // grofe's own verb: agent status reports and hook setup.
+        "agent" if dialect() == Dialect::Grofe => {
+            let hook = rest.iter().any(|a| a == "--hook");
+            match rest.get(1).map(String::as_str) {
+                Some("setup") => grofe::agent_setup::run(&rest[2..]),
+                Some("report") if hook => grofe::agent_cli::run(&globals.socket(), rest),
+                // Outside a server a report is a no-op, never an error.
+                Some("report") => {
+                    let (socket, own_dir) = globals.resolve();
+                    match UnixStream::connect(&socket) {
+                        Ok(_) => one_shot(&socket, own_dir, rest),
+                        Err(_) => ExitCode::SUCCESS,
+                    }
+                }
+                _ => {
+                    let (socket, own_dir) = globals.resolve();
+                    one_shot(&socket, own_dir, rest)
+                }
+            }
+        }
         "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
