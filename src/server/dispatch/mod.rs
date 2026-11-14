@@ -23,6 +23,7 @@
 //! [`spawn_pane`] and [`resolve_cwd`].
 
 pub(crate) mod agent;
+pub(crate) mod notify;
 mod agent_cmd;
 pub mod bindings;
 pub mod buffers;
@@ -50,7 +51,7 @@ use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
-use crate::server::{State, clients, graphics, keymenu, picker, prompt};
+use crate::server::{State, clients, graphics, keymenu, picker, prompt, tray};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
 
@@ -443,6 +444,11 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             let client = clients::current_client(state, ctx).ok_or("no client")?;
             picker::open(state, client).map(|()| String::new())
         }
+        Command::ChooseNotification => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            tray::open(state, client).map(|()| String::new())
+        }
+        Command::Notify(c) => notify::run(state, ctx, c),
         Command::KeyMenu(k) => {
             let client = clients::current_client(state, ctx).ok_or("no client")?;
             let table = k.table.as_deref().unwrap_or("prefix");

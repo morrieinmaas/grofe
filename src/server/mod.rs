@@ -36,6 +36,7 @@ pub(crate) mod listview;
 pub mod menu;
 pub mod model;
 pub mod mouse;
+pub(crate) mod notify;
 pub mod pane;
 pub mod passthrough;
 pub(crate) mod picker;
@@ -51,6 +52,8 @@ pub mod sixel;
 pub mod snapshot;
 pub mod sources;
 pub mod status;
+pub(crate) mod toast;
+pub(crate) mod tray;
 pub mod tree;
 pub mod x11;
 
@@ -237,6 +240,9 @@ pub struct State {
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
     pub pickers: picker::Pickers,
+    pub notify: notify::Notifier,
+    pub notify_runner: notify::desktop::Runner,
+    pub trays: tray::Trays,
     pub keymenus: keymenu::Menus,
     /// The paste buffers (TM.4).
     pub buffers: buffers::Buffers,
@@ -378,6 +384,10 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(popup::PopupOverlay));
     register_input_hook(state, Arc::new(picker::PickerHook));
     register_overlay(state, Arc::new(picker::PickerOverlay));
+    register_input_hook(state, Arc::new(tray::TrayHook));
+    register_overlay(state, Arc::new(tray::TrayOverlay));
+    register_input_hook(state, Arc::new(toast::ToastHook));
+    register_overlay(state, Arc::new(toast::ToastOverlay));
     register_input_hook(state, Arc::new(keymenu::KeyMenuHook));
     register_overlay(state, Arc::new(keymenu::KeyMenuOverlay));
     register_input_hook(state, Arc::new(tree::TreeHook));
@@ -623,6 +633,9 @@ async fn serve(
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
         pickers: picker::Pickers::default(),
+        notify: notify::Notifier::default(),
+        notify_runner: notify::desktop::Runner::default(),
+        trays: tray::Trays::default(),
         keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
@@ -1350,6 +1363,9 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
         pickers: picker::Pickers::default(),
+        notify: notify::Notifier::default(),
+        notify_runner: notify::desktop::Runner::default(),
+        trays: tray::Trays::default(),
         keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
