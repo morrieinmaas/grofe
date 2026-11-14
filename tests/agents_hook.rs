@@ -121,3 +121,70 @@ fn hook_returns_at_once_with_garbage_stdin_and_unknown_flags() {
     }
     drop(listener);
 }
+
+/// Spec §2.7 end to end: hook stdin's message and `agent report --msg` land
+/// sanitised, a hook kind that is no kind name and a session id with shell
+/// syntax are dropped, and a status format showing the message runs nothing.
+#[test]
+fn hook_and_cli_text_reach_the_server_sanitised() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "main", "-x", "100", "-y", "30"])
+        .expect("new-session");
+    let pane = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .expect("pane id")
+        .trim()
+        .to_string();
+    let x = srv.home.join("X");
+    let evil = format!(
+        "A\x1b]2;PWN\x07B\u{85}C#(touch {})D##[range=user|x]E$(touch {})",
+        x.display(),
+        x.display()
+    );
+    let want = format!(
+        "A]2;PWNBC_(touch {})D####[range=user|x]E$(touch {})",
+        x.display(),
+        x.display()
+    );
+    let payload = serde_json::json!({"message": evil, "session_id": "s;touch X"}).to_string();
+    let mut cmd = srv.command();
+    cmd.args(["agent", "report", "blocked", "--hook", "bad kind!"])
+        .env("GROFE_PANE", &pane)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().expect("spawn hook");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(payload.as_bytes())
+        .expect("payload");
+    assert!(child.wait().expect("wait").success());
+    let list = || {
+        srv.cmd(&["agent", "list", "-F", "#{agent_kind}|#{agent_msg}"])
+            .unwrap_or_default()
+    };
+    common::wait_until(|| list().contains("PWN"), Duration::from_secs(10))
+        .unwrap_or_else(|e| panic!("{e}: {:?}", list()));
+    assert_eq!(list().trim_end(), format!("|{want}"));
+    let resume = srv
+        .cmd(&["display-message", "-p", "-t", &pane, "#{pane_resume}"])
+        .unwrap_or_default();
+    assert!(!resume.contains("touch"), "{resume:?}");
+
+    srv.cmd(&[
+        "agent", "report", "working", "-t", &pane, "--kind", "claude", "--msg", &evil,
+    ])
+    .expect("report --msg");
+    assert_eq!(list().trim_end(), format!("claude|{want}"));
+
+    srv.cmd(&["set-option", "-g", "status-right", "#{agent_msg}"])
+        .expect("status-right");
+    let shown = srv
+        .cmd(&["display-message", "-p", "-t", &pane, "#{agent_msg}"])
+        .expect("display");
+    assert_eq!(shown.trim_end(), want);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!x.exists(), "agent text ran a command");
+}

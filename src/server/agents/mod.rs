@@ -362,6 +362,37 @@ mod tests {
         assert!(c.session_changed);
     }
 
+    /// Spec §2.7 at the store: an OSC 7501 `msg` (base64) and an OSC 9/777
+    /// text are sanitised like a CLI `--msg`; an OSC 7501 `app` that is not
+    /// a kind name is dropped.
+    #[test]
+    fn osc_texts_are_sanitised_when_stored() {
+        use base64::Engine as _;
+        let evil = "A\x1b[31m\x07\u{85}B#(touch X)##[range=user|x]";
+        let want = "A[31mB_(touch X)####[range=user|x]";
+        let body = format!(
+            "state=blocked:msg={}:app=a b",
+            base64::engine::general_purpose::STANDARD.encode(evil)
+        );
+        let Some(osc::Osc7501::Report {
+            state, msg, app, ..
+        }) = osc::parse(body.as_bytes())
+        else {
+            panic!("a report");
+        };
+        assert_eq!(app, None);
+        let mut r = report(state, 1);
+        r.msg = msg;
+        let mut ag = Agents::default();
+        ag.apply(P, r, false, Instant::now());
+        assert_eq!(ag.get(P).and_then(|a| a.msg.as_deref()), Some(want));
+
+        let mut ag = Agents::default();
+        ag.ensure(P, "claude", None, Instant::now());
+        assert!(ag.attention(P, Some(evil.into())));
+        assert_eq!(ag.get(P).and_then(|a| a.msg.as_deref()), Some(want));
+    }
+
     #[test]
     fn attention_on_unreported_only() {
         let now = Instant::now();
