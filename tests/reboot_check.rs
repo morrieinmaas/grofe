@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::Duration;
 
-use common::{CmdOutput, TestServer};
+use common::{CmdOutput, PROMPT, TestServer};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -32,6 +32,17 @@ fn server_with_config(config: &str) -> TestServer {
     let srv = srv.restart();
     srv.cmd(&["new-session", "-d", "-s", "main", "-x", "80", "-y", "24"])
         .expect("new-session");
+    // The login shell's startup is done: until then its foreground process
+    // can be a startup command that exits before pane-set-resume binds it.
+    srv.wait_for(
+        || {
+            srv.capture("main:0.0")
+                .lines()
+                .any(|l| l.trim_end().ends_with(PROMPT.trim_end()))
+        },
+        Duration::from_secs(10),
+    )
+    .expect("the shell's prompt");
     srv
 }
 
