@@ -282,6 +282,9 @@ pub struct ClientEntry {
     held_full: bool,
     /// Needs a new frame.
     dirty: bool,
+    /// When the toast last shown here expires, as [`deadline`] last saw
+    /// it: the toast is gone by then, so [`tick`] cannot work it out.
+    toast_until: std::cell::Cell<Option<Instant>>,
     outbox: Outbox,
     exit: Option<oneshot::Sender<String>>,
 }
@@ -591,6 +594,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             flags,
             mouse_modes: None,
             dirty: true,
+            toast_until: std::cell::Cell::new(None),
             outbox,
             exit: Some(exit_tx),
         },
@@ -1853,6 +1857,15 @@ pub fn deadline(state: &State) -> Option<Instant> {
         crate::server::picker::deadline(state),
     ]
     .into_iter()
+    .chain(state.clients.iter().map(|(id, c)| {
+        let at = crate::server::toast::deadline(state, *id);
+        // Remembered: once it passes the toast is gone, and `tick` must
+        // still know to redraw.
+        if at.is_some() {
+            c.toast_until.set(at);
+        }
+        at
+    }))
     .chain(r.owners.values().map(SizeOwner::deadline))
     .chain(clients)
     .flatten()
@@ -1890,6 +1903,14 @@ pub fn tick(state: &mut State, now: Instant) {
             .is_some_and(|(_, until)| until.is_some_and(|u| u <= now))
         {
             c.message = None;
+            c.dirty = true;
+            request_render(state, now);
+        }
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
+        if c.toast_until.get().is_some_and(|d| d <= now) {
+            c.toast_until.set(None);
             c.dirty = true;
             request_render(state, now);
         }
@@ -2669,13 +2690,27 @@ fn pane_looks(
                 w.floating(*id).is_some(),
             )
         });
+        // A blocked agent's frame asks for attention, active or not.
+        let blocked = state
+            .agents
+            .get(*id)
+            .is_some_and(|a| a.state == crate::server::agents::AgentState::Blocked);
+        let (border, active_border) = if blocked {
+            let style = status::base_style(opt("agent-blocked-border-style"), &vars);
+            (style, style)
+        } else {
+            (
+                status::base_style(opt("pane-border-style"), &vars),
+                status::base_style(opt("pane-active-border-style"), &vars),
+            )
+        };
         looks.panes.insert(
             *id,
             render::PaneLook {
                 fg,
                 bg,
-                border: status::base_style(opt("pane-border-style"), &vars),
-                active_border: status::base_style(opt("pane-active-border-style"), &vars),
+                border,
+                active_border,
                 title,
                 tab,
                 index: order.iter().position(|p| p == id).unwrap_or(0) + base_index,
@@ -4418,6 +4453,7 @@ mod tests {
                 flags: ClientFlags::default(),
                 mouse_modes: None,
                 dirty: false,
+                toast_until: std::cell::Cell::new(None),
                 outbox,
                 exit: None,
             },
@@ -4446,6 +4482,78 @@ mod tests {
             .options
             .set(Owner::Session(session), name, value, false)
             .unwrap();
+    }
+
+    /// The client whose toast expires is redrawn when the deadline passes,
+    /// though the toast itself is already gone by then.
+    #[test]
+    fn toast_deadline_wakes() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        tick(&mut state, now);
+        state.clients.get_mut(&id).expect("client").dirty = false;
+        state.clients[&id]
+            .toast_until
+            .set(Some(now + Duration::from_secs(5)));
+        tick(&mut state, now + Duration::from_secs(1));
+        assert_ne!(
+            state.registry.last_render,
+            Some(now + Duration::from_secs(1))
+        );
+        tick(&mut state, now + Duration::from_secs(5));
+        // Marked dirty and rendered in the same tick.
+        assert_eq!(
+            state.registry.last_render,
+            Some(now + Duration::from_secs(5))
+        );
+        assert_eq!(state.clients[&id].toast_until.get(), None);
+    }
+
+    /// A blocked agent pane's frame takes `agent-blocked-border-style`,
+    /// active or not; a working one keeps the normal border styles.
+    #[tokio::test]
+    async fn blocked_pane_border_style() {
+        use crate::server::agents::{AgentState, Report, ReportState};
+        let (mut state, pane) = pane_with_agents();
+        let id = ClientId(1);
+        let entry = state_with_client().0.clients.remove(&id).expect("client");
+        state.clients.insert(id, entry);
+        state
+            .model
+            .options
+            .set(
+                Owner::Global,
+                "agent-blocked-border-style",
+                "fg=yellow",
+                false,
+            )
+            .unwrap();
+        let report = |s| Report {
+            state: ReportState::Set(s),
+            kind: None,
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        let look = |state: &State| {
+            let c = &state.clients[&id];
+            let w = state.model.windows.values().next().expect("window");
+            pane_looks(state, c, w, &[pane]).panes[&pane].clone()
+        };
+        let plain = look(&state);
+        let now = Instant::now();
+        let r = report(AgentState::Working);
+        state.agents.apply(pane, r, false, now);
+        assert_eq!(look(&state).border, plain.border);
+        let r = Report {
+            ts: 2,
+            ..report(AgentState::Blocked)
+        };
+        state.agents.apply(pane, r, false, now);
+        let blocked = look(&state);
+        assert_ne!(blocked.border, plain.border);
+        assert_eq!(blocked.active_border, blocked.border);
     }
 
     /// `lock-after-time` fires once per idle spell, as tmux's one-shot

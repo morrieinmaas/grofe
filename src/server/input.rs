@@ -1824,6 +1824,7 @@ pub fn default_bindings() -> KeyTables {
     );
     bind("M-Space", &["next-layout"], false, "Select next layout");
     bind("U", &["choose-agent"], false, "Pick an agent");
+    bind("y", &["choose-notification"], false, "Show notifications");
     bind("?", &["list-keys", "-N"], false, "List key bindings");
     bind("r", &["refresh-client"], false, "Redraw the current client");
     bind(
@@ -1957,6 +1958,18 @@ pub fn default_bindings() -> KeyTables {
             Binding::new(cmds, false, BindingSource::Default),
         );
     }
+    // A click on the status line's agents badge opens the tray; any other
+    // click switches client, as tmux's stock row does.
+    if let (Ok(key), Ok(cmds)) = (
+        parse_key("MouseDown1Status"),
+        crate::cmd::split_command_string(GROFE_STATUS_CLICK),
+    ) {
+        t.insert(
+            ROOT_TABLE,
+            key,
+            Binding::new(cmds, false, BindingSource::Default),
+        );
+    }
     for (table, bindings) in t.tables.iter_mut() {
         for b in bindings.values_mut() {
             b.group = Some(default_group(table, &b.cmds).to_string());
@@ -1998,7 +2011,7 @@ fn default_group(table: &str, cmds: &[Vec<String>]) -> &'static str {
         "copy-mode" | "paste-buffer" | "list-buffers" | "choose-buffer" | "delete-buffer" => "copy",
         "next-layout" | "select-layout" => "layout",
         "agent" | "choose-agent" => "agents",
-        "show-messages" => "notifications",
+        "show-messages" | "choose-notification" => "notifications",
         "detach-client" | "choose-client" | "suspend-client" | "refresh-client" => "client",
         _ => "other",
     }
@@ -2008,6 +2021,10 @@ fn default_group(table: &str, cmds: &[Vec<String>]) -> &'static str {
 /// pane clicked floats, or unfloats if it is floating.
 pub const GROFE_FLOAT_CONTROL: &str =
     r##"if-shell -F -t = "#{pane_floating_flag}" { unfloat-pane -t = } { float-pane -t = }"##;
+
+/// grofe identity's `MouseDown1Status`: the agents badge opens the
+/// notification tray, any other range is tmux's `switch-client -t =`.
+pub const GROFE_STATUS_CLICK: &str = r##"if-shell -F "#{==:#{mouse_status_range},agents}" { choose-notification } { switch-client -t = }"##;
 
 /// grofe identity's `MouseDown3Pane` (FR.4): a pane that asked for the
 /// mouse is focused and gets the click, as tmux's stock row sends it on;
@@ -5455,6 +5472,33 @@ mod tests {
         let t = KeyTables::from_config(&[kb]);
         let b = t.exact(PREFIX_TABLE, &parse_key("x").unwrap()).unwrap();
         assert_eq!(b.group.as_deref(), Some("window"));
+    }
+
+    #[test]
+    fn y_binding_grofe_only() {
+        let mut t = default_bindings();
+        let y = t.exact(PREFIX_TABLE, &parse_key("y").unwrap()).unwrap();
+        assert_eq!(y.cmds, vec![argv(&["choose-notification"])]);
+        assert_eq!(y.desc.as_deref(), Some("Show notifications"));
+        assert_eq!(y.group.as_deref(), Some("notifications"));
+        t.use_tmux_stock();
+        assert!(t.exact(PREFIX_TABLE, &parse_key("y").unwrap()).is_none());
+    }
+
+    #[test]
+    fn badge_click_opens_tray() {
+        let key = parse_key("MouseDown1Status").unwrap();
+        let mut t = default_bindings();
+        let text = |t: &KeyTables| format!("{:?}", t.exact(ROOT_TABLE, &key).unwrap().cmds);
+        let grofe = text(&t);
+        assert!(grofe.contains("mouse_status_range"), "{grofe}");
+        assert!(grofe.contains("choose-notification"), "{grofe}");
+        assert!(grofe.contains("switch-client"), "{grofe}");
+        t.use_tmux_stock();
+        assert_eq!(
+            t.exact(ROOT_TABLE, &key).unwrap().cmds,
+            vec![argv(&["switch-client", "-t", "="])]
+        );
     }
 
     #[test]
