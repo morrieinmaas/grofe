@@ -27,6 +27,7 @@ pub use load::{load, load_one, load_with_file};
 pub use provenance::{Layer, Provenance, Source};
 
 use crate::server::input::Key;
+use crate::server::notify::NotifyConfig;
 
 /// TOML key (spec §5.2) to tmux option name (R4), for every built-in
 /// option. Shared with `import-tmux` (TI.1) and the tmux front end (FE.1).
@@ -87,6 +88,12 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("pane-gap", "pane-gap"),
     ("pane-frame-title", "pane-frame-title"),
     ("pane-frame-tab-ends", "pane-frame-tab-ends"),
+    ("agent-glyph-blocked", "agent-glyph-blocked"),
+    ("agent-glyph-error", "agent-glyph-error"),
+    ("agent-glyph-unseen", "agent-glyph-unseen"),
+    ("agent-glyph-working", "agent-glyph-working"),
+    ("notify-muted-glyph", "notify-muted-glyph"),
+    ("agent-blocked-border-style", "agent-blocked-border-style"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),
@@ -488,6 +495,8 @@ pub struct Resolved {
     pub plugins: BTreeMap<String, ConfigPlugin>,
     /// `[agents]` and `[agents.kinds.<name>]`, merged key by key.
     pub agents: ConfigAgents,
+    /// `[notify]`, key by key over the defaults.
+    pub notify: NotifyConfig,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
     /// `[user-options]` (TP.0): global user options by name, `@` included,

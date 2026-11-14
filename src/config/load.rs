@@ -15,6 +15,7 @@ use super::{
     OPTION_NAMES, Provenance, Resolved, Source, Ty, closest, tmux_name, toml_type,
 };
 pub mod agents;
+pub mod notify;
 pub mod plugins;
 
 use crate::cmd;
@@ -96,6 +97,7 @@ struct Loader {
     sources: BTreeMap<String, ConfigSource>,
     plugins: plugins::Merge,
     agents: agents::Merge,
+    notify: notify::Merge,
     user_options: BTreeMap<String, String>,
     environment: Vec<(String, String)>,
     load_commands: Vec<ConfigCommand>,
@@ -173,6 +175,7 @@ impl Loader {
             sources: BTreeMap::new(),
             plugins: plugins::Merge::default(),
             agents: agents::Merge::default(),
+            notify: notify::Merge::default(),
             user_options: BTreeMap::new(),
             environment: Vec::new(),
             load_commands: Vec::new(),
@@ -195,6 +198,7 @@ impl Loader {
             sources: self.sources,
             plugins: self.plugins.resolved(),
             agents: self.agents.resolved(),
+            notify: self.notify.resolved(),
             user_options: self.user_options,
             environment: self.environment,
             load_commands: self.load_commands,
@@ -275,6 +279,7 @@ impl Loader {
                 "hooks" => self.hooks(&f, line, v.get_ref()),
                 "plugins" => self.plugins(&f, line, v.get_ref()),
                 "agents" => self.agents(&f, line, v.get_ref()),
+                "notify" => self.notify(&f, line, v.get_ref()),
                 "user-options" => self.user_options(&f, line, v.get_ref()),
                 "environment" => self.environment(&f, line, v.get_ref()),
                 "load-commands" => self.load_commands(&f, line, v.get_ref()),
@@ -427,6 +432,7 @@ impl Loader {
                         "hooks",
                         "plugins",
                         "agents",
+                        "notify",
                         "status.sources",
                         "user-options",
                         "environment",

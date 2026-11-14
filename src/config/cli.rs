@@ -185,6 +185,7 @@ fn run(args: &[String]) -> Result<String, String> {
                 plugin(&mut out, name, p);
             }
             out.push_str(&agents_lines(&r, home, explain, "agents")?);
+            out.push_str(&notify_lines(&r, home, explain, "notify")?);
             for (name, value) in &r.user_options {
                 user_option(&mut out, name, value);
             }
@@ -195,6 +196,9 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         Some(k) if k == "agents" || k.starts_with("agents.") => {
             out.push_str(&agents_lines(&r, home, explain, k)?);
+        }
+        Some(k) if k == "notify" || k.starts_with("notify.") => {
+            out.push_str(&notify_lines(&r, home, explain, k)?);
         }
         Some("plugins") => {
             for (name, p) in &r.plugins {
@@ -410,6 +414,64 @@ fn agents_lines(
         return Err(format!("show-config: unknown key {key}"));
     }
     Ok(out)
+}
+
+/// The `[notify]` lines under `key` (`notify` or `notify.<key>`).
+fn notify_lines(
+    r: &Resolved,
+    home: Option<&Path>,
+    explain: bool,
+    key: &str,
+) -> Result<String, String> {
+    let n = &r.notify;
+    let list =
+        |v: &[String]| toml::Value::Array(v.iter().cloned().map(toml::Value::String).collect());
+    let secs = |d: std::time::Duration| {
+        let ms = d.as_millis();
+        quote(&if ms.is_multiple_of(1000) {
+            format!("{}s", ms / 1000)
+        } else {
+            format!("{ms}ms")
+        })
+    };
+    let mut rows = vec![
+        ("enabled", n.enabled.to_string()),
+        ("on", list(&n.on).to_string()),
+        ("toast", list(&n.toast).to_string()),
+        ("desktop", list(&n.desktop).to_string()),
+        ("history", n.history.to_string()),
+        ("skip-when-seen", n.skip_when_seen.to_string()),
+        ("done-min-work", secs(n.done_min_work)),
+        ("min-interval", secs(n.min_interval)),
+        ("toast-time", secs(n.toast_time)),
+        ("delivery", quote(&n.delivery)),
+        ("sound", n.sound.to_string()),
+    ];
+    if let Some(c) = &n.command {
+        rows.push(("command", list(c).to_string()));
+    }
+    let mut out = String::new();
+    let mut found = key == "notify";
+    for (name, value) in rows {
+        let path = format!("notify.{name}");
+        if key != "notify" && key != path {
+            continue;
+        }
+        found = true;
+        out.push_str(&format!("{path} = {value}\n"));
+        if explain {
+            let by = r
+                .provenance
+                .get(&path)
+                .map_or_else(|| "built-in defaults".to_string(), |s| s.describe(home));
+            out.push_str(&format!("  set by {by}\n"));
+        }
+    }
+    if found {
+        Ok(out)
+    } else {
+        Err(format!("show-config: unknown key {key}"))
+    }
 }
 
 fn kind_value(k: &ConfigKind) -> String {
