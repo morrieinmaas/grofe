@@ -45,7 +45,10 @@ add_path() {
 }
 
 toolchain() {
-  if command -v cargo >/dev/null && cargo --version | grep -q "^cargo $RUST_TOOLCHAIN "; then
+  # A preinstalled cargo of the right version is not enough: a runner image
+  # can ship the toolchain without rustfmt or clippy.
+  if command -v cargo >/dev/null && cargo --version | grep -q "^cargo $RUST_TOOLCHAIN " &&
+    cargo fmt --version >/dev/null 2>&1 && cargo clippy --version >/dev/null 2>&1; then
     return 0
   fi
   if ! command -v rustup >/dev/null; then
