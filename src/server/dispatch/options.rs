@@ -110,6 +110,15 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ("pane-frames", "off"),
     ("pane-gap", "0"),
     ("pane-border-lines", "single"),
+    ("status-right", "\"#{pane_title}\" %H:%M %d-%b-%y"),
+    (
+        "window-status-format",
+        "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+    ),
+    (
+        "window-status-current-format",
+        "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+    ),
 ];
 
 /// grofe's own options that tmux's CLI does not know (spec
@@ -121,6 +130,12 @@ const GROFE_ONLY: &[&str] = &[
     "pane-gap",
     "pane-frame-title",
     "pane-frame-tab-ends",
+    "agent-glyph-blocked",
+    "agent-glyph-error",
+    "agent-glyph-unseen",
+    "agent-glyph-working",
+    "notify-muted-glyph",
+    "agent-blocked-border-style",
 ];
 
 /// `pane-border-format`'s default, tmux 3.7b's: its `[z]` and `[x]`
@@ -255,7 +270,7 @@ const BUILTINS: &[Builtin] = &[
         name: "status-right",
         kind: Kind::String,
         scope: OptionScope::Session,
-        default: "\"#{pane_title}\" %H:%M %d-%b-%y",
+        default: "\"#{pane_title}\" %H:%M %d-%b-%y#[range=user|agents]#{agents_badge}#[norange]",
     },
     Builtin {
         name: "status-left-length",
@@ -291,13 +306,49 @@ const BUILTINS: &[Builtin] = &[
         name: "window-status-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
     },
     Builtin {
         name: "window-status-current-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
+    },
+    Builtin {
+        name: "agent-glyph-blocked",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "⏸",
+    },
+    Builtin {
+        name: "agent-glyph-error",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "✗",
+    },
+    Builtin {
+        name: "agent-glyph-unseen",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "✓",
+    },
+    Builtin {
+        name: "agent-glyph-working",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "●",
+    },
+    Builtin {
+        name: "notify-muted-glyph",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "🔕",
+    },
+    Builtin {
+        name: "agent-blocked-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "fg=yellow",
     },
     // TC.11: tmux 3.7b's names, scopes, choices and defaults for the rest
     // of the status line (spec §4.5's status-line row).
@@ -4616,7 +4667,9 @@ impl FormatVars for ServerVars<'_> {
             | "agents_total"
             | "agents_blocked"
             | "agents_working"
-            | "agents_attention" => Some(self.agent_var(name)),
+            | "agents_attention"
+            | "agents_badge" => Some(self.agent_var(name)),
+            "notifications_unread" => Some(self.state.notify.unread().to_string()),
             "session_group_attached"
             | "session_group_attached_list"
             | "session_group_many_attached" => {
@@ -4710,6 +4763,27 @@ impl<'a> ServerVars<'a> {
             "agents_blocked" => return counts(&|a| a.state == AgentState::Blocked),
             "agents_working" => return counts(&|a| a.state == AgentState::Working),
             "agents_attention" => return counts(&needs_you),
+            "agents_badge" => {
+                let glyph = |n: &str| self.inner.vars().get(n).unwrap_or_default();
+                let mut parts: Vec<String> = [
+                    (Rank::Blocked, "agent-glyph-blocked"),
+                    (Rank::Error, "agent-glyph-error"),
+                    (Rank::Unseen, "agent-glyph-unseen"),
+                ]
+                .iter()
+                .filter_map(|(rank, option)| {
+                    let n = agents
+                        .iter()
+                        .filter(|(_, a)| agents::rank(a) == *rank)
+                        .count();
+                    (n > 0).then(|| format!("{}{n}", glyph(option)))
+                })
+                .collect();
+                if self.state.notify.muted(std::time::Instant::now()) {
+                    parts.push(glyph("notify-muted-glyph"));
+                }
+                return parts.join(" ");
+            }
             "window_agent_state" | "session_agent_state" => {
                 let model = &self.state.model;
                 let Some(window) = model.panes.get(&self.pane).map(|p| p.window) else {
@@ -6196,6 +6270,75 @@ mod tests {
         assert_eq!(get("agents_attention"), Some("1".into()));
         assert_eq!(get("agent_attention"), Some("1".into()));
         assert_eq!(get("session_agent_state"), Some("blocked".into()));
+    }
+
+    fn blocked_error_unseen(state: &mut State, a: PaneId, b: PaneId) {
+        use crate::server::agents::AgentState;
+        let now = std::time::Instant::now();
+        state
+            .agents
+            .apply(a, report(AgentState::Blocked, 1), true, now);
+        state
+            .agents
+            .apply(b, report(AgentState::Done, 1), false, now);
+    }
+
+    #[tokio::test]
+    async fn badge_empty_when_quiet() {
+        let (state, a, _) = two_window_state();
+        assert_eq!(var(&state, a, "agents_badge"), Some(String::new()));
+        assert_eq!(var(&state, a, "notifications_unread"), Some("0".into()));
+    }
+
+    #[tokio::test]
+    async fn badge_counts_and_glyphs() {
+        let (mut state, a, b) = two_window_state();
+        blocked_error_unseen(&mut state, a, b);
+        assert_eq!(var(&state, a, "agents_badge"), Some("⏸1 ✓1".into()));
+    }
+
+    #[tokio::test]
+    async fn badge_muted_glyph() {
+        let (mut state, a, b) = two_window_state();
+        state.notify.mute(None);
+        assert_eq!(var(&state, a, "agents_badge"), Some("🔕".into()));
+        blocked_error_unseen(&mut state, a, b);
+        assert_eq!(var(&state, a, "agents_badge"), Some("⏸1 ✓1 🔕".into()));
+    }
+
+    #[tokio::test]
+    async fn default_window_format_shows_glyph() {
+        let (mut state, a, b) = two_window_state();
+        blocked_error_unseen(&mut state, a, b);
+        let fmt = state
+            .model
+            .options
+            .lookup("window-status-format", &[])
+            .unwrap()
+            .to_string();
+        let out = |pane| {
+            let ctx = FormatCtx::new(&state.model, pane);
+            expand(&fmt, &ServerVars::new(&state, pane, &ctx))
+        };
+        assert!(out(a).ends_with('⏸'), "{}", out(a));
+        assert!(out(b).ends_with('✓'), "{}", out(b));
+    }
+
+    #[test]
+    fn tmux_identity_formats_unchanged() {
+        let mut tmux = Options::new(false);
+        tmux.use_tmux_defaults(None);
+        let tmux_format = "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }";
+        for name in ["window-status-format", "window-status-current-format"] {
+            assert_eq!(tmux.lookup(name, &[]), Some(tmux_format), "{name}");
+        }
+        assert_eq!(
+            tmux.lookup("status-right", &[]),
+            Some("\"#{pane_title}\" %H:%M %d-%b-%y")
+        );
+        let grofe = Options::new(false);
+        let right = grofe.lookup("status-right", &[]).unwrap();
+        assert!(right.ends_with("#[range=user|agents]#{agents_badge}#[norange]"));
     }
 
     #[tokio::test]
