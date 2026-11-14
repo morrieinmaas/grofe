@@ -836,6 +836,31 @@ impl PaneHandle {
         self.dirty.store(true, Ordering::Release);
     }
 
+    /// Prints `text` on the pane's last row of a dead pane, as tmux's
+    /// `server_destroy_pane` does for `remain-on-exit-format`: the screen
+    /// scrolls up one row first, so the text never covers output.
+    pub fn show_dead_text(&self, text: &str) {
+        // ponytail: a line wider than the pane is cut by chars, not cells.
+        let cols = lock(&self.emu).term.columns();
+        let line: String = text
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(cols)
+            .collect();
+        let bytes = format!("\x1b[0m\x1b[9999;1H\n{line}");
+        {
+            let mut emu = lock(&self.emu);
+            let Emu {
+                term,
+                marks,
+                parser,
+                ..
+            } = &mut *emu;
+            parser.advance(&mut written::Written(term, marks, None), bytes.as_bytes());
+        }
+        self.dirty.store(true, Ordering::Release);
+    }
+
     /// Tells the pty `size` now, dropping any held size ([`WinsizeGate`]).
     fn set_winsize(&self, size: Size) -> stdio::Result<()> {
         let key = winsize_key(&size.winsize(*lock(&self.cell_px)));
