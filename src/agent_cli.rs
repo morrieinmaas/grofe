@@ -18,6 +18,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(30);
 /// Most bytes of the hook payload read from stdin.
 const MAX_PAYLOAD: u64 = 1 << 20;
 
+/// How long the hook waits for its payload, in all, before reporting the
+/// state without it.
+const STDIN_DEADLINE: Duration = Duration::from_millis(200);
+
 /// Most characters of a tool input summary.
 const SUMMARY_LEN: usize = 60;
 
@@ -28,17 +32,17 @@ pub fn run(globals_socket: &Path, args: &[String]) -> ExitCode {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_micros() as u64);
     let pane = std::env::var("GROFE_PANE").ok();
-    hook(
-        globals_socket,
-        args,
-        pane.as_deref(),
-        &mut std::io::stdin(),
-        ts,
-    );
+    hook(globals_socket, args, pane.as_deref(), std::io::stdin(), ts);
     ExitCode::SUCCESS
 }
 
-fn hook(socket: &Path, args: &[String], pane: Option<&str>, stdin: &mut dyn Read, ts: u64) {
+fn hook<R: Read + Send + 'static>(
+    socket: &Path,
+    args: &[String],
+    pane: Option<&str>,
+    stdin: R,
+    ts: u64,
+) {
     let Some(pane) = pane.filter(|p| !p.is_empty()) else {
         return;
     };
@@ -52,8 +56,7 @@ fn hook(socket: &Path, args: &[String], pane: Option<&str>, stdin: &mut dyn Read
     else {
         return;
     };
-    let mut payload = Vec::new();
-    let _ = stdin.take(MAX_PAYLOAD).read_to_end(&mut payload);
+    let payload = read_payload(stdin);
     let mut argv = hook_argv(state, kind, &payload, pane, ts);
     // Only a value the server accepts, so a bad one cannot fail the report.
     if let Some(b) = args
@@ -65,6 +68,19 @@ fn hook(socket: &Path, args: &[String], pane: Option<&str>, stdin: &mut dyn Read
         argv.extend(["--blocked".to_string(), b.clone()]);
     }
     send(socket, &argv);
+}
+
+/// Reads at most [`MAX_PAYLOAD`] bytes of `stdin` on a helper thread, waiting
+/// [`STDIN_DEADLINE`] in all. A stdin that never closes yields no payload and
+/// leaves the thread behind; the process exits without it.
+fn read_payload<R: Read + Send + 'static>(stdin: R) -> Vec<u8> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut payload = Vec::new();
+        let _ = stdin.take(MAX_PAYLOAD).read_to_end(&mut payload);
+        let _ = tx.send(payload);
+    });
+    rx.recv_timeout(STDIN_DEADLINE).unwrap_or_default()
 }
 
 /// Connects (30 ms at most), writes the hello and request, and does not
@@ -226,15 +242,15 @@ mod tests {
     #[test]
     fn hook_exit_0_no_server() {
         let args = strs(&["agent", "report", "done", "--hook", "claude"]);
-        hook(&no_server(), &args, Some("%1"), &mut &b"{}"[..], 1);
+        hook(&no_server(), &args, Some("%1"), &b"{}"[..], 1);
     }
 
     #[test]
     fn hook_exit_0_unknown_flag() {
         let args = strs(&["agent", "report", "--bogus", "--hook"]);
-        hook(&no_server(), &args, Some("%1"), &mut &b""[..], 1);
+        hook(&no_server(), &args, Some("%1"), &b""[..], 1);
         let args = strs(&["agent", "report", "done", "--nope", "--hook", "claude"]);
-        hook(&no_server(), &args, Some("%1"), &mut &b""[..], 1);
+        hook(&no_server(), &args, Some("%1"), &b""[..], 1);
         assert_eq!(
             format!("{:?}", run(&no_server(), &args)),
             format!("{:?}", ExitCode::SUCCESS)
@@ -248,7 +264,7 @@ mod tests {
         let l = UnixListener::bind(&sock).unwrap();
         l.set_nonblocking(true).unwrap();
         let args = strs(&["agent", "report", "done", "--hook", "claude"]);
-        hook(&sock, &args, None, &mut &b""[..], 1);
+        hook(&sock, &args, None, &b""[..], 1);
         assert!(l.accept().is_err(), "no connection without a pane");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -260,7 +276,7 @@ mod tests {
         let l = UnixListener::bind(&sock).unwrap();
         let args = strs(&["agent", "report", "done", "--hook", "claude"]);
         let t = Instant::now();
-        hook(&sock, &args, Some("%1"), &mut &b"{}"[..], 1);
+        hook(&sock, &args, Some("%1"), &b"{}"[..], 1);
         assert!(t.elapsed() < Duration::from_millis(100));
         let (mut s, _) = l.accept().unwrap();
         let mut got = String::new();
@@ -293,12 +309,12 @@ mod tests {
             "--hook",
             "claude",
         ]);
-        hook(&sock, &args, Some("%1"), &mut &b"{}"[..], 1);
+        hook(&sock, &args, Some("%1"), &b"{}"[..], 1);
         let got = read(&l);
         assert!(got.contains(r#""--blocked","permission""#), "{got}");
         let mut args = args;
         args[4] = "$(touch x)".into();
-        hook(&sock, &args, Some("%1"), &mut &b"{}"[..], 1);
+        hook(&sock, &args, Some("%1"), &b"{}"[..], 1);
         let got = read(&l);
         assert!(
             !got.contains("--blocked") && !got.contains("touch"),

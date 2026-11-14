@@ -188,3 +188,30 @@ fn hook_and_cli_text_reach_the_server_sanitised() {
     std::thread::sleep(Duration::from_millis(300));
     assert!(!x.exists(), "agent text ran a command");
 }
+
+#[test]
+fn hook_does_not_wait_for_a_stdin_that_never_closes() {
+    let srv = TestServer::unstarted();
+    let mut cmd = srv.command();
+    cmd.args(REPORT)
+        .env("GROFE_PANE", "%0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let start = Instant::now();
+    let mut child = cmd.spawn().expect("spawn hook");
+    // The pipe stays open and silent until the hook has exited.
+    let _held = child.stdin.take();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait hook") {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(1) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("hook still waiting on stdin after {:?}", start.elapsed());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success(), "exited {status}");
+}
