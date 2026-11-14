@@ -699,6 +699,28 @@ pub struct PaneSetResume {
     pub argv: Vec<String>,
 }
 
+/// `agent report|list|next|seen` (grofe's own): native agent status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentCmd {
+    Report(AgentReport),
+    List { format: Option<String> },
+    Next,
+    Seen { target: Target, all: bool },
+}
+
+/// `agent report <state> [-t pane] [--kind k] [--msg text] [--blocked b]
+/// [--session-id id] [--ts N]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentReport {
+    pub state: String,
+    pub target: Target,
+    pub kind: Option<String>,
+    pub msg: Option<String>,
+    pub blocked: Option<String>,
+    pub session_id: Option<String>,
+    pub ts: Option<u64>,
+}
+
 /// `reboot-check` (grofe's own, T4.5, spec §6): each pane's verdict from
 /// the snapshot on disk: `[--json]`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1655,6 +1677,7 @@ pub enum Command {
     PluginRestart(PluginRestart),
     // M4 (the stub edit adds them; T4.2 and T4.5 implement them).
     PaneSetResume(PaneSetResume),
+    Agent(AgentCmd),
     RebootCheck(RebootCheck),
     CommandPrompt(CommandPrompt),
     RunShell(RunShell),
