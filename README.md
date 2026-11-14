@@ -238,6 +238,45 @@ same actions are `float-pane` and `unfloat-pane`, Float and Unfloat in the
 right-click menu, and Ctrl-dragging a floating pane onto a tile docks it. See
 `docs/floating-pane-mouse.md` for the details.
 
+## Scratchpads
+
+A scratchpad is a floating pane for a quick command that you want out of the
+way. `prefix S` hides it; press it again and the newest hidden scratchpad comes
+back, or the first one opens if none is hidden. `prefix a` opens another,
+centred over the tiles. `prefix A` lists the hidden scratchpads, newest first,
+each keyed `0` to `9`. The keys can be rebound in the TOML `[keys]` table like
+any other.
+
+Hidden scratchpads are kept for the whole server, so you can show one in any
+window. Unfloat a scratchpad with `prefix f` and it becomes a normal pane.
+The commands are `new-scratchpad`, `toggle-scratchpad`,
+`show-scratchpad <pane-id>`, `list-scratchpads` and `choose-scratchpad`.
+
+```toml
+scratchpad-history = 10     # hidden scratchpads kept; the oldest closes past this, 0 closes on hide
+```
+
+## Messages and the prompt
+
+A message (`display-message`, or an error such as `Can't find window`) is a
+pill in the middle of the status line, between its left and right parts,
+which stay visible: grey with `ℹ` for information, amber with `▲` for a
+warning (alerts), red with `✗` for an error. It goes after `display-time`,
+as in tmux, or at the next key. The pill's ends are `pane-frame-tab-ends`,
+the frames' glyphs. The command prompt (`prefix :`, `command-prompt`,
+`confirm-before`) opens as the same kind of pill on the status line, or as a
+rounded box a third down the window:
+
+```toml
+prompt-position = "status"  # "centre" (or "center"): a box in the middle of the window
+
+[message]
+pill = true                 # false: tmux's full-width bar in message-style
+```
+
+Under tmux identity `pill` defaults to `false`, so a message looks as it does
+in tmux; the config can still turn it on.
+
 ## Switching from tmux
 
 > **Know the gaps first.** The tmux compatibility layer answers what the

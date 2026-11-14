@@ -6,8 +6,8 @@
 //! - Case 1: prefix M-s saves; after `kill-server`, a fresh server and
 //!   prefix M-r, the sessions, windows, cwds, layouts, pane contents and
 //!   the active window and pane are back.
-//! - Case 2: continuum's timer saves, and a second save starts only after
-//!   the first has ended.
+//! - Case 2: continuum's autosave job never runs on grofe; grofe's
+//!   snapshot does its job.
 //! - Case 3: with `@continuum-restore on`, a fresh server restores the last
 //!   save once.
 //! - Cases 1 and 3 match goldens recorded from tmux 3.7b by the same code
@@ -16,10 +16,10 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::plugin_rig::{
-    PREFIX, Rig, WAIT, geometry, private_tmp, read_golden, recording_tmux, wait_until, write_golden,
+    PREFIX, Rig, WAIT, geometry, read_golden, recording_tmux, wait_until, write_golden,
 };
 
 const TASK: &str = "tp12";
@@ -27,7 +27,7 @@ const GOLDEN: &str = "tp_12";
 const PLUGINS: &[&str] = &["tmux-resurrect", "tmux-continuum"];
 
 /// Wraps canopy's save wrapper for case 2, logging each save's start and
-/// end with its pid. continuum runs the script path as one word.
+/// end with its pid, so a save continuum started would show.
 const SAVE_PROBE: &str = r#"#!/bin/sh
 echo "start $$" >>'<root>/probe.log'
 '<root>/store/plugins/strategies/canopy_save.sh' "$@"
@@ -278,47 +278,46 @@ fn save_and_restore_contents(rig: &Rig) {
     rig.kill_server();
 }
 
+/// Case 2: continuum's autosave job, the `#(continuum_save.sh)` it puts in
+/// status-right, is dropped on grofe (e89b581): grofe's snapshot does its
+/// job, and running it raced tmux's own saves in the shared resurrect
+/// directory. The status line's other jobs still run.
 #[test]
-fn case_2_continuum_autosaves_one_save_at_a_time() {
-    // continuum's launcher locks with directories under the shared /tmp.
-    if !private_tmp("/tmp/tmux-continuum-<server pid>-lock-*") {
-        return;
-    }
+fn case_2_continuums_autosave_job_never_runs() {
     let rig = rig(None);
     rig.start("main");
     rig.t(&["set-option", "-g", "@continuum-save-interval", "1"]);
     rig.t(&["set-option", "-g", "status-interval", "1"]);
     wait_loaded(&rig);
-    // The probe logs each save around canopy's wrapper, which continuum
-    // runs as shipped.
+    // The probe logs any save continuum would start.
     let probe = rig.path("bin/save-probe").display().to_string();
     rig.t(&["set-option", "-g", "@resurrect-save-script-path", &probe]);
+    // An interval and a second ago: continuum would save on the next
+    // status refresh.
+    let due = (now() - 61).to_string();
+    rig.t(&["set-option", "-g", "@continuum-save-last-timestamp", &due]);
+    let status = rig.t(&["show-options", "-gv", "status-right"]);
+    let status = status.trim_end();
+    assert!(status.contains("/continuum_save.sh)"), "{status}");
+    let ticks = rig.path("ticks.log").display().to_string();
+    rig.t(&[
+        "set-option",
+        "-g",
+        "status-right",
+        &format!("{status}#(echo tick >> '{ticks}')"),
+    ]);
     let mut a = rig.attach("main");
-    for n in 1..=2 {
-        // An interval and a second ago: the next status refresh saves.
-        let due = (now() - 61).to_string();
-        rig.t(&["set-option", "-g", "@continuum-save-last-timestamp", &due]);
-        let started = Instant::now();
-        rig.wait_lines("saves.log", n, "continuum's autosave");
-        assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "a save outlasted the interval"
-        );
-        let ended = wait_until(|| rig.lines("probe.log") >= 2 * n, WAIT);
-        assert!(
-            ended.is_ok(),
-            "save {n} never ended: {}",
-            fs::read_to_string(rig.path("probe.log")).unwrap_or_default()
-        );
-    }
-    let log = fs::read_to_string(rig.path("probe.log")).unwrap();
-    let kinds: Vec<&str> = log.lines().map(|l| l.split(' ').next().unwrap()).collect();
+    // With the job kept, the save came some 13 refreshes in, behind the run
+    // continuum's load started: twenty give it room.
+    let ticked = wait_until(|| rig.lines("ticks.log") >= 20, 2 * WAIT);
+    assert!(ticked.is_ok(), "the status line's own job stopped");
+    assert_eq!(rig.lines("probe.log"), 0, "continuum's autosave ran");
+    assert_eq!(rig.lines("saves.log"), 0);
     assert_eq!(
-        kinds,
-        ["start", "end", "start", "end"],
-        "saves overlapped:\n{log}"
+        rig.t(&["show-options", "-gv", "@continuum-save-last-timestamp"])
+            .trim_end(),
+        due
     );
-    assert_eq!(rig.lines("saves.log"), 2);
     rig.kill_server();
     a.wait_exit();
 }

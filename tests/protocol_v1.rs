@@ -72,6 +72,7 @@ fn hellos() -> Vec<(&'static str, Hello)> {
                     kitty_graphics: true,
                     sixel: false,
                     cell_px: Some((9, 18)),
+                    colours: None,
                 },
                 target: Some("main".into()),
                 detach_others: false,

@@ -200,7 +200,9 @@ fn resize_and_cursor() {
         );
     }
 
-    h.send("printf foo\r");
+    // The echo of the typed command must not contain the output, or the
+    // wait ends with the cursor still at column 0 of the next line.
+    h.send("printf 'fo%s' o\r");
     h.wait_for("foo");
     assert!(
         h.text().contains("foo"),

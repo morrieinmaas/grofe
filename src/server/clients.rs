@@ -248,8 +248,9 @@ pub struct ClientEntry {
     /// A message shown on the status line's first row until it expires or
     /// a key is pressed (a failed binding's error, as tmux shows it), in
     /// the language [`status::draw`] reads, and when it expires (`None`
-    /// with `display-time 0`: only a key takes it down, as in tmux).
-    message: Option<(String, Option<Instant>)>,
+    /// with `display-time 0`: only a key takes it down, as in tmux), and
+    /// its level, for `message-pill`.
+    message: Option<(String, Option<Instant>, render::Level)>,
     /// `display-message -N`: a key does not take the message down.
     message_ignores_keys: bool,
     /// The status rows as last drawn, top first, for their click ranges,
@@ -560,6 +561,9 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         Some(tty) if ctx.dialect == crate::protocol::Dialect::Tmux => tty.clone(),
         _ => client_name(id),
     };
+    if req.caps.colours.is_some() {
+        state.model.terminal_colours = req.caps.colours;
+    }
     state.clients.insert(
         id,
         ClientEntry {
@@ -623,7 +627,14 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
     }
     if state.binary.as_ref().is_some_and(|b| b.replaced()) {
         let text = status::escape_hashes(crate::server::build::STALE);
-        display_message(state, id, &text, Some(Duration::from_secs(10)), false);
+        display_message(
+            state,
+            id,
+            &text,
+            Some(Duration::from_secs(10)),
+            false,
+            render::Level::Warning,
+        );
     }
     Ok(Accepted {
         id,
@@ -807,8 +818,13 @@ pub(crate) fn set_key_table(state: &mut State, id: ClientId, table: &str) {
 /// Shows `text` as it is (styles in it are not drawn, as tmux shows a
 /// command's error) on client `id`'s status line for `display-time`.
 pub fn show_message(state: &mut State, id: ClientId, text: &str) {
+    show_message_as(state, id, text, render::Level::Error);
+}
+
+/// [`show_message`] for a message that is not an error.
+pub fn show_message_as(state: &mut State, id: ClientId, text: &str, level: render::Level) {
     log_message(state, id, text);
-    set_message(state, id, status::escape_hashes(text), None, false);
+    set_message(state, id, status::escape_hashes(text), None, false, level);
 }
 
 /// The status-line message area (spec §4.10) for `display-message`
@@ -823,9 +839,10 @@ pub fn display_message(
     text: &str,
     delay: Option<Duration>,
     ignore_keys: bool,
+    level: render::Level,
 ) {
     log_message(state, id, text);
-    set_message(state, id, text.to_string(), delay, ignore_keys);
+    set_message(state, id, text.to_string(), delay, ignore_keys, level);
 }
 
 /// How many messages `show-messages` keeps when `message-limit` is unset:
@@ -1241,6 +1258,7 @@ fn set_message(
     text: String,
     delay: Option<Duration>,
     ignore_keys: bool,
+    level: render::Level,
 ) {
     let now = Instant::now();
     let Some(session) = state.clients.get(&id).map(|c| c.session) else {
@@ -1249,7 +1267,7 @@ fn set_message(
     let time = delay.unwrap_or_else(|| display_time(&state.model, session));
     let until = (!time.is_zero()).then(|| now + time);
     if let Some(c) = state.clients.get_mut(&id) {
-        c.message = Some((text, until));
+        c.message = Some((text, until, level));
         // As tmux: with a delay of 0 (until a key), `-N` does not change
         // whether keys take the message down.
         if until.is_some() {
@@ -1258,6 +1276,17 @@ fn set_message(
         c.dirty = true;
         request_render(state, now);
     }
+}
+
+/// The ends a message or prompt pill takes (`pane-frame-tab-ends`) while
+/// `message-pill` is on for `chain`; `None` draws tmux's full-width bar.
+pub(crate) fn pill_ends<'a>(model: &'a Model, chain: &[Owner]) -> Option<&'a str> {
+    (model.options.lookup("message-pill", chain) != Some("off")).then(|| {
+        model
+            .options
+            .lookup("pane-frame-tab-ends", chain)
+            .unwrap_or("()")
+    })
 }
 
 /// The session's `display-time`, or tmux's default; 0 means until a key.
@@ -1850,7 +1879,7 @@ pub fn deadline(state: &State) -> Option<Instant> {
         [
             c.decoder.deadline(escape),
             c.keys.deadline(),
-            c.message.as_ref().and_then(|(_, until)| *until),
+            c.message.as_ref().and_then(|(_, until, _)| *until),
         ]
     });
     [
@@ -1915,7 +1944,7 @@ pub fn tick(state: &mut State, now: Instant) {
         };
         if c.message
             .as_ref()
-            .is_some_and(|(_, until)| until.is_some_and(|u| u <= now))
+            .is_some_and(|(_, until, _)| until.is_some_and(|u| u <= now))
         {
             c.message = None;
             c.dirty = true;
@@ -2598,8 +2627,8 @@ fn sync_pane_defaults(model: &Model) {
                 continue;
             };
             let (fg, bg) = pane_defaults(model, id);
-            pane.handle
-                .set_default_colours(colour_rgb(fg), colour_rgb(bg));
+            let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
+            pane.handle.set_default_colours(fg, bg);
         }
     }
 }
@@ -2625,7 +2654,16 @@ pub(crate) fn seed_defaults(
     let chain = [Owner::Window(window), Owner::Session(session)];
     let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
     let (fg, bg) = window_style_colours(&opt, &NoVars, true);
-    handle.set_default_colours(colour_rgb(fg), colour_rgb(bg));
+    let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
+    handle.set_default_colours(fg, bg);
+}
+
+/// A colour `window-style` leaves to the terminal is the attached
+/// terminal's own, when it reported one.
+fn with_terminal(model: &Model, fg: Option<Rgb>, bg: Option<Rgb>) -> (Option<Rgb>, Option<Rgb>) {
+    let rgb = |[r, g, b]: [u8; 3]| Rgb { r, g, b };
+    let term = model.terminal_colours;
+    (fg.or(term.map(|t| rgb(t.0))), bg.or(term.map(|t| rgb(t.1))))
 }
 
 /// The colours the default-colour cells of `pane` show (`window-style`,
@@ -2950,9 +2988,18 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     // The columns the sidebar holds stay blank here; its overlay draws them.
     let window = widen(window, c.size.0);
     let (rows, message) = status_rows(state, c, s, geom.lines);
+    let pill = c.message.as_ref().and_then(|(text, _, level)| {
+        Some((
+            text,
+            *level,
+            pill_ends(model, &options::chain(model, w.active))?,
+        ))
+    });
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
     let mut screen = if !lines.is_empty() {
-        if let Some((line, m)) = &message {
+        if let Some((line, m)) = &message
+            && pill.is_none()
+        {
             lines[*line] = m.line.clone();
         }
         render::with_status(window, &lines, geom.top)
@@ -2961,6 +3008,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
         // drawn over the window's last row while it shows.
         let mut window = window;
         if let Some((_, m)) = &message
+            && pill.is_none()
             && let Some(last) = window.rows.checked_sub(1)
         {
             screenimg::mark_covered(&mut window, 0);
@@ -2971,6 +3019,13 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     };
     let cx = overlay_ctx_at(model, id, c, viewport);
     screenimg::mark_covered(&mut screen, 0);
+    if let Some((text, level, ends)) = pill {
+        let row = match &message {
+            Some((line, _)) if geom.lines > 0 => geom.first_row + *line as u16,
+            _ => screen.rows.saturating_sub(1),
+        };
+        render::draw_message_pill(&mut screen, row, text, level, ends);
+    }
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);
     }
@@ -3041,7 +3096,7 @@ fn status_rows(
     // `#{command_prompt}` set), drawn over the status line `message-line`
     // names (clamped to the last), whose cells it keeps where it writes none.
     let message_format = |under: Option<&StatusRow>| {
-        let (text, _) = c.message.as_ref()?;
+        let (text, _, _) = c.message.as_ref()?;
         let vars = MessageVars {
             inner: vars,
             message: text,
@@ -3483,7 +3538,9 @@ fn deliver(state: &mut State, id: ClientId, input: Input, now: Instant) {
     if let Input::Key(_) = input
         && c.message.is_some()
         && c.message_ignores_keys
-        && c.message.as_ref().is_some_and(|(_, until)| until.is_some())
+        && c.message
+            .as_ref()
+            .is_some_and(|(_, until, _)| until.is_some())
     {
         return;
     }
@@ -4736,7 +4793,8 @@ mod tests {
         let (mut state, id) = state_with_client();
         show_message(&mut state, id, "no last window");
         let shown = state.clients[&id].message.clone();
-        let (text, until) = shown.expect("message shown");
+        let (text, until, level) = shown.expect("message shown");
+        assert_eq!(level, render::Level::Error);
         let until = until.expect("display-time 750 expires");
         assert_eq!(text, "no last window");
         // A focus report is not a key: the message stays.
@@ -4762,7 +4820,10 @@ mod tests {
             .set(Owner::Session(session), "display-time", "0", false)
             .unwrap();
         show_message(&mut state, id, "held");
-        assert_eq!(state.clients[&id].message, Some(("held".to_string(), None)));
+        assert_eq!(
+            state.clients[&id].message,
+            Some(("held".to_string(), None, render::Level::Error))
+        );
         let later = Instant::now() + Duration::from_secs(3600);
         tick(&mut state, later);
         assert!(state.clients[&id].message.is_some());
@@ -4777,7 +4838,7 @@ mod tests {
     #[test]
     fn messages_are_logged_and_capped() {
         let (mut state, id) = state_with_client();
-        display_message(&mut state, id, "hi", None, false);
+        display_message(&mut state, id, "hi", None, false, render::Level::Info);
         show_message(&mut state, id, "an #[error]");
         let log: Vec<&str> = messages(&state).map(|(_, m)| m.as_str()).collect();
         assert_eq!(
@@ -4785,7 +4846,14 @@ mod tests {
             ["client-1 message: hi", "client-1 message: an #[error]"]
         );
         for i in 0..MESSAGE_LIMIT {
-            display_message(&mut state, id, &i.to_string(), None, false);
+            display_message(
+                &mut state,
+                id,
+                &i.to_string(),
+                None,
+                false,
+                render::Level::Info,
+            );
         }
         assert_eq!(messages(&state).count(), MESSAGE_LIMIT);
         assert_eq!(
@@ -4798,7 +4866,7 @@ mod tests {
             .options
             .set(Owner::Global, "message-limit", "3", false)
             .unwrap();
-        display_message(&mut state, id, "last", None, false);
+        display_message(&mut state, id, "last", None, false, render::Level::Info);
         assert_eq!(messages(&state).count(), 3);
         assert_eq!(
             messages(&state).next_back().map(|(_, m)| m.as_str()),

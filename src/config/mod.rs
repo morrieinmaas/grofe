@@ -88,6 +88,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     // CLI does not know them.
     ("pane-frames", "pane-frames"),
     ("pane-gap", "pane-gap"),
+    ("scratchpad-history", "scratchpad-history"),
     ("pane-frame-title", "pane-frame-title"),
     ("pane-frame-tab-ends", "pane-frame-tab-ends"),
     ("agent-glyph-blocked", "agent-glyph-blocked"),
@@ -96,6 +97,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("agent-glyph-working", "agent-glyph-working"),
     ("notify-muted-glyph", "notify-muted-glyph"),
     ("agent-blocked-border-style", "agent-blocked-border-style"),
+    ("prompt-position", "prompt-position"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),
@@ -119,6 +121,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("status.window.bell-style", "window-status-bell-style"),
     ("message.style", "message-style"),
     ("message.display-time-ms", "display-time"),
+    ("message.pill", "message-pill"),
     ("pane-border.style", "pane-border-style"),
     ("pane-border.active-style", "pane-active-border-style"),
     ("pane-border.format", "pane-border-format"),
@@ -287,7 +290,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "exit-unattached"
         | "variation-selector-always-wide"
         | "pane-frames"
-        | "pane-frame-title" => Ty::Bool,
+        | "pane-frame-title"
+        | "message.pill" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"
@@ -306,6 +310,7 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "lock-after-time"
         | "tiled-layout-max-columns"
         | "pane-gap"
+        | "scratchpad-history"
         | "input-buffer-size"
         | "message-limit"
         | "prefix-timeout"
@@ -672,5 +677,44 @@ mod tests {
             ..e
         };
         assert_eq!(e.to_string(), "/c/config.toml: bad");
+    }
+
+    #[test]
+    fn scratchpad_history_toml_range_is_0_to_100() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for ok in ["0", "100"] {
+            std::fs::write(&path, format!("scratchpad-history = {ok}\n")).unwrap();
+            let resolved = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+                .expect("in range loads");
+            assert_eq!(resolved.get("scratchpad-history"), Some(ok));
+        }
+        for bad in ["-1", "101"] {
+            std::fs::write(&path, format!("scratchpad-history = {bad}\n")).unwrap();
+            let errors = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+                .expect_err("out of range is refused");
+            assert!(
+                errors.iter().any(|e| e.key == "scratchpad-history"),
+                "{bad}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scratchpad_history_toml_is_int() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "scratchpad-history = 3\n").unwrap();
+        let resolved = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+            .expect("an integer loads");
+        assert_eq!(resolved.get("scratchpad-history"), Some("3"));
+
+        std::fs::write(&path, "scratchpad-history = \"x\"\n").unwrap();
+        let errors =
+            load_with_file(&Env::from_vars(None, None), &[path]).expect_err("a string is refused");
+        assert!(
+            errors.iter().any(|e| e.key == "scratchpad-history"),
+            "the error names the key: {errors:?}"
+        );
     }
 }

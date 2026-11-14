@@ -117,13 +117,25 @@ impl Cli {
         limit: Duration,
     ) -> Option<(ExitStatus, String, String)> {
         let deadline = Instant::now() + limit;
-        let mut child = self
-            .command(argv)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap_or_else(|e| panic!("spawning {argv:?}: {e}"));
+        // A script just written can be busy (ETXTBSY) for a moment: another
+        // test thread's fork inherits its write handle until that child
+        // execs. Retried briefly, as the classic fix for that race.
+        let mut tries = 0;
+        let mut child = loop {
+            let spawned = self
+                .command(argv)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn();
+            match spawned {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
+                    tries += 1;
+                    thread::sleep(Duration::from_millis(10));
+                }
+                other => break other.unwrap_or_else(|e| panic!("spawning {argv:?}: {e}")),
+            }
+        };
         let stdout = drain(child.stdout.take());
         let stderr = drain(child.stderr.take());
         let status = loop {

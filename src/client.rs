@@ -60,6 +60,8 @@ pub const PROBE_QUERY: &[u8] = concat!(
     "\x1b[?u",                                    // kitty keyboard flags
     "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\", // kitty graphics query
     "\x1b[16t",                                   // cell size in pixels
+    "\x1b]10;?\x1b\\",                            // default foreground
+    "\x1b]11;?\x1b\\",                            // default background
     "\x1b[c",                                     // DA1
 )
 .as_bytes();
@@ -143,6 +145,9 @@ enum ProbeReply {
     KittyGraphics(bool),
     /// `CSI 6 ; height ; width t`: one cell's size in pixels.
     CellSize { width: u16, height: u16 },
+    /// `OSC 10|11 ; rgb:R/G/B (BEL | ST)`: the default foreground (10) or
+    /// background (11).
+    Colour { osc: u8, rgb: [u8; 3] },
 }
 
 enum Scan {
@@ -167,6 +172,8 @@ pub struct ProbeParser {
     kitty_graphics: bool,
     sixel: bool,
     cell_px: Option<(u16, u16)>,
+    fg: Option<[u8; 3]>,
+    bg: Option<[u8; 3]>,
     done: bool,
 }
 
@@ -221,6 +228,8 @@ impl ProbeParser {
             ProbeReply::CellSize { width, height } => {
                 self.cell_px = (width > 0 && height > 0).then_some((width, height));
             }
+            ProbeReply::Colour { osc: 10, rgb } => self.fg = Some(rgb),
+            ProbeReply::Colour { rgb, .. } => self.bg = Some(rgb),
         }
     }
 
@@ -249,6 +258,7 @@ impl ProbeParser {
             kitty_graphics: self.kitty_graphics,
             sixel: self.sixel,
             cell_px: self.cell_px,
+            colours: self.fg.zip(self.bg),
         }
     }
 
@@ -288,6 +298,7 @@ fn scan_reply(b: &[u8]) -> Scan {
             ),
             Err(scan) => scan,
         },
+        Some(b']') => scan_colour(b),
         Some(b'_') => match scan_string(b, b"G") {
             Ok((body, len)) => {
                 let ok = body.splitn(2, |&c| c == b';').nth(1) == Some(b"OK".as_slice());
@@ -297,6 +308,54 @@ fn scan_reply(b: &[u8]) -> Scan {
         },
         Some(_) => Scan::NotReply,
     }
+}
+
+/// `OSC 10|11 ; rgb:R/G/B`, ended by BEL or ST; each channel 1 to 4 hex
+/// digits, scaled to 8 bits.
+fn scan_colour(b: &[u8]) -> Scan {
+    let osc = match (b.get(2), b.get(3), b.get(4)) {
+        (Some(b'1'), Some(c @ (b'0' | b'1')), Some(b';')) => 10 + (c - b'0'),
+        (Some(b'1'), Some(b'0' | b'1'), None) | (Some(b'1'), None, _) | (None, ..) => {
+            return Scan::Incomplete;
+        }
+        _ => return Scan::NotReply,
+    };
+    let body_start = 5;
+    let mut i = body_start;
+    let (body, len) = loop {
+        match b.get(i) {
+            None => return Scan::Incomplete,
+            Some(0x07) => break (&b[body_start..i], i + 1),
+            Some(0x1b) => match b.get(i + 1) {
+                None => return Scan::Incomplete,
+                Some(b'\\') => break (&b[body_start..i], i + 2),
+                Some(_) => return Scan::NotReply,
+            },
+            Some(_) if i > MAX_REPLY_LEN => return Scan::NotReply,
+            Some(_) => i += 1,
+        }
+    };
+    match parse_rgb(body) {
+        Some(rgb) => Scan::Reply(ProbeReply::Colour { osc, rgb }, len),
+        None => Scan::NotReply,
+    }
+}
+
+/// `rgb:R/G/B` as X11 writes it: 1 to 4 hex digits per channel.
+fn parse_rgb(body: &[u8]) -> Option<[u8; 3]> {
+    let text = std::str::from_utf8(body.strip_prefix(b"rgb:")?).ok()?;
+    let mut out = [0u8; 3];
+    let mut parts = text.split('/');
+    for slot in &mut out {
+        let part = parts.next()?;
+        if part.is_empty() || part.len() > 4 {
+            return None;
+        }
+        let value = u32::from_str_radix(part, 16).ok()?;
+        let max = (1u32 << (4 * part.len())) - 1;
+        *slot = u8::try_from(value * 255 / max).ok()?;
+    }
+    parts.next().is_none().then_some(out)
 }
 
 /// `CSI ? params (c | u | $ y)`, or `CSI 6 ; h ; w t`.
@@ -1131,6 +1190,7 @@ mod tests {
         kitty_graphics: true,
         sixel: false,
         cell_px: None,
+        colours: None,
     };
 
     #[test]
@@ -1297,6 +1357,41 @@ mod tests {
         let p = parse(b"\x1b[1;5A\x1b[3~\x1b[8;24;80t\x1b[?62c");
         assert_eq!(p.caps(None).cell_px, None);
         assert_eq!(p.into_typeahead(), b"\x1b[1;5A\x1b[3~\x1b[8;24;80t");
+    }
+
+    /// OSC 10 and 11 give the terminal's own foreground and background, so
+    /// a pane's program asking for them learns whether the terminal is
+    /// light or dark. Either terminator; 16-bit and 8-bit channels alike.
+    #[test]
+    fn the_terminal_colours_are_read_from_osc_10_and_11() {
+        let p = parse(b"\x1b]10;rgb:3c3c/3838/3636\x1b\\\x1b]11;rgb:fb/f1/c7\x07\x1b[?62c");
+        assert!(p.done());
+        assert_eq!(
+            p.caps(None).colours,
+            Some(([0x3c, 0x38, 0x36], [0xfb, 0xf1, 0xc7]))
+        );
+        assert!(p.into_typeahead().is_empty());
+        // A terminal that answers neither, or only one, leaves them unknown.
+        assert_eq!(parse(b"\x1b[?62c").caps(None).colours, None);
+        assert_eq!(
+            parse(b"\x1b]11;rgb:ffff/ffff/ffff\x07\x1b[?62c")
+                .caps(None)
+                .colours,
+            None
+        );
+        // Split across reads.
+        let mut p = ProbeParser::default();
+        p.feed(b"\x1b]10;rgb:00/00/00\x07\x1b]11;rgb:ff");
+        p.feed(b"/ff/ff\x07\x1b[?62c");
+        assert_eq!(p.caps(None).colours, Some(([0; 3], [0xff; 3])));
+    }
+
+    #[test]
+    fn probe_query_asks_for_the_colours_before_da1() {
+        let q = String::from_utf8_lossy(PROBE_QUERY);
+        let da1 = q.find("\x1b[c").expect("DA1");
+        assert!(q.find("\x1b]10;?").is_some_and(|i| i < da1));
+        assert!(q.find("\x1b]11;?").is_some_and(|i| i < da1));
     }
 
     #[test]

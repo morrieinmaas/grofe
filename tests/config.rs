@@ -832,3 +832,37 @@ fn load_one_reports_errors_and_a_missing_file() {
     let errs = errors(config::load_one(&gone, &s.env));
     assert_eq!(errs[0].file, gone);
 }
+
+#[test]
+fn the_message_pill_and_prompt_position_are_typed() {
+    let s = Setup::new();
+    s.write(
+        "config.toml",
+        "prompt-position = \"centre\"\n[message]\npill = false\n",
+    );
+    let r = resolved(s.load());
+    let tmux: std::collections::BTreeMap<&str, &str> = r.tmux_options().collect();
+    assert_eq!(tmux.get("prompt-position"), Some(&"centre"));
+    assert_eq!(tmux.get("message-pill"), Some(&"off"));
+
+    // The American spelling is the same setting, not a typo.
+    let s = Setup::new();
+    s.write("config.toml", "prompt-position = \"center\"\n");
+    let r = resolved(s.load());
+    let tmux: std::collections::BTreeMap<&str, &str> = r.tmux_options().collect();
+    assert_eq!(tmux.get("prompt-position"), Some(&"center"));
+
+    let s = Setup::new();
+    s.write(
+        "config.toml",
+        "prompt-position = \"middle\"\n[message]\npill = \"yes\"\npil = true\n",
+    );
+    let errs = errors(s.load());
+    let keys: Vec<&str> = errs.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["prompt-position", "message.pill", "message.pil"],
+        "{}",
+        joined(&errs)
+    );
+}

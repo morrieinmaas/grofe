@@ -208,20 +208,19 @@ fn search_paths(state: &State, ctx: &ClientCtx, p: &Pane, leader: i32) -> Vec<St
 /// The `PATH`s of the pane itself: its foreground process's (when known),
 /// then its spawn environment's.
 fn pane_paths(state: &State, p: &Pane, leader: Option<i32>) -> Vec<String> {
-    let root = p.handle.pid().and_then(|pid| i32::try_from(pid).ok());
     let session = state.model.windows.get(&p.window).map(|w| w.session);
-    // The spawn environment: what the root process started with, else
-    // what a pane of its session would get now.
-    let spawn = root
-        .and_then(|root| procinfo::env_var(root, "PATH"))
-        .or_else(|| {
-            let s = session?;
-            let own = state.model.sessions.get(&s)?.env.clone();
-            own.into_iter()
-                .chain(hooks::pane_env(state, s))
-                .find(|(k, _)| k == "PATH")
-                .map(|(_, v)| v)
-        });
+    // The spawn environment: what the server gave the root process, not
+    // its environ read back (macOS 27 hides that of Apple's binaries, the
+    // stock shells among them), else what a pane of its session would get
+    // now.
+    let spawn = p.handle.spawn_path().map(str::to_string).or_else(|| {
+        let s = session?;
+        let own = state.model.sessions.get(&s)?.env.clone();
+        own.into_iter()
+            .chain(hooks::pane_env(state, s))
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v)
+    });
     leader
         .and_then(|l| procinfo::env_var(l, "PATH"))
         .into_iter()

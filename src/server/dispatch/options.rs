@@ -119,6 +119,8 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
         "window-status-current-format",
         "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
     ),
+    // tmux's full-width message bar.
+    ("message-pill", "off"),
 ];
 
 /// grofe's own options that tmux's CLI does not know (spec
@@ -136,6 +138,9 @@ const GROFE_ONLY: &[&str] = &[
     "agent-glyph-working",
     "notify-muted-glyph",
     "agent-blocked-border-style",
+    "scratchpad-history",
+    "message-pill",
+    "prompt-position",
 ];
 
 /// `pane-border-format`'s default, tmux 3.7b's: its `[z]` and `[x]`
@@ -463,6 +468,23 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Session,
         default: "bg=yellow,fg=black,fill=yellow",
     },
+    // A message as a pill in the status line, coloured by its level, and
+    // the prompt in the same style (grofe identity); `off` is tmux's
+    // full-width bar in `message-style` (TMUX_DEFAULTS).
+    Builtin {
+        name: "message-pill",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    // Where the command prompt opens: on the status line, as tmux's, or as
+    // a box in the middle of the window.
+    Builtin {
+        name: "prompt-position",
+        kind: Kind::Choice(&["status", "centre", "center"]),
+        scope: OptionScope::Session,
+        default: "status",
+    },
     Builtin {
         name: "display-time",
         kind: Kind::Number {
@@ -671,6 +693,13 @@ const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Global,
         default: "1000",
+    },
+    // grofe's own: how many hidden scratchpads the server keeps.
+    Builtin {
+        name: "scratchpad-history",
+        kind: Kind::Number { max: 100 },
+        scope: OptionScope::Global,
+        default: "10",
     },
     // grofe's own names: a server that starts empty takes its sessions
     // from a running tmux, else from tmux-resurrect's newest save, found
@@ -2874,7 +2903,12 @@ fn list_notes(
         notes.truncate(1);
         if let (Some((key, note)), Some(id)) = (notes.first(), clients::current_client(state, ctx))
         {
-            clients::show_message(state, id, &format!("{key} {note}"));
+            clients::show_message_as(
+                state,
+                id,
+                &format!("{key} {note}"),
+                crate::server::render::Level::Info,
+            );
             return Ok(String::new());
         }
     }
@@ -3042,7 +3076,7 @@ fn list_keys_tmux(
         .collect();
     if lines.len() == 1 || c.first {
         if let (Some(line), Some(id)) = (lines.first(), clients::current_client(state, ctx)) {
-            clients::show_message(state, id, line);
+            clients::show_message_as(state, id, line, crate::server::render::Level::Info);
         }
         return Ok(String::new());
     }
@@ -3959,7 +3993,14 @@ fn display_message(
         return Ok(format!("{trace}{out}\n"));
     }
     if let Some(id) = current {
-        clients::display_message(state, id, &out, delay, c.ignore_keys);
+        clients::display_message(
+            state,
+            id,
+            &out,
+            delay,
+            c.ignore_keys,
+            crate::server::render::Level::Info,
+        );
     }
     Ok(trace)
 }
@@ -5073,6 +5114,7 @@ impl FormatVars for FormatCtx<'_> {
             "pane_pipe_pid" => p.handle.pipe_pid()?.to_string(),
             // Empty for a live pane and for one a signal killed, as tmux.
             "pane_dead_status" => p.dead.flatten()?.to_string(),
+            "pane_dead_time" => epoch_secs(p.dead_time?),
             "pane_start_command" => p
                 .argv
                 .as_deref()
@@ -6058,6 +6100,35 @@ mod tests {
             .config_base
             .insert("pane-border-lines".into(), "single".into());
         assert!(fresh.set_globally("pane-border-lines"));
+    }
+
+    #[test]
+    fn scratchpad_history_range_is_0_to_100() {
+        let mut o = Options::new(false);
+        for ok in ["0", "100"] {
+            assert!(
+                o.set(Owner::Global, "scratchpad-history", ok, false)
+                    .is_ok(),
+                "{ok}"
+            );
+            assert_eq!(o.lookup("scratchpad-history", &[]), Some(ok));
+        }
+        for bad in ["-1", "101", "x"] {
+            assert!(
+                o.set(Owner::Global, "scratchpad-history", bad, false)
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(o.lookup("scratchpad-history", &[]), Some("100"));
+    }
+
+    #[test]
+    fn scratchpad_history_default_is_ten() {
+        assert_eq!(
+            Options::new(false).lookup("scratchpad-history", &[]),
+            Some("10")
+        );
     }
 
     /// TM.7: mouse keys sort as tmux 3.7b's key codes do (recorded in

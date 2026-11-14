@@ -25,6 +25,16 @@ const SEVERAL_SAMPLES: Duration = Duration::from_millis(2_500);
 
 const WAIT: Duration = Duration::from_secs(10);
 
+/// The command a pane's `/bin/sh` reports, as tmux reports it too: macOS's
+/// `/bin/sh` execs bash, so the process carries bash's name.
+// ponytail: assumes macOS's default `/private/var/select/sh` (bash); a Mac
+// that points it at dash or zsh reports that name instead.
+const SH: &str = if cfg!(target_os = "macos") {
+    "bash"
+} else {
+    "sh"
+};
+
 /// A server started as under `env -i PATH=/usr/bin:/bin`, a temp dir
 /// holding `fake-agent` (on nobody's `PATH` but the ones a test builds)
 /// and the agent's transcript dir, with a session `main` whose panes have
@@ -75,6 +85,9 @@ impl Fixture {
         f
     }
 
+    /// The agent's absolute path, which a test of the binding (not of
+    /// resolution) sets as is: a `fake-agent` running is a `/bin/sh`
+    /// script, and macOS 27 hides the environment of Apple's binaries.
     fn agent(&self) -> String {
         self.bin.join("fake-agent").display().to_string()
     }
@@ -146,7 +159,26 @@ impl Fixture {
                 WAIT,
             )
             .expect("the agent launched");
-        self.wait_foreground(target, "fake-agent");
+        self.wait_agent(target, &format!("--session-id {id}"));
+    }
+
+    /// Waits until the pane's foreground process is `fake-agent` run with
+    /// `args`, told by its argv (`/bin/sh <agent> <args>`): a script's name
+    /// is its interpreter's on macOS (`bash`, as tmux reports it too), and
+    /// so is the shell's that runs it.
+    fn wait_agent(&self, target: &str, args: &str) {
+        let want = format!(" {} {args}", self.agent());
+        self.srv
+            .wait_for(
+                || self.fmt(target, "#{pane_current_argv}").ends_with(&want),
+                WAIT,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{target} runs fake-agent {args}: {e}; it runs {}",
+                    self.fmt(target, "#{pane_current_argv}")
+                )
+            });
     }
 
     fn pane_id(&self, target: &str) -> String {
@@ -207,14 +239,38 @@ fn a_cli_inside_a_pane_resolves_against_its_own_path_and_respawn_runs_it() {
         .unwrap_or_else(|e| panic!("{e}: transcript {:?}", f.transcript("a")));
 }
 
+/// Not a test of its own: the foreground process of
+/// `from_outside_a_pane_the_foreground_process_path_resolves`.
+#[test]
+#[ignore = "the foreground process of from_outside_a_pane_the_foreground_process_path_resolves"]
+fn child_that_sleeps() {
+    thread::sleep(Duration::from_secs(1000));
+}
+
+/// The foreground process is this test binary, not `sleep`: macOS 27 hides
+/// the environment of Apple's own binaries (/bin/sleep, /bin/sh) from
+/// other processes, so no `PATH` of theirs can be read.
 #[test]
 fn from_outside_a_pane_the_foreground_process_path_resolves() {
     let f = Fixture::new();
+    let exe = std::env::current_exe().expect("current_exe");
     f.type_line(
         "main",
-        &format!("PATH={}:$PATH sleep 1000", f.bin.display()),
+        &format!(
+            "PATH={}:$PATH {} --ignored --exact --quiet child_that_sleeps",
+            f.bin.display(),
+            exe.display()
+        ),
     );
-    f.wait_foreground("main", "sleep");
+    f.srv
+        .wait_for(
+            || {
+                f.fmt("main", "#{pane_current_argv}")
+                    .ends_with(" child_that_sleeps")
+            },
+            WAIT,
+        )
+        .expect("the sleeper is the foreground process");
     f.srv
         .cmd(&[
             "pane-set-resume",
@@ -301,7 +357,7 @@ fn closing_the_agent_clears_its_resume_and_the_shell_stays() {
             "-t",
             &pane,
             "--",
-            "fake-agent",
+            &f.agent(),
             "--resume",
             "a",
         ])
@@ -312,7 +368,7 @@ fn closing_the_agent_clears_its_resume_and_the_shell_stays() {
         .wait_for(|| f.resume(&pane).is_empty(), CLEARED_WITHIN)
         .unwrap_or_else(|e| panic!("{e}: #{{pane_resume}} is {:?}", f.resume(&pane)));
     assert_eq!(f.fmt(&pane, "#{pane_dead}"), "0");
-    f.wait_foreground(&pane, "sh");
+    f.wait_foreground(&pane, SH);
 }
 
 #[test]
@@ -325,7 +381,7 @@ fn a_stopped_agent_keeps_its_resume() {
             "-t",
             "main",
             "--",
-            "fake-agent",
+            &f.agent(),
             "--resume",
             "stopme",
         ])
@@ -440,7 +496,7 @@ fn every_set_and_clear_raises_resume_changed() {
             "-t",
             "main",
             "--",
-            "fake-agent",
+            &f.agent(),
             "--resume",
             "h",
         ])
@@ -454,7 +510,7 @@ fn every_set_and_clear_raises_resume_changed() {
             "-t",
             "main",
             "--",
-            "fake-agent",
+            &f.agent(),
             "--resume",
             "h",
         ])

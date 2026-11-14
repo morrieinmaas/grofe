@@ -23,8 +23,9 @@
 //!
 //! Frames (MF, a contract edit). grofe identity frames its panes by default
 //! (spec 2026-11-05-frames.md), while the suites written before MF test
-//! tmux-style shared borders. So every harness writes [`FRAMES_PIN`], a
-//! `conf.d` file holding `pane-frames = false`, into its config dir: the
+//! tmux-style shared borders (and tmux's full-width message bar). So every
+//! harness writes [`FRAMES_PIN`], a `conf.d` file holding `pane-frames =
+//! false` and `message.pill = false`, into its config dir: the
 //! server reads it through the real config chain, after `config.toml`, so a
 //! test's own `config.toml` cannot undo it. A harness built with
 //! [`TestServerBuilder::frames`]`(true)` writes none and sees grofe's
@@ -113,7 +114,8 @@ impl TestServer {
         if let Some(dir) = pin.parent() {
             fs::create_dir_all(dir).expect("create harness conf.d");
         }
-        fs::write(&pin, "pane-frames = false\n").expect("write the frames pin");
+        fs::write(&pin, "pane-frames = false\n[message]\npill = false\n")
+            .expect("write the frames pin");
         srv
     }
 

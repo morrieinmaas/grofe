@@ -296,6 +296,12 @@ fn the_hello_carries_the_invoking_name_s_dialect() {
         other => panic!("{other:?}"),
     }
 
+    // A socket of its own: a CLI whose request goes unanswered connects once
+    // more to see whether a server is still there, and that connection
+    // waits in the first listener's queue.
+    let fake = root(&srv).join("fake2.sock");
+    let listener = UnixListener::bind(&fake).unwrap();
+    let fake_arg = fake.display().to_string();
     let mut cmd = srv.command();
     isolate(&srv, &mut cmd);
     cmd.args(["-S", &fake_arg, "list-sessions"]);
@@ -967,9 +973,12 @@ fn a_stale_dollar_tmux_pane_falls_back_under_the_tmux_name() {
     // The case a plugin hits: the server's environment carries the stale
     // pane into its jobs.
     grofe(&srv, &["set-environment", "-g", "TMUX_PANE", "%99"]).expect("setenv");
+    // `##`: run-shell expands its command first, and the job's own
+    // display-message must look the pane up. A `%0` already in the text
+    // is a strftime conversion to display-message, `0` on macOS.
     let out = tmux(
         &srv,
-        &["run-shell", "tmux display-message -p 'job #{pane_id}'"],
+        &["run-shell", "tmux display-message -p 'job ##{pane_id}'"],
     );
     assert!(out.status.success(), "{}", out.stderr);
     assert_eq!(out.stdout, format!("job {active}"));

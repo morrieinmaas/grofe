@@ -145,7 +145,14 @@ impl Launch {
                     self.worktree(state, text)
                 };
                 if let Err(e) = result {
-                    clients::display_message(state, client, &e, None, false);
+                    clients::display_message(
+                        state,
+                        client,
+                        &e,
+                        None,
+                        false,
+                        crate::server::render::Level::Error,
+                    );
                 }
                 Routed::Consumed
             }),
@@ -169,7 +176,14 @@ impl Launch {
                     Ok(path) => self.open(state, Some(path)),
                     Err(e) => {
                         if let Some(id) = self.ctx.client {
-                            clients::display_message(state, id, &e, None, false);
+                            clients::display_message(
+                                state,
+                                id,
+                                &e,
+                                None,
+                                false,
+                                crate::server::render::Level::Error,
+                            );
                         }
                         Err(e)
                     }

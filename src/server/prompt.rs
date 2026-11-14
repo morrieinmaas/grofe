@@ -34,7 +34,8 @@ use crate::server::dispatch::{
 };
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
 use crate::server::pane::{self, CellFlags, CursorState, SnapCell};
-use crate::server::render::{Overlay, OverlayCtx, Screen};
+use crate::server::popup;
+use crate::server::render::{self, Overlay, OverlayCtx, Screen};
 use crate::server::shell_jobs::ShellJobs;
 use crate::server::status::{self, Style};
 use crate::server::{State, hooks};
@@ -822,7 +823,7 @@ impl Prompt {
 
 /// The columns of `text` once its `#[...]` styles are taken out and `##` is
 /// one `#` (tmux's `format_width`).
-fn visible_width(text: &str) -> usize {
+pub(crate) fn visible_width(text: &str) -> usize {
     let mut width = 0;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -1635,6 +1636,27 @@ impl Overlay for PromptOverlay {
             .unwrap_or(0)
             .min(lines.saturating_sub(1));
         let row = row.saturating_add(line).min(screen.rows - 1);
+        if matches!(
+            model.options.lookup("prompt-position", &chain),
+            Some("centre" | "center")
+        ) && screen.cols >= 8
+            && screen.rows >= 3
+        {
+            let border = model
+                .options
+                .lookup("pane-active-border-style", &chain)
+                .unwrap_or_default();
+            let ends = model
+                .options
+                .lookup("pane-frame-tab-ends", &chain)
+                .unwrap_or("()");
+            draw_box(prompt, &status::base_style(border, vars), ends, screen);
+            return;
+        }
+        if let Some(ends) = clients::pill_ends(model, &chain) {
+            draw_pill(prompt, row, ends, screen);
+            return;
+        }
         let label_vars = clients::MessageVars {
             inner: vars,
             message: &prompt.label,
@@ -1675,6 +1697,75 @@ impl Overlay for PromptOverlay {
             ..CursorState::default()
         });
     }
+}
+
+/// How many columns the prompt's pill or box takes at most.
+const PROMPT_WIDTH: usize = 60;
+
+/// The prompt as a pill on status row `row` (`message-pill`): its label
+/// and text in an info message's colours, between the pill's `ends`.
+fn draw_pill(prompt: &Prompt, row: u16, ends: &str, screen: &mut Screen) {
+    let level = render::Level::Info;
+    let (x, w) = render::pill_area(screen, row, PROMPT_WIDTH);
+    if w < 4 {
+        return;
+    }
+    let style = level.body();
+    let label = format!(" {}", prompt.label);
+    let drawn = status::draw(&label, style, (w - 2) as u16);
+    let start = visible_width(&label).min(w - 2);
+    let (cells, col) = prompt.row_over(line_cells(&drawn.line, w - 2), start, &style);
+    let at = usize::from(row) * usize::from(screen.cols) + x + 1;
+    screen.cells[at..at + cells.len()].clone_from_slice(&cells);
+    render::pill_ends(screen, row, (x, w), level, ends);
+    screen.cursor = Some(CursorState {
+        row,
+        col: u16::try_from(x + 1 + col).unwrap_or(u16::MAX),
+        visible: true,
+        ..CursorState::default()
+    });
+}
+
+/// The prompt as a rounded box a third down the screen (`prompt-position
+/// centre`), `border` its frame's style with the label between `ends` in
+/// its top edge, as a pane frame's title; the text goes on the row inside.
+fn draw_box(prompt: &Prompt, border: &Style, ends: &str, screen: &mut Screen) {
+    let cols = usize::from(screen.cols);
+    let w = PROMPT_WIDTH.min(cols);
+    let x = (cols - w) / 2;
+    let y = (screen.rows / 3).min(screen.rows - 3);
+    let (l, r) = render::tab_ends(ends);
+    let frame = popup::Frame {
+        at: (x as i32, i32::from(y)),
+        size: (w as u16, 3),
+        lines: Some(popup::Lines::Rounded),
+        title: Some(format!(" {l} {} {r} ", prompt.label)),
+        border_style: None,
+        style: None,
+        close_on_exit: false,
+        close_on_zero: false,
+        any_key: false,
+    };
+    popup::draw_box(screen, &frame, popup::Lines::Rounded, border);
+    let inner = Style::default();
+    let row = y + 1;
+    for edge in [x + 1, x + w - 2] {
+        popup::set(
+            screen,
+            (edge as i32, i32::from(row)),
+            popup::cell(' ', &inner),
+        );
+    }
+    let blank = vec![popup::cell(' ', &inner); w - 4];
+    let (cells, col) = prompt.row_over(blank, 0, &inner);
+    let at = usize::from(row) * cols + x + 2;
+    screen.cells[at..at + cells.len()].clone_from_slice(&cells);
+    screen.cursor = Some(CursorState {
+        row,
+        col: u16::try_from(x + 2 + col).unwrap_or(u16::MAX),
+        visible: true,
+        ..CursorState::default()
+    });
 }
 
 /// Client `id` went away: its prompt closes, and a CLI waiting on it gets

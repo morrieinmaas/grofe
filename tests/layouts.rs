@@ -225,7 +225,13 @@ exec = true
     assert_eq!(p.len(), 2);
     let screen = |id: &str| srv.capture(id);
     wait_until(|| screen(&p[0][0]).contains("typed-marker"), WAIT).unwrap();
-    wait_until(|| screen(&p[1][0]).contains("exec-marker"), WAIT).unwrap();
+    // The dead pane's `remain-on-exit-format` line scrolls the screen up one
+    // row, as tmux's does, so the marker may already be in the history.
+    let history = |id: &str| {
+        srv.cmd(&["capture-pane", "-p", "-S", "-", "-t", id])
+            .unwrap_or_default()
+    };
+    wait_until(|| history(&p[1][0]).contains("exec-marker"), WAIT).unwrap();
     // The typed command was entered at a shell, which stays (the prompt is
     // `$` or, as root in CI, `#`); the exec pane ended with its command
     // (the harness keeps it dead).
