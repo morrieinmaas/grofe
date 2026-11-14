@@ -5,7 +5,7 @@
 //! and every draw, so a state change shows at once.
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::agents::{Agent, rank};
 use super::clients;
@@ -28,6 +28,8 @@ const HEIGHT_PCT: u16 = 70;
 #[derive(Default)]
 pub struct Pickers {
     open: BTreeMap<ClientId, ListState>,
+    /// When a shown time next changes (see [`deadline`]).
+    at: Option<Instant>,
 }
 
 impl Pickers {
@@ -48,6 +50,7 @@ pub fn open(state: &mut State, client: ClientId) -> Result<(), String> {
         return Err("no current client".to_string());
     }
     state.pickers.open.insert(client, ListState::default());
+    rearm(state, Instant::now());
     clients::mark_dirty(state, client);
     Ok(())
 }
@@ -55,6 +58,49 @@ pub fn open(state: &mut State, client: ClientId) -> Result<(), String> {
 /// A client that detached takes its picker with it.
 pub fn client_gone(state: &mut State, id: ClientId) {
     state.pickers.open.remove(&id);
+    rearm(state, Instant::now());
+}
+
+/// When the open pickers next need a redraw for their times.
+pub fn deadline(state: &State) -> Option<Instant> {
+    state.pickers.at
+}
+
+/// Redraws the open pickers when a shown time has changed.
+pub fn tick(state: &mut State, now: Instant) {
+    if !state.pickers.at.is_some_and(|at| at <= now) {
+        return;
+    }
+    let ids: Vec<ClientId> = state.pickers.open.keys().copied().collect();
+    for id in ids {
+        clients::mark_dirty(state, id);
+    }
+    rearm(state, now);
+}
+
+/// Sets the next time change: the next whole second of the shortest time
+/// shown under a minute, minute under an hour, else hour.
+fn rearm(state: &mut State, now: Instant) {
+    state.pickers.at = if state.pickers.open.is_empty() {
+        None
+    } else {
+        state
+            .agents
+            .by_urgency()
+            .into_iter()
+            .filter(|p| state.model.panes.contains_key(p))
+            .filter_map(|p| state.agents.get(p))
+            .map(|a| {
+                let secs = now.saturating_duration_since(a.since).as_secs();
+                let step = match secs {
+                    0..60 => 1,
+                    60..3600 => 60,
+                    _ => 3600,
+                };
+                a.since + Duration::from_secs((secs / step + 1) * step)
+            })
+            .min()
+    };
 }
 
 /// The pane under the selection, if the picker is open and lists any.
@@ -215,6 +261,7 @@ impl InputHook for PickerHook {
 
 fn close(state: &mut State, client: ClientId) -> Routed {
     state.pickers.open.remove(&client);
+    rearm(state, Instant::now());
     clients::mark_dirty(state, client);
     Routed::Consumed
 }
@@ -587,5 +634,13 @@ mod tests {
         assert_eq!(selected_pane(&state, client), Some(p2), "idle matches");
         press(&mut state, client, "Escape");
         assert!(!state.pickers.is_open(client));
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn detach_removes_picker() {
+        let (mut state, client, _p1, _p2, _out) = setup();
+        open(&mut state, client).expect("open");
+        clients::detach(&mut state, client);
+        assert!(!state.pickers.is_open(client));
+        assert_eq!(deadline(&state), None);
     }
 }

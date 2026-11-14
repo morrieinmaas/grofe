@@ -80,6 +80,11 @@ fn close(state: &mut State, client: ClientId) {
     clients::mark_dirty(state, client);
 }
 
+/// A client that detached takes its menu with it.
+pub fn client_gone(state: &mut State, id: ClientId) {
+    state.keymenus.open.remove(&id);
+}
+
 fn is_reserved(key: &Key) -> bool {
     let ctrl = key.mods.ctrl && !key.mods.alt;
     match key.code {
@@ -129,7 +134,7 @@ fn build_rows(tables: &KeyTables, table: &str, expand: &dyn Fn(&str) -> String) 
 fn visible(rows: &[Row], query: &str) -> Vec<usize> {
     let texts: Vec<String> = rows
         .iter()
-        .map(|r| format!("{} {} {}", r.group, r.key, r.label))
+        .map(|r| format!("{} {} {}", r.label, r.group, r.key))
         .collect();
     listview::filter(&texts, query)
 }
@@ -203,6 +208,12 @@ impl InputHook for KeyMenuHook {
             Input::Focus(_) => return None,
         };
         let table = state.keymenus.open.get(&client)?.table.clone();
+        // The prefix key is not a binding to run from a menu: it would
+        // switch the client to the prefix table under the menu.
+        let settings = clients::key_settings(&state.model, session);
+        if settings.is_prefix(&key) {
+            return Some(Routed::Consumed);
+        }
         let rows = rows_for(state, client, &table);
         let size = state.clients.get(&client).map_or((80, 24), |c| c.size);
         let outcome = {
@@ -235,7 +246,6 @@ impl InputHook for KeyMenuHook {
             }
             Step::Run(run) => {
                 close(state, client);
-                let settings = clients::key_settings(&state.model, session);
                 let modes = active_pane(state, session)
                     .and_then(|p| state.model.panes.get(&p))
                     .map(|p| p.handle.modes())
@@ -360,6 +370,39 @@ mod tests {
     }
 
     #[test]
+    fn filter_ranks_by_description() {
+        let mut t = tables();
+        bind(&mut t, "prefix", "b", &["break-pane"], Some("pane"), false);
+        t.insert("prefix", key("b"), {
+            let mut b = Binding::new(
+                vec![vec!["break-pane".into()]],
+                false,
+                BindingSource::Default,
+            );
+            b.group = Some("pane".into());
+            b.desc = Some("Break pane to a new window".into());
+            b
+        });
+        let mut n = Binding::new(
+            vec![vec!["new-window".into()]],
+            false,
+            BindingSource::Default,
+        );
+        n.group = Some("window".into());
+        n.desc = Some("Create a new window".into());
+        t.insert("prefix", key("c"), n);
+        let r = rows(&t);
+        let mut ui = ListState::default();
+        press_step(&mut ui, &t, "C-f");
+        for c in ["n", "e", "w"] {
+            press_step(&mut ui, &t, c);
+        }
+        let shown = visible(&r, &ui.query);
+        assert_eq!(r[shown[0]].key, key("c"), "contiguous and earliest first");
+        assert_eq!(press_step(&mut ui, &t, "Enter"), Step::Run(key("c")));
+    }
+
+    #[test]
     fn bound_key_runs_and_closes() {
         let t = tables();
         let mut ui = ListState::default();
@@ -479,5 +522,93 @@ mod tests {
         let r = build_rows(&t, "prefix", &|s| prompt::expand_command(&state, &ctx, s));
         let agents = r.iter().find(|r| r.key == key("a")).expect("row");
         assert_eq!(agents.label, "Agents (3)");
+    }
+    /// A server with a client attached to session `a`, running one agent.
+    fn client_state() -> (State, ClientId) {
+        use crate::protocol::ClientCtx;
+        use crate::server::clients::AttachRequest;
+        use crate::server::{dispatch, test_ctx, test_state};
+        let mut state = test_state();
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        dispatch::run(
+            &mut state,
+            &test_ctx(),
+            &argv(&["new-session", "-d", "-s", "a", "sleep 600"]),
+        )
+        .expect("session");
+        let accepted = clients::attach(
+            &mut state,
+            AttachRequest {
+                ctx: ClientCtx {
+                    client: None,
+                    ..test_ctx()
+                },
+                size: (100, 40),
+                term: "xterm".into(),
+                caps: Default::default(),
+                pid: None,
+                target: Some("a".into()),
+                detach_others: false,
+                nest: false,
+                tty: None,
+                created: false,
+                extras: Default::default(),
+            },
+        )
+        .expect("attach");
+        (state, accepted.id)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn label_expands_with_clients_pane() {
+        use crate::server::agents::{AgentState, Report, ReportState};
+        let (mut state, client) = client_state();
+        let pane = *state.model.panes.keys().next().expect("pane");
+        let report = Report {
+            state: ReportState::Set(AgentState::Blocked),
+            kind: Some("claude".into()),
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        state.agents.apply(pane, report, true, Instant::now());
+        let mut b = Binding::new(
+            vec![vec!["choose-agent".into()]],
+            false,
+            BindingSource::Default,
+        );
+        b.group = Some("agents".into());
+        b.desc = Some("Agents (#{agents_attention})".into());
+        state.registry.key_tables.insert("prefix", key("U"), b);
+        let rows = rows_for(&state, client, "prefix");
+        let row = rows.iter().find(|r| r.key == key("U")).expect("row");
+        assert_eq!(row.label, "Agents (1)");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prefix_key_is_ignored_in_menu() {
+        let (mut state, client) = client_state();
+        let mut b = Binding::new(
+            vec![vec!["display-message".into(), "x".into()]],
+            false,
+            BindingSource::Default,
+        );
+        b.group = Some("other".into());
+        state.registry.key_tables.insert("custom", key("C-b"), b);
+        open(&mut state, client, "custom").expect("open");
+        let routed =
+            KeyMenuHook.on_input(&mut state, client, &Input::Key(key("C-b")), Instant::now());
+        assert!(matches!(routed, Some(Routed::Consumed)));
+        assert!(state.keymenus.is_open(client), "menu stays");
+        assert_eq!(state.clients[&client].keys.table(), "root");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn detach_removes_menu() {
+        let (mut state, client) = client_state();
+        open(&mut state, client, "prefix").expect("open");
+        clients::detach(&mut state, client);
+        assert!(!state.keymenus.is_open(client));
     }
 }

@@ -1436,6 +1436,8 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     crate::server::menu::client_gone(state, id);
     crate::server::popup::client_gone(state, id);
     crate::server::tree::client_gone(state, id);
+    crate::server::picker::client_gone(state, id);
+    crate::server::keymenu::client_gone(state, id);
     crate::server::mouse::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);
@@ -1848,6 +1850,7 @@ pub fn deadline(state: &State) -> Option<Instant> {
         r.status_at,
         r.names_at,
         dispatch::lock::deadline(state),
+        crate::server::picker::deadline(state),
     ]
     .into_iter()
     .chain(r.owners.values().map(SizeOwner::deadline))
@@ -1931,6 +1934,7 @@ pub fn tick(state: &mut State, now: Instant) {
         }
     }
     dispatch::lock::tick(state, now);
+    crate::server::picker::tick(state, now);
     arm_status_clock(state, now);
 }
 
@@ -4172,6 +4176,43 @@ mod tests {
         assert!(state.clients[&ClientId(1)].dirty);
     }
 
+    /// An open picker asks for a redraw when a shown time changes, and
+    /// stops asking once closed or its client is gone.
+    #[tokio::test]
+    async fn picker_times_tick() {
+        let (mut state, id) = pane_with_agents();
+        let (outbox, _) = Outbox::new();
+        let mut entry = state_with_client()
+            .0
+            .clients
+            .remove(&ClientId(1))
+            .expect("client");
+        entry.outbox = outbox;
+        state.clients.insert(ClientId(1), entry);
+        let report = crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(crate::server::agents::AgentState::Idle),
+            kind: Some("claude".into()),
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        let since = Instant::now();
+        state.agents.apply(id, report, false, since);
+        assert_eq!(crate::server::picker::deadline(&state), None);
+        crate::server::picker::open(&mut state, ClientId(1)).expect("open");
+        let at = crate::server::picker::deadline(&state).expect("a deadline");
+        assert!(at > since && at <= since + Duration::from_millis(1100));
+        state.clients.get_mut(&ClientId(1)).expect("client").dirty = false;
+        crate::server::picker::tick(&mut state, since + Duration::from_millis(500));
+        assert!(!state.clients[&ClientId(1)].dirty, "not yet");
+        crate::server::picker::tick(&mut state, at);
+        assert!(state.clients[&ClientId(1)].dirty, "the time changed");
+        assert!(crate::server::picker::deadline(&state).is_some_and(|next| next > at));
+        crate::server::picker::client_gone(&mut state, ClientId(1));
+        assert_eq!(crate::server::picker::deadline(&state), None);
+    }
+
     /// Two outputs within the interval read the leader's argv once.
     #[tokio::test]
     async fn scan_throttled_per_pane() {
@@ -4799,9 +4840,9 @@ mod tests {
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 7);
+        assert_eq!(state.registry.input_hooks.len(), 9);
         // TM.6 removed the mouse's scrollback view overlay.
-        assert_eq!(state.registry.overlays.len(), 6);
+        assert_eq!(state.registry.overlays.len(), 8);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),
