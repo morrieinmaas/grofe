@@ -4597,6 +4597,19 @@ impl FormatVars for ServerVars<'_> {
                     .or_else(|| self.inner.vars().get(name))
             }
             "session_attached_list" => self.attached_list(),
+            "agent_kind"
+            | "agent_state"
+            | "agent_msg"
+            | "agent_blocked_kind"
+            | "agent_since"
+            | "agent_unseen"
+            | "agent_attention"
+            | "window_agent_state"
+            | "session_agent_state"
+            | "agents_total"
+            | "agents_blocked"
+            | "agents_working"
+            | "agents_attention" => Some(self.agent_var(name)),
             "session_group_attached"
             | "session_group_attached_list"
             | "session_group_many_attached" => {
@@ -4674,6 +4687,67 @@ impl<'a> ServerVars<'a> {
             .map(|c| c.name.as_str())
             .collect();
         Some(names.join(","))
+    }
+
+    /// The agent variables of spec §4.1; empty, not missing, when there is
+    /// nothing to show.
+    fn agent_var(&self, name: &str) -> String {
+        use crate::server::agents::{self, AgentState, Rank};
+        let agents = &self.state.agents;
+        let needs_you = |a: &agents::Agent| agents::rank(a) <= Rank::Unseen;
+        let counts = |keep: &dyn Fn(&agents::Agent) -> bool| {
+            agents.iter().filter(|(_, a)| keep(a)).count().to_string()
+        };
+        match name {
+            "agents_total" => return counts(&|_| true),
+            "agents_blocked" => return counts(&|a| a.state == AgentState::Blocked),
+            "agents_working" => return counts(&|a| a.state == AgentState::Working),
+            "agents_attention" => return counts(&needs_you),
+            "window_agent_state" | "session_agent_state" => {
+                let model = &self.state.model;
+                let Some(window) = model.panes.get(&self.pane).map(|p| p.window) else {
+                    return String::new();
+                };
+                let windows = if name == "window_agent_state" {
+                    vec![window]
+                } else {
+                    let session = self
+                        .session_id()
+                        .or_else(|| model.windows.get(&window).map(|w| w.session));
+                    match session.and_then(|s| model.sessions.get(&s)) {
+                        Some(s) => s.windows.clone(),
+                        None => vec![window],
+                    }
+                };
+                let best = agents
+                    .iter()
+                    .filter(|(p, _)| {
+                        model
+                            .panes
+                            .get(p)
+                            .is_some_and(|pane| windows.contains(&pane.window))
+                    })
+                    .map(|(_, a)| agents::rank(a))
+                    .min();
+                return best.map(|r| r.as_str().to_string()).unwrap_or_default();
+            }
+            _ => {}
+        }
+        let Some(a) = agents.get(self.pane) else {
+            return String::new();
+        };
+        match name {
+            "agent_kind" => a.kind.clone().unwrap_or_default(),
+            "agent_state" => a.state.as_str().to_string(),
+            "agent_msg" => a.msg.clone().unwrap_or_default(),
+            "agent_blocked_kind" => a.blocked.clone().unwrap_or_default(),
+            "agent_since" => std::time::Instant::now()
+                .saturating_duration_since(a.since)
+                .as_secs()
+                .to_string(),
+            "agent_unseen" => flag(a.unseen),
+            _ => flag(needs_you(a)),
+        }
     }
 
     /// The session the formats are for (`#{session_id}`).
@@ -6029,6 +6103,107 @@ mod tests {
             run(&mut state, &["show-options", "-gv", "@m"]),
             Ok(format!("{pane} 3\n"))
         );
+    }
+
+    /// A server with two windows in one session; returns their panes.
+    fn two_window_state() -> (State, PaneId, PaneId) {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        for words in [
+            &["new-session", "-d", "-s", "a"][..],
+            &["new-window", "-d"][..],
+        ] {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(&mut state, &ctx, &argv).expect("setup");
+        }
+        let mut panes: Vec<PaneId> = state.model.panes.keys().copied().collect();
+        panes.sort();
+        (state, panes[0], panes[1])
+    }
+
+    fn report(s: crate::server::agents::AgentState, ts: u64) -> crate::server::agents::Report {
+        crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(s),
+            kind: Some("claude".into()),
+            msg: Some("hi".into()),
+            blocked: None,
+            session_id: None,
+            ts,
+        }
+    }
+
+    fn var(state: &State, pane: PaneId, name: &str) -> Option<String> {
+        let ctx = FormatCtx::new(&state.model, pane);
+        ServerVars::new(state, pane, &ctx).get(name)
+    }
+
+    #[tokio::test]
+    async fn no_record_empty() {
+        let (state, a, _) = two_window_state();
+        for name in [
+            "agent_kind",
+            "agent_state",
+            "agent_msg",
+            "agent_blocked_kind",
+            "agent_since",
+            "window_agent_state",
+            "session_agent_state",
+        ] {
+            assert_eq!(var(&state, a, name), Some(String::new()), "{name}");
+        }
+        assert_eq!(var(&state, a, "agents_total"), Some("0".into()));
+    }
+
+    #[tokio::test]
+    async fn window_rollup_unseen() {
+        use crate::server::agents::AgentState;
+        let (mut state, a, b) = two_window_state();
+        state.agents.apply(
+            a,
+            report(AgentState::Done, 1),
+            false,
+            std::time::Instant::now(),
+        );
+        assert_eq!(var(&state, a, "agent_state"), Some("done".into()));
+        assert_eq!(var(&state, a, "agent_unseen"), Some("1".into()));
+        assert_eq!(var(&state, a, "window_agent_state"), Some("unseen".into()));
+        assert_eq!(var(&state, b, "window_agent_state"), Some(String::new()));
+        assert_eq!(var(&state, b, "session_agent_state"), Some("unseen".into()));
+    }
+
+    #[tokio::test]
+    async fn counts() {
+        use crate::server::agents::AgentState;
+        let (mut state, a, b) = two_window_state();
+        let now = std::time::Instant::now();
+        state
+            .agents
+            .apply(a, report(AgentState::Blocked, 1), true, now);
+        state
+            .agents
+            .apply(b, report(AgentState::Working, 1), true, now);
+        let get = |n: &str| var(&state, a, n);
+        assert_eq!(get("agents_total"), Some("2".into()));
+        assert_eq!(get("agents_blocked"), Some("1".into()));
+        assert_eq!(get("agents_working"), Some("1".into()));
+        assert_eq!(get("agents_attention"), Some("1".into()));
+        assert_eq!(get("agent_attention"), Some("1".into()));
+        assert_eq!(get("session_agent_state"), Some("blocked".into()));
+    }
+
+    #[tokio::test]
+    async fn agent_since_seconds() {
+        use crate::server::agents::AgentState;
+        let (mut state, a, _) = two_window_state();
+        let Some(then) = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(90))
+        else {
+            return;
+        };
+        state
+            .agents
+            .apply(a, report(AgentState::Working, 1), true, then);
+        let secs: u64 = var(&state, a, "agent_since").unwrap().parse().unwrap();
+        assert!((90..95).contains(&secs), "{secs}");
     }
 
     /// FE.1 ruling: under tmux identity each built-in default that differs
