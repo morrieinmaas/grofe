@@ -1718,11 +1718,17 @@ pub fn wake(state: &mut State) {
     }
     let model = &state.model;
     let mut any = false;
-    for c in state.clients.values_mut() {
+    let ids: Vec<ClientId> = state.clients.keys().copied().collect();
+    for id in ids {
+        let preview = crate::server::picker::selected_pane(state, id);
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
         let shown = model.sessions.get(&c.session).map(|s| s.active);
         if dirty
             .iter()
             .any(|p| model.panes.get(p).map(|p| p.window) == shown)
+            || preview.is_some_and(|p| dirty.contains(&p))
         {
             c.dirty = true;
             any = true;
@@ -4131,6 +4137,39 @@ mod tests {
         state.agent_kinds = crate::server::agents::kinds::builtin();
         let id = *state.model.panes.keys().next().expect("pane");
         (state, id)
+    }
+
+    /// A client whose picker previews a pane redraws when that pane
+    /// outputs, though it shows another window.
+    #[tokio::test]
+    async fn wake_redraws_picker_preview() {
+        let (mut state, id) = pane_with_agents();
+        let (outbox, _) = Outbox::new();
+        let mut entry = state_with_client()
+            .0
+            .clients
+            .remove(&ClientId(1))
+            .expect("client");
+        entry.outbox = outbox;
+        state.clients.insert(ClientId(1), entry);
+        let report = crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(crate::server::agents::AgentState::Idle),
+            kind: Some("claude".into()),
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        state.agents.apply(id, report, false, Instant::now());
+        crate::server::picker::open(&mut state, ClientId(1)).expect("open");
+        assert_eq!(
+            crate::server::picker::selected_pane(&state, ClientId(1)),
+            Some(id)
+        );
+        state.clients.get_mut(&ClientId(1)).expect("client").dirty = false;
+        state.model.panes[&id].handle.reset_state();
+        wake(&mut state);
+        assert!(state.clients[&ClientId(1)].dirty);
     }
 
     /// Two outputs within the interval read the leader's argv once.

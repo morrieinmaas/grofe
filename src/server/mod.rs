@@ -28,13 +28,17 @@ pub mod graphics;
 pub mod hooks;
 pub mod imgstore;
 pub mod input;
+pub(crate) mod keymenu;
 pub mod layout;
 pub mod links;
+pub(crate) mod listdraw;
+pub(crate) mod listview;
 pub mod menu;
 pub mod model;
 pub mod mouse;
 pub mod pane;
 pub mod passthrough;
+pub(crate) mod picker;
 pub mod plugins;
 pub mod popup;
 pub mod prompt;
@@ -232,6 +236,8 @@ pub struct State {
     pub menus: menu::Menus,
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
+    pub pickers: picker::Pickers,
+    pub keymenus: keymenu::Menus,
     /// The paste buffers (TM.4).
     pub buffers: buffers::Buffers,
     /// The panes in copy mode (TM.1).
@@ -370,6 +376,10 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(menu::MenuOverlay));
     register_input_hook(state, Arc::new(popup::PopupHook));
     register_overlay(state, Arc::new(popup::PopupOverlay));
+    register_input_hook(state, Arc::new(picker::PickerHook));
+    register_overlay(state, Arc::new(picker::PickerOverlay));
+    register_input_hook(state, Arc::new(keymenu::KeyMenuHook));
+    register_overlay(state, Arc::new(keymenu::KeyMenuOverlay));
     register_input_hook(state, Arc::new(tree::TreeHook));
     register_overlay(state, Arc::new(tree::TreeOverlay));
     register_input_hook(state, Arc::new(mouse::MouseHook));
@@ -612,6 +622,8 @@ async fn serve(
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        pickers: picker::Pickers::default(),
+        keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
@@ -1337,6 +1349,8 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        pickers: picker::Pickers::default(),
+        keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),

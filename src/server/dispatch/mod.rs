@@ -50,7 +50,7 @@ use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
-use crate::server::{State, clients, graphics, prompt};
+use crate::server::{State, clients, graphics, keymenu, picker, prompt};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
 
@@ -439,6 +439,15 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // M5: copy mode (TM.1).
         Command::CopyMode(c) => copy::copy_mode(state, ctx, c),
         Command::Agent(c) => agent_cmd::run(state, ctx, c),
+        Command::ChooseAgent => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            picker::open(state, client).map(|()| String::new())
+        }
+        Command::KeyMenu(k) => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            let table = k.table.as_deref().unwrap_or("prefix");
+            keymenu::open(state, client, table).map(|()| String::new())
+        }
     }
 }
 
@@ -610,6 +619,20 @@ mod tests {
             &[],
         ] {
             assert!(!read_only(&argv(words)), "{words:?}");
+        }
+    }
+
+    #[test]
+    fn choose_agent_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        for words in [
+            &["choose-agent"][..],
+            &["key-menu"],
+            &["key-menu", "-T", "root"],
+        ] {
+            let r = run(&mut state, &ctx, &argv(words));
+            assert_eq!(r.err().as_deref(), Some("no client"), "{words:?}");
         }
     }
 }
