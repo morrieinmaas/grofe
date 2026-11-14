@@ -13,9 +13,17 @@ use crate::server::resume::Binding;
 use crate::server::{State, clients, events, hooks, resume};
 use crate::types::{ClientId, PaneId};
 
+/// Whether a client is known to be unfocused: its terminal reported losing
+/// focus and `focus-events` is on. With `focus-events` off its focus is
+/// unknown and counts as focused (spec §2.4); a client that never reported
+/// starts focused.
+fn known_unfocused(state: &State, c: &clients::ClientEntry) -> bool {
+    !c.focused && state.model.options.lookup("focus-events", &[]) == Some("on")
+}
+
 /// Whether `pane` is the active pane of the current window of an attached
-/// client whose outer terminal is focused (a client with no focus report
-/// yet counts as focused, spec §2.4).
+/// client whose outer terminal is focused (a client whose focus is unknown
+/// counts as focused, spec §2.4).
 pub fn is_seen(state: &State, pane: PaneId) -> bool {
     let Some(window) = state.model.panes.get(&pane).map(|p| p.window) else {
         return false;
@@ -29,7 +37,7 @@ pub fn is_seen(state: &State, pane: PaneId) -> bool {
         return false;
     }
     state.clients.values().any(|c| {
-        c.focused
+        !known_unfocused(state, c)
             && state
                 .model
                 .sessions
@@ -143,7 +151,7 @@ pub fn deliver(state: &mut State, raised: Raised) {
         "terminal" => (true, false),
         "command" => (false, true),
         "auto" => (
-            state.clients.values().any(|c| !c.focused),
+            state.clients.values().any(|c| known_unfocused(state, c)),
             state.clients.is_empty(),
         ),
         _ => (false, false),
@@ -685,6 +693,39 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(!file.exists(), "the command ran with a client attached");
+    }
+
+    /// Spec §2.4: with `focus-events off` a focus-out report does not make
+    /// the client known unfocused, so its active pane counts as seen and
+    /// `auto` sends no OSC 9; with it on, the same client is unfocused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn focus_events_off_counts_an_unfocused_client_as_focused() {
+        use crate::server::dispatch::options::Owner;
+        let (mut state, pane) = state_with_pane();
+        let mut accepted = attach_unfocused(&mut state);
+        state.notify.cfg.delivery = "auto".into();
+        state.notify.cfg.skip_when_seen = false;
+        state
+            .model
+            .options
+            .set(Owner::Global, "focus-events", "off", false)
+            .expect("set");
+        assert!(is_seen(&state, pane), "unknown focus counts as seen");
+        apply(&mut state, pane, blocked("perm", 1));
+        assert_eq!(state.notify.items().len(), 1, "raised to the tray");
+        crate::server::clients::tick(
+            &mut state,
+            Instant::now() + std::time::Duration::from_secs(1),
+        );
+        let out = String::from_utf8_lossy(&drain(&mut accepted.output)).into_owned();
+        assert!(!out.contains("\x1b]9;"), "{out:?}");
+
+        state
+            .model
+            .options
+            .set(Owner::Global, "focus-events", "on", false)
+            .expect("set");
+        assert!(!is_seen(&state, pane), "known unfocused is not seen");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
