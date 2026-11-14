@@ -954,10 +954,11 @@ mod tests {
             .map(String::from)
             .to_vec(),
         );
+        // Short payloads come first: the server caps text at 200 chars, and a
+        // long temp path must not cut them off.
         let msg = format!(
-            "{} $(touch {}) `touch {}`",
-            evil(&x),
-            x.display(),
+            "{} $(touch /nonexistent/X) `touch /nonexistent/X` {}",
+            evil(std::path::Path::new("")),
             x.display()
         );
         apply(&mut state, pane, blocked(&msg, 1));

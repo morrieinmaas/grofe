@@ -146,6 +146,8 @@ fn hook_and_cli_text_reach_the_server_sanitised() {
         x.display(),
         x.display()
     );
+    // The server caps agent text at 200 chars; a long temp path hits that.
+    let want: String = want.chars().take(200).collect();
     let payload = serde_json::json!({"message": evil, "session_id": "s;touch X"}).to_string();
     let mut cmd = srv.command();
     cmd.args(["agent", "report", "blocked", "--hook", "bad kind!"])
