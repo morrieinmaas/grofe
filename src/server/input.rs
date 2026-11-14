@@ -1767,6 +1767,13 @@ pub fn default_bindings() -> KeyTables {
         false,
         "Stop the server and every session",
     );
+    // grofe's own: tmux 3.7b binds no `u`.
+    bind(
+        "u",
+        &["agent", "next"],
+        false,
+        "Jump to the agent that needs you",
+    );
     for key in ["f", "F"] {
         bind(
             key,
@@ -4804,6 +4811,23 @@ mod tests {
         assert_eq!(w.last(), Some(&"kill-server"));
         t.use_tmux_stock();
         assert!(t.exact(PREFIX_TABLE, &k("Q")).is_none());
+    }
+
+    /// grofe identity binds `prefix u` to jump to the agent that needs you;
+    /// tmux 3.7b has no `u` binding, so a tmux-identity table has none.
+    #[test]
+    fn grofe_binds_u_agent_next() {
+        let t = default_bindings();
+        let u = t.exact(PREFIX_TABLE, &k("u")).expect("grofe's u");
+        assert_eq!(words(u), ["agent", "next"]);
+        assert_eq!(u.desc.as_deref(), Some("Jump to the agent that needs you"));
+    }
+
+    #[test]
+    fn tmux_identity_has_no_u_binding() {
+        let mut t = default_bindings();
+        t.use_tmux_stock();
+        assert!(t.exact(PREFIX_TABLE, &k("u")).is_none());
     }
 
     // ---- default key table (T2.5b) ----
