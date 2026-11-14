@@ -376,7 +376,9 @@ fn pane_title_is_the_host_until_the_pane_sets_one() {
 fn pane_tty_is_the_panes_own_terminal() {
     let srv = scripted();
     let file = srv.home.join("tty.txt");
-    let script = format!("tty > '{}'; sleep 30", file.display());
+    // uutils' `tty` (Ubuntu 26.04) prints no newline; add one so the
+    // wait below sees a complete line.
+    let script = format!("printf '%s\\n' \"$(tty)\" > '{}'; sleep 30", file.display());
     srv.cmd(&["new-window", "-t", "alpha", "sh", "-c", &script])
         .expect("new-window");
     common::wait_until(

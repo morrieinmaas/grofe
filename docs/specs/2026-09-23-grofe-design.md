@@ -750,6 +750,13 @@ time. Validation rejects a key bound twice in one table and a `name` used twice.
 `restore-on-start = true` (§6), `mode-keys = "vi"` (M5), new panes and windows
 inherit the active pane's cwd, and the status line never forks on redraw (D8).
 
+A status-line message is a pill centred between the status line's left and
+right parts, coloured and marked by its level (info, warning, error), and the
+command prompt is a pill too (`message.pill = true`, grofe's own option, D12:
+`false`, tmux's full-width bar, under tmux identity). `prompt-position`
+(`status`, the default under both identities, or `centre`) opens the prompt as
+a rounded box a third down the window instead.
+
 Two deliberate differences from canopy: canopy sets `escape-time 0`, grofe keeps
 25 ms so a lone ESC survives ssh; canopy sets `history-limit 100000`, grofe
 keeps 50000 as a default the user can raise.

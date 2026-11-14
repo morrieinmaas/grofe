@@ -337,7 +337,7 @@ fn visual(state: &mut State, window: WindowId, session: SessionId, alert: Alert)
             clients::queue_raw(state, id, b"\x07");
         }
         if how != "off" {
-            clients::show_message(state, id, &text);
+            clients::show_message_as(state, id, &text, crate::server::render::Level::Warning);
         }
     }
 }
