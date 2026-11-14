@@ -16,14 +16,14 @@ use super::{
     JoinPane, KeyMenu, KillPane, KillServer, KillSession, KillWindow, LastPane, LinkWindow,
     ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows,
     LoadBuffer, Lock, LockScope, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
-    NextLayout, Offset, OptionScope, Pan, PaneSetResume, PaneSetup, ParseError, PasteBuffer,
-    PipePane, PlacePane, PluginRestart, PromptHistory, RebootCheck, RefreshClient, RegisterSource,
-    Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell,
-    SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix,
-    ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment,
-    ShowHooks, ShowMessages, ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe,
-    SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, UnfloatPane,
-    UnlinkWindow, WaitFor, WindowMove, WindowStep,
+    NextLayout, NotifyCmd, Offset, OptionScope, Pan, PaneSetResume, PaneSetup, ParseError,
+    PasteBuffer, PipePane, PlacePane, PluginRestart, PromptHistory, RebootCheck, RefreshClient,
+    RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
+    RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SendKeysItem, SendPrefix, ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption,
+    ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SortFlags, SourceFile,
+    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
+    UnfloatPane, UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -1228,6 +1228,59 @@ fn parse_agent(argv: &[String]) -> Result<Command, ParseError> {
             "agent: unknown subcommand {other}"
         ))),
     }
+}
+
+/// `notify list|dismiss <id>|clear|mute [duration]|unmute`.
+fn parse_notify(argv: &[String]) -> Result<Command, ParseError> {
+    let (sub, rest) = argv
+        .split_first()
+        .ok_or_else(|| ParseError::Other("notify: subcommand required".into()))?;
+    let name = format!("notify {sub}");
+    let flags = flags_for(rest, &[], &name)?;
+    let cmd = match sub.as_str() {
+        "list" | "clear" | "unmute" => {
+            no_extra_positionals(&flags, &name, 0)?;
+            match sub.as_str() {
+                "list" => NotifyCmd::List,
+                "clear" => NotifyCmd::Clear,
+                _ => NotifyCmd::Unmute,
+            }
+        }
+        "dismiss" => {
+            let id = one_positional(&flags, &name)?;
+            NotifyCmd::Dismiss(
+                id.parse()
+                    .map_err(|_| ParseError::Other(format!("notify dismiss: bad id {id}")))?,
+            )
+        }
+        "mute" => {
+            no_extra_positionals(&flags, &name, 1)?;
+            let until = flags.positionals.first().map(|d| parse_mute_duration(d));
+            NotifyCmd::Mute(until.transpose()?)
+        }
+        other => {
+            return Err(ParseError::Other(format!(
+                "notify: unknown subcommand {other}"
+            )));
+        }
+    };
+    Ok(Command::Notify(cmd))
+}
+
+/// `30s`, `10m`, `2h`: a positive whole number and a unit.
+fn parse_mute_duration(s: &str) -> Result<std::time::Duration, ParseError> {
+    let bad = || ParseError::Other(format!("notify mute: bad duration {s}"));
+    let split = s.find(|c: char| !c.is_ascii_digit()).ok_or_else(bad)?;
+    let n: u64 = s[..split].parse().ok().filter(|n| *n > 0).ok_or_else(bad)?;
+    let unit = match &s[split..] {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        _ => return Err(bad()),
+    };
+    n.checked_mul(unit)
+        .map(std::time::Duration::from_secs)
+        .ok_or_else(bad)
 }
 
 fn parse_agent_report(argv: &[String]) -> Result<Command, ParseError> {
@@ -3952,6 +4005,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "plugin-restart" => parse_plugin_restart(rest),
         "pane-set-resume" => parse_pane_set_resume(rest),
         "agent" => parse_agent(rest),
+        "notify" => parse_notify(rest),
         "reboot-check" => parse_reboot_check(rest),
         "command-prompt" => parse_command_prompt(rest),
         "run-shell" => parse_run_shell(rest),
@@ -4153,6 +4207,11 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             let flags = flags_for(rest, &[], "choose-agent")?;
             no_extra_positionals(&flags, "choose-agent", 0)?;
             Ok(Command::ChooseAgent)
+        }
+        "choose-notification" => {
+            let flags = flags_for(rest, &[], "choose-notification")?;
+            no_extra_positionals(&flags, "choose-notification", 0)?;
+            Ok(Command::ChooseNotification)
         }
         "key-menu" => {
             let flags = flags_for(rest, &[('T', FlagKind::Value)], "key-menu")?;
@@ -5878,6 +5937,66 @@ mod tests {
     fn choose_agent_no_args() {
         assert_eq!(parse(&argv(&["choose-agent"])), Ok(Command::ChooseAgent));
         assert!(parse(&argv(&["choose-agent", "x"])).is_err());
+    }
+
+    #[test]
+    fn choose_notification_no_args() {
+        assert_eq!(
+            parse(&argv(&["choose-notification"])),
+            Ok(Command::ChooseNotification)
+        );
+        assert!(parse(&argv(&["choose-notification", "x"])).is_err());
+    }
+
+    #[test]
+    fn notify_subcommands() {
+        use std::time::Duration;
+        let n = |w: &[&str]| parse(&argv(w));
+        assert_eq!(n(&["notify", "list"]), Ok(Command::Notify(NotifyCmd::List)));
+        assert_eq!(
+            n(&["notify", "clear"]),
+            Ok(Command::Notify(NotifyCmd::Clear))
+        );
+        assert_eq!(
+            n(&["notify", "unmute"]),
+            Ok(Command::Notify(NotifyCmd::Unmute))
+        );
+        assert_eq!(
+            n(&["notify", "dismiss", "7"]),
+            Ok(Command::Notify(NotifyCmd::Dismiss(7)))
+        );
+        assert_eq!(
+            n(&["notify", "mute"]),
+            Ok(Command::Notify(NotifyCmd::Mute(None)))
+        );
+        for (d, secs) in [("10m", 600), ("30s", 30), ("2h", 7200)] {
+            assert_eq!(
+                n(&["notify", "mute", d]),
+                Ok(Command::Notify(NotifyCmd::Mute(Some(Duration::from_secs(
+                    secs
+                )))))
+            );
+        }
+        assert!(n(&["notify", "dismiss", "x"]).is_err());
+        assert!(n(&["notify", "dismiss"]).is_err());
+        assert!(n(&["notify", "list", "x"]).is_err());
+    }
+
+    #[test]
+    fn notify_unknown_sub() {
+        assert!(parse(&argv(&["notify"])).is_err());
+        assert_eq!(
+            parse(&argv(&["notify", "frob"])),
+            Err(ParseError::Other("notify: unknown subcommand frob".into()))
+        );
+    }
+
+    #[test]
+    fn mute_bad_duration() {
+        for d in ["10", "m", "0m", "5d", "-3m", "1.5h", "10m5"] {
+            assert!(parse(&argv(&["notify", "mute", d])).is_err(), "{d}");
+        }
+        assert!(parse(&argv(&["notify", "mute", "1m", "2m"])).is_err());
     }
 
     #[test]

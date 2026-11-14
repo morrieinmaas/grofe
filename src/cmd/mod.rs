@@ -716,6 +716,16 @@ pub enum AgentCmd {
     Seen { target: Target, all: bool },
 }
 
+/// `notify list|dismiss|clear|mute|unmute` (grofe's own): the notification tray.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyCmd {
+    List,
+    Dismiss(u64),
+    Clear,
+    Mute(Option<std::time::Duration>),
+    Unmute,
+}
+
 /// `agent report <state> [-t pane] [--kind k] [--msg text] [--blocked b]
 /// [--session-id id] [--ts N]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1752,5 +1762,8 @@ pub enum Command {
     CopyMode(CopyMode),
     /// `choose-agent`: the agent picker overlay.
     ChooseAgent,
+    /// `choose-notification`: the notification tray overlay.
+    ChooseNotification,
+    Notify(NotifyCmd),
     KeyMenu(KeyMenu),
 }
