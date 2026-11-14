@@ -147,6 +147,7 @@ mod tests {
     #[test] fn a_syntax_error_names_the_chunk() { assert_eq!(rt().exec("init.luau", "x =").unwrap_err().who, "init.luau"); }
 }
 ```
+**Departure (2026-11-14):** `memory_is_capped` as built uses a 5 s budget and distinct 64 KiB strings, since 64-byte pieces hit the 50 ms budget before 8 MiB and Luau shares identical strings.
 **Notes:** `set_interrupt` checks a `Cell<Option<Instant>>` deadline; after it passes, return `Err` on every interrupt until `guarded` disarms. Call `sandbox(true)` after setup. Set the memory limit through mlua.
 
 ### T2 api · Complexity 6 · Est. context 34k
