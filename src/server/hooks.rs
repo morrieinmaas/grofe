@@ -515,6 +515,12 @@ pub const EVENTS: &[EventSpec] = &[
         tmux: "",
         kind: HookKind::Session,
     },
+    EventSpec {
+        name: "agent-changed",
+        fires: "a pane's agent state changed",
+        tmux: "",
+        kind: HookKind::WindowPane,
+    },
 ];
 
 /// The event named `name`.
@@ -2266,7 +2272,7 @@ mod tests {
             .filter(|e| e.tmux.is_empty())
             .map(|e| e.name)
             .collect();
-        assert_eq!(own, ["resume-changed", "restore-done"]);
+        assert_eq!(own, ["resume-changed", "restore-done", "agent-changed"]);
         let mut names: Vec<&str> = EVENTS.iter().map(|e| e.name).collect();
         names.sort();
         names.dedup();
