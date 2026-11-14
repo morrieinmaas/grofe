@@ -417,6 +417,19 @@ printf '{"id":1,"argv":["subscribe"]}\n' | grofe control
 POSIX sh: it subscribes to every event and appends each as a JSON line to
 `<state>/events.log`. Copy it next to your config and use the snippet above.
 
+## Scripting and plugins
+
+grofe embeds Luau. An `init.luau` next to your config can bind keys, react to events, run timers
+and push values into the status line through a small `grofe.*` API, and every call runs under a
+50 ms and 64 MiB budget so a script can never freeze the server. `grofe pack` installs plugins
+from git into a lockfile, Luau plugins and tmux plugins alike.
+
+```lua
+grofe.bind("prefix", "g", function() grofe.cmd("split-window -h") end, { desc = "Split" })
+```
+
+See [docs/lua.md](docs/lua.md) for the API, the pack manager and editor types.
+
 ## What it isn't
 
 grofe is not a general reimplementation of tmux. It answers to the name `tmux`
