@@ -1231,6 +1231,8 @@ pub struct Binding {
     /// they cannot be printed back from `cmds`: tmux's stock bindings, whose
     /// `{ }` lists `cmds` holds as strings.
     pub shown: Option<String>,
+    /// The key menu's section (`group` in the config, `bind-key -G`).
+    pub group: Option<String>,
 }
 
 impl Binding {
@@ -1244,6 +1246,7 @@ impl Binding {
             name: None,
             dialect: Dialect::Grofe,
             shown: None,
+            group: None,
         }
     }
 }
@@ -1382,6 +1385,7 @@ impl KeyTables {
             let mut b = Binding::new(k.cmds.clone(), k.repeat, source);
             b.desc = k.desc.clone();
             b.name = k.name.clone();
+            b.group = k.group.clone();
             t.insert(&k.table, k.key, b);
         }
         t
@@ -1812,7 +1816,14 @@ pub fn default_bindings() -> KeyTables {
         false,
         "Choose a window from a list",
     );
-    bind("Space", &["next-layout"], false, "Select next layout");
+    bind(
+        "Space",
+        &["key-menu", "-T", "prefix"],
+        false,
+        "Show the key menu",
+    );
+    bind("M-Space", &["next-layout"], false, "Select next layout");
+    bind("U", &["choose-agent"], false, "Pick an agent");
     bind("?", &["list-keys", "-N"], false, "List key bindings");
     bind("r", &["refresh-client"], false, "Redraw the current client");
     bind(
@@ -1946,7 +1957,51 @@ pub fn default_bindings() -> KeyTables {
             Binding::new(cmds, false, BindingSource::Default),
         );
     }
+    for (table, bindings) in t.tables.iter_mut() {
+        for b in bindings.values_mut() {
+            b.group = Some(default_group(table, &b.cmds).to_string());
+        }
+    }
     t
+}
+
+/// The key menu section of a grofe default binding, from its table and
+/// first command.
+fn default_group(table: &str, cmds: &[Vec<String>]) -> &'static str {
+    if table == COPY_MODE_VI_TABLE || table == COPY_MODE_TABLE {
+        return "copy";
+    }
+    if table == ROOT_TABLE {
+        return "pane";
+    }
+    let argv = cmds.first().map(Vec::as_slice).unwrap_or_default();
+    let word = |i: usize| argv.get(i).map(String::as_str).unwrap_or("");
+    let last = argv.last().map(String::as_str).unwrap_or("");
+    match word(0) {
+        "split-window" | "select-pane" | "resize-pane" | "last-pane" | "rotate-window"
+        | "display-panes" | "break-pane" | "swap-pane" | "if-shell" => "pane",
+        "new-window" | "next-window" | "previous-window" | "last-window" | "select-window"
+        | "kill-window" => "window",
+        "switch-client" => "session",
+        "choose-tree" if word(1).ends_with('s') => "session",
+        "choose-tree" => "window",
+        "confirm-before" if last == "kill-pane" => "pane",
+        "confirm-before" if last == "kill-window" => "window",
+        "command-prompt" if last.starts_with("rename-session") => "session",
+        "command-prompt"
+            if last.starts_with("rename-window")
+                || last.starts_with("move-window")
+                || last.starts_with("select-window") =>
+        {
+            "window"
+        }
+        "copy-mode" | "paste-buffer" | "list-buffers" | "choose-buffer" | "delete-buffer" => "copy",
+        "next-layout" | "select-layout" => "layout",
+        "agent" | "choose-agent" => "agents",
+        "show-messages" => "notifications",
+        "detach-client" | "choose-client" | "suspend-client" | "refresh-client" => "client",
+        _ => "other",
+    }
 }
 
 /// grofe identity's `MouseDown1Control7`, the tab's float control: the
@@ -4992,7 +5047,9 @@ mod tests {
                 "Swap the active pane with the pane below",
             ),
             ("w", &["choose-tree", "-Zw"], "Choose a window from a list"),
-            ("Space", &["next-layout"], "Select next layout"),
+            ("Space", &["key-menu", "-T", "prefix"], "Show the key menu"),
+            ("M-Space", &["next-layout"], "Select next layout"),
+            ("U", &["choose-agent"], "Pick an agent"),
             ("?", &["list-keys", "-N"], "List key bindings"),
             (
                 "M-5",
@@ -5368,5 +5425,44 @@ mod tests {
             bad.extend(errors.into_iter().map(|e| format!("prefix {key}: {e}")));
         }
         assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[test]
+    fn every_default_has_group() {
+        let t = default_bindings();
+        let mut bad = Vec::new();
+        for (table, bindings) in &t.tables {
+            for (key, b) in bindings {
+                if b.group.is_none() {
+                    bad.push(format!("{table} {key}"));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{bad:?}");
+        let get = |k: &str| t.exact(PREFIX_TABLE, &parse_key(k).unwrap()).unwrap();
+        assert_eq!(get("U").group.as_deref(), Some("agents"));
+        assert_eq!(get("u").group.as_deref(), Some("agents"));
+        assert_eq!(get("Space").group.as_deref(), Some("other"));
+        assert_eq!(get("M-Space").group.as_deref(), Some("layout"));
+        assert_eq!(get("c").group.as_deref(), Some("window"));
+        assert_eq!(get("Space").cmds, vec![argv(&["key-menu", "-T", "prefix"])]);
+    }
+
+    #[test]
+    fn toml_group_kept() {
+        let mut kb = config_key("prefix", "x", &[&["neww"]], 1);
+        kb.group = Some("window".to_string());
+        let t = KeyTables::from_config(&[kb]);
+        let b = t.exact(PREFIX_TABLE, &parse_key("x").unwrap()).unwrap();
+        assert_eq!(b.group.as_deref(), Some("window"));
+    }
+
+    #[test]
+    fn tmux_stock_unchanged() {
+        let mut t = default_bindings();
+        t.use_tmux_stock();
+        let b = t.exact(PREFIX_TABLE, &parse_key("Space").unwrap()).unwrap();
+        assert_eq!(b.cmds, vec![argv(&["next-layout"])]);
+        assert!(t.exact(PREFIX_TABLE, &parse_key("U").unwrap()).is_none());
     }
 }
