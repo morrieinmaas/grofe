@@ -111,7 +111,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6"]
     fn test_pack_table_parses() {
         let specs = load("[[pack]]\nsrc = \"github:a/b\"\n").unwrap();
         assert_eq!(specs.len(), 1);
@@ -122,7 +121,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6"]
     fn test_pack_options_parse() {
         let text = "[[pack]]\nsrc = \"github:a/b\"\nname = \"x\"\nrev = \"v1\"\nenabled = false\n";
         let s = &load(text).unwrap()[0];
@@ -133,7 +131,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6"]
     fn test_pack_bad_src_errors_with_line() {
         let errs = load("\n\n[[pack]]\nsrc = \"ftp://x\"\n").unwrap_err();
         assert!(errs[0].contains("config.toml:4: pack.src"), "{errs:?}");
@@ -162,7 +159,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6"]
     fn test_pack_name_rejects_path_traversal() {
         let errs = load("[[pack]]\nsrc = \"x\"\nname = \"../evil\"\n").unwrap_err();
         assert!(errs.iter().any(|e| e.contains("pack.name")), "{errs:?}");

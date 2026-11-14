@@ -263,6 +263,7 @@ mod tests {
             format!("name = \"p\"\napi = {api}\n"),
         )
         .unwrap();
+        fs::write(work.join("init.luau"), "").unwrap();
         commit(&work, "one");
         g(&work, &["push", "--quiet", &bare.to_string_lossy(), "main"]);
         (bare, work)
@@ -271,7 +272,7 @@ mod tests {
     fn commit(work: &Path, msg: &str) {
         fs::write(work.join("f"), msg).unwrap();
         g(work, &["add", "-A"]);
-        g(work, &["commit", "--quiet", "-m", msg]);
+        g(work, &["commit", "--quiet", "--no-verify", "-m", msg]);
     }
 
     fn spec(bare: &Path) -> Spec {
@@ -284,7 +285,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6 detect"]
     fn test_sync_installs_and_locks_head() {
         let t = tempfile::tempdir().unwrap();
         let (bare, work) = upstream(t.path(), 1);
@@ -302,7 +302,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6 detect"]
     fn test_sync_checks_out_locked_rev() {
         let t = tempfile::tempdir().unwrap();
         let (bare, work) = upstream(t.path(), 1);
@@ -319,7 +318,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6 detect"]
     fn test_api_mismatch_fails_sync() {
         let t = tempfile::tempdir().unwrap();
         let (bare, _work) = upstream(t.path(), 2);
@@ -333,7 +331,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs T6 detect"]
     fn test_pending_and_apply_move_the_lock() {
         let t = tempfile::tempdir().unwrap();
         let (bare, work) = upstream(t.path(), 1);
