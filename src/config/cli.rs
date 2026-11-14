@@ -6,12 +6,12 @@
 // shown; this shows what the files resolve to.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::{
-    ConfigHook, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved,
-    Ty, closest, list_tmux_name, load, load_with_file, tmux_name, toml_type,
+    ConfigHook, ConfigKind, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES,
+    Resolved, Ty, closest, list_tmux_name, load, load_with_file, tmux_name, toml_type,
 };
 use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
@@ -184,6 +184,7 @@ fn run(args: &[String]) -> Result<String, String> {
             for (name, p) in &r.plugins {
                 plugin(&mut out, name, p);
             }
+            out.push_str(&agents_lines(&r, home, explain, "agents")?);
             for (name, value) in &r.user_options {
                 user_option(&mut out, name, value);
             }
@@ -191,6 +192,9 @@ fn run(args: &[String]) -> Result<String, String> {
                 variable(&mut out, name, value);
             }
             load_commands(&mut out);
+        }
+        Some(k) if k == "agents" || k.starts_with("agents.") => {
+            out.push_str(&agents_lines(&r, home, explain, k)?);
         }
         Some("plugins") => {
             for (name, p) in &r.plugins {
@@ -344,6 +348,87 @@ fn plugin_value(p: &ConfigPlugin) -> String {
     format!("{{ {} }}", fields.join(", "))
 }
 
+/// The `[agents]` lines under `key` (`agents`, `agents.enabled`,
+/// `agents.kinds` or `agents.kinds.<name>`, ...).
+fn agents_lines(
+    r: &Resolved,
+    home: Option<&Path>,
+    explain: bool,
+    key: &str,
+) -> Result<String, String> {
+    let a = &r.agents;
+    let mut out = String::new();
+    let scalar = |out: &mut String, k: &str, value: String| {
+        out.push_str(&format!("{k} = {value}\n"));
+        if explain {
+            let by = r
+                .provenance
+                .get(k)
+                .map_or_else(|| "built-in defaults".to_string(), |s| s.describe(home));
+            out.push_str(&format!("  set by {by}\n"));
+        }
+    };
+    let kind = |out: &mut String, name: &str, k: &ConfigKind| {
+        out.push_str(&format!(
+            "agents.kinds.{} = {}\n",
+            bare_or_quoted(name),
+            kind_value(k)
+        ));
+        if explain {
+            for field in ["match", "command", "resume", "enabled"] {
+                let path = format!("agents.kinds.{name}.{field}");
+                if let Some(src) = r.provenance.get(&path) {
+                    out.push_str(&format!("  {field} set by {}\n", src.describe(home)));
+                }
+            }
+        }
+    };
+    let want = |k: &str| key == "agents" || key == k;
+    if want("agents.enabled") {
+        scalar(&mut out, "agents.enabled", a.enabled.to_string());
+    }
+    if want("agents.scan-interval") {
+        let ms = a.scan_interval.as_millis();
+        let text = if ms.is_multiple_of(1000) {
+            format!("{}s", ms / 1000)
+        } else {
+            format!("{ms}ms")
+        };
+        scalar(&mut out, "agents.scan-interval", quote(&text));
+    }
+    if key == "agents" || key == "agents.kinds" {
+        for (name, k) in &a.kinds {
+            kind(&mut out, name, k);
+        }
+    } else if let Some(name) = key.strip_prefix("agents.kinds.") {
+        let k = a
+            .kinds
+            .get(name)
+            .ok_or_else(|| format!("show-config: no kind {key}"))?;
+        kind(&mut out, name, k);
+    } else if !want("agents.enabled") && !want("agents.scan-interval") {
+        return Err(format!("show-config: unknown key {key}"));
+    }
+    Ok(out)
+}
+
+fn kind_value(k: &ConfigKind) -> String {
+    let mut fields = Vec::new();
+    if let Some(m) = &k.matches {
+        let m = toml::Value::Array(m.iter().cloned().map(toml::Value::String).collect());
+        fields.push(format!("match = {m}"));
+    }
+    for (name, v) in [("command", &k.command), ("resume", &k.resume)] {
+        if let Some(v) = v {
+            fields.push(format!("{name} = {}", quote(v)));
+        }
+    }
+    if let Some(e) = k.enabled {
+        fields.push(format!("enabled = {e}"));
+    }
+    format!("{{ {} }}", fields.join(", "))
+}
+
 fn binding_value(b: &KeyBinding) -> String {
     if b.desc.is_none() && b.group.is_none() && b.name.is_none() && !b.repeat {
         return quote(&b.command);
@@ -363,6 +448,35 @@ fn binding_value(b: &KeyBinding) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn resolved(text: &str) -> Resolved {
+        use crate::config::load_one;
+        let dir = std::env::temp_dir().join(format!("grofe-agents-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("a.toml");
+        std::fs::write(&path, text).expect("write");
+        let env = Env::from_vars(None, None);
+        load_one(&path, &env).expect("loads")
+    }
+
+    #[test]
+    fn show_config_lists_agents() {
+        let r = resolved(
+            "[agents]\nscan-interval = \"500ms\"\n[agents.kinds.claude]\nmatch = [\"claude\"]\nresume = \"claude -r {id}\"",
+        );
+        let out = agents_lines(&r, None, false, "agents").expect("lines");
+        assert_eq!(
+            out,
+            "agents.enabled = true\nagents.scan-interval = \"500ms\"\n\
+             agents.kinds.claude = { match = [\"claude\"], resume = \"claude -r {id}\" }\n"
+        );
+        let one = agents_lines(&r, None, true, "agents.kinds.claude").expect("lines");
+        assert!(one.contains("  resume set by "), "{one}");
+        assert!(agents_lines(&r, None, false, "agents.kinds.nope").is_err());
+        assert!(agents_lines(&r, None, false, "agents.bogus").is_err());
+        let sc = agents_lines(&r, None, true, "agents.enabled").expect("lines");
+        assert_eq!(sc, "agents.enabled = true\n  set by built-in defaults\n");
+    }
 
     #[test]
     fn explain_marks_a_no_effect_option() {

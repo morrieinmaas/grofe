@@ -21,6 +21,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use cli::show_config;
+pub use load::agents::{ConfigAgents, ConfigKind};
 pub use load::plugins::{ConfigPlugin, Restart};
 pub use load::{load, load_one, load_with_file};
 pub use provenance::{Layer, Provenance, Source};
@@ -472,7 +473,7 @@ pub struct ConfigCommand {
 }
 
 /// A fully loaded and validated config.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Resolved {
     /// Every option by TOML key, in tmux's value form (`on`, `50000`,
     /// `C-b`), already normalized by the option store's validation.
@@ -485,6 +486,8 @@ pub struct Resolved {
     pub sources: BTreeMap<String, ConfigSource>,
     /// `[plugins.<name>]` (T6.3), merged key by key across the layers.
     pub plugins: BTreeMap<String, ConfigPlugin>,
+    /// `[agents]` and `[agents.kinds.<name>]`, merged key by key.
+    pub agents: ConfigAgents,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
     /// `[user-options]` (TP.0): global user options by name, `@` included,
