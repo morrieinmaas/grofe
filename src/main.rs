@@ -734,7 +734,23 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         }
         Err(e) => return fail(&e),
     };
-    match request(stream, socket, argv) {
+    // A server that was exiting as this connected (an empty or unattached
+    // one) closes the connection without answering. When no server is
+    // there any more, say so as for any other command; the request is
+    // never sent again, so it cannot run twice.
+    let reply = match request(stream, socket, argv) {
+        Err(e)
+            if e.starts_with("sending request: ")
+                || e.starts_with("server closed the connection") =>
+        {
+            match connect(socket) {
+                Err(gone) if no_server(&gone) => return fail(&gone),
+                _ => Err(e),
+            }
+        }
+        reply => reply,
+    };
+    match reply {
         Ok(Reply::Ok { out, .. }) => {
             let mut stdout = io::stdout().lock();
             let _ = stdout.write_all(out.as_bytes());
