@@ -1727,6 +1727,7 @@ pub fn wake(state: &mut State) {
     let ids: Vec<ClientId> = state.clients.keys().copied().collect();
     for id in ids {
         let preview = crate::server::picker::selected_pane(state, id);
+        let grid = crate::server::grid::visible_panes(state, id);
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
@@ -1735,6 +1736,7 @@ pub fn wake(state: &mut State) {
             .iter()
             .any(|p| model.panes.get(p).map(|p| p.window) == shown)
             || preview.is_some_and(|p| dirty.contains(&p))
+            || grid.iter().any(|p| dirty.contains(p))
         {
             c.dirty = true;
             any = true;
@@ -2152,7 +2154,7 @@ fn render_dirty(state: &mut State) {
             continue;
         };
         let composed = compose_client(state, id, c);
-        let fits = window_fits(&state.model, c);
+        let fits = window_fits(state, id, c);
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
@@ -2206,17 +2208,29 @@ fn glob(pattern: &str, text: &str) -> bool {
 
 /// Client `c`'s current window, and whether it fits the client (then
 /// there is nothing to pan).
-fn window_fits(model: &Model, c: &ClientEntry) -> Option<(WindowId, bool)> {
+fn window_fits(state: &State, id: ClientId, c: &ClientEntry) -> Option<(WindowId, bool)> {
+    let model = &state.model;
     let w = model.windows.get(&model.sessions.get(&c.session)?.active)?;
-    let (cols, rows) = visible_size(model, c);
+    let (cols, rows) = visible_size(state, id, c);
     Some((w.id, w.cols <= cols && w.rows <= rows))
 }
 
 /// The part of client `c` that shows the window: its size less the
-/// status rows.
-fn visible_size(model: &Model, c: &ClientEntry) -> (u16, u16) {
-    let lines = status_geometry(model, c.session, c.size.1).lines;
-    (c.size.0, c.size.1.saturating_sub(lines))
+/// status rows and the columns the agent sidebar holds.
+fn visible_size(state: &State, id: ClientId, c: &ClientEntry) -> (u16, u16) {
+    let lines = status_geometry(&state.model, c.session, c.size.1).lines;
+    let reserved = crate::server::sidebar::reserved(state, id, c.size.0);
+    (
+        c.size.0.saturating_sub(reserved),
+        c.size.1.saturating_sub(lines),
+    )
+}
+
+/// The agent sidebar was shown or hidden for `client`: its window changes
+/// size, so size the windows again (the normal resize path, which gives the
+/// panes their new size) and redraw every client.
+pub(crate) fn resize_for_sidebar(state: &mut State, _client: ClientId) {
+    changed(state);
 }
 
 /// `refresh-client -c/-L/-R/-U/-D` (TC.9): moves the visible part of a
@@ -2234,7 +2248,7 @@ pub(crate) fn pan(state: &mut State, id: ClientId, pan: cmd::Pan, by: u16) {
     else {
         return;
     };
-    let (cols, rows) = visible_size(model, c);
+    let (cols, rows) = visible_size(state, id, c);
     let (wid, wcols, wrows) = (w.id, w.cols, w.rows);
     let Some(c) = state.clients.get_mut(&id) else {
         return;
@@ -2302,11 +2316,16 @@ pub(crate) fn status_geometry(model: &Model, session: SessionId, rows: u16) -> S
     }
 }
 
-/// The window size a client of `session` with `size` wants: its terminal
-/// less the status rows, never below 1x1.
-fn window_size(model: &Model, session: SessionId, (cols, rows): (u16, u16)) -> (u16, u16) {
-    let status = status_lines(model, session);
-    (cols.max(1), rows.saturating_sub(status).max(1))
+/// The window size the size-owning `client` of `session` wants: its terminal
+/// less the status rows and the sidebar's columns, never below 1x1.
+fn window_size(state: &State, client: ClientId, session: SessionId) -> (u16, u16) {
+    let (cols, rows) = state.clients.get(&client).map_or((1, 1), |c| c.size);
+    let status = status_lines(&state.model, session);
+    let reserved = crate::server::sidebar::reserved(state, client, cols);
+    (
+        cols.saturating_sub(reserved).max(1),
+        rows.saturating_sub(status).max(1),
+    )
 }
 
 /// One cell's size in pixels on the client `session`'s windows are sized
@@ -2326,7 +2345,7 @@ fn apply_sizes(state: &mut State) {
         .iter()
         .filter_map(|(s, o)| {
             let c = state.clients.get(&o.client)?;
-            Some((*s, window_size(&state.model, *s, c.size), c.activity))
+            Some((*s, window_size(state, o.client, *s), c.activity))
         })
         .collect();
     for &(session, size, activity) in &sizes {
@@ -2819,7 +2838,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     let s = model.sessions.get(&c.session)?;
     let w = model.windows.get(&s.active)?;
     let geom = status_geometry(model, s.id, c.size.1);
-    let visible = (c.size.0, c.size.1 - geom.lines);
+    let visible = visible_size(state, id, c);
     let area = w.area();
     let rects = visible_panes(w);
     let borders = if w.zoomed {
@@ -2915,6 +2934,8 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     }
     // Floating panes cover what is under them, images included.
     screenimg::hide_covered(&mut window);
+    // The columns the sidebar holds stay blank here; its overlay draws them.
+    let window = widen(window, c.size.0);
     let (rows, message) = status_rows(state, c, s, geom.lines);
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
     let mut screen = if !lines.is_empty() {
@@ -2948,6 +2969,21 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     // Popups, menus, prompts and choosers cover images the same way.
     screenimg::hide_covered(&mut screen);
     Some((screen, viewport, rows, geom.first_row))
+}
+
+/// `window` with blank columns added on the right up to `cols`.
+fn widen(window: Screen, cols: u16) -> Screen {
+    if window.cols >= cols {
+        return window;
+    }
+    let mut wide = Screen::new(cols, window.rows);
+    let (old, new) = (usize::from(window.cols), usize::from(cols));
+    for (row, cells) in window.cells.chunks(old.max(1)).enumerate() {
+        wide.cells[row * new..row * new + old].clone_from_slice(cells);
+    }
+    wide.cursor = window.cursor;
+    wide.images = window.images;
+    wide
 }
 
 /// Client `c`'s `lines` status rows on session `s` (spec §4.10), and its
@@ -4981,9 +5017,9 @@ mod tests {
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 11);
+        assert_eq!(state.registry.input_hooks.len(), 13);
         // TM.6 removed the mouse's scrollback view overlay.
-        assert_eq!(state.registry.overlays.len(), 10);
+        assert_eq!(state.registry.overlays.len(), 12);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),
@@ -5156,6 +5192,79 @@ mod tests {
         assert_eq!(flags(&state), [true, true], "a new pane starts on");
         gone(&mut state, id);
         assert_eq!(flags(&state), [false, false], "the client left");
+    }
+
+    /// The sidebar shown on `id` (width 32, so 33 columns), as `agent-sidebar on`.
+    fn show_sidebar(state: &mut State, id: ClientId) {
+        crate::server::sidebar::set(state, id, crate::server::sidebar::SidebarOp::On)
+            .expect("sidebar on");
+    }
+
+    /// A state with a real session and one client of `size` attached to it
+    /// (`sidebar::set` resizes through [`changed`], which drops a client
+    /// whose session is gone).
+    fn sidebar_state(size: (u16, u16)) -> (State, ClientId, SessionId) {
+        let (mut state, _) = pane_with_agents();
+        let session = *state.model.sessions.keys().next().expect("session");
+        let id = ClientId(1);
+        let mut entry = state_with_client().0.clients.remove(&id).expect("client");
+        entry.session = session;
+        entry.size = size;
+        state.clients.insert(id, entry);
+        (state, id, session)
+    }
+
+    #[tokio::test]
+    async fn window_shrinks_by_reserved() {
+        let (mut state, id, session) = sidebar_state((160, 50));
+        let status = status_lines(&state.model, session);
+        show_sidebar(&mut state, id);
+        let reserved = crate::server::sidebar::reserved(&state, id, 160);
+        assert_eq!(reserved, 33);
+        assert_eq!(window_size(&state, id, session), (127, 50 - status));
+        let c = state.clients.get(&id).expect("client");
+        assert_eq!(visible_size(&state, id, c), (127, 50 - status));
+    }
+
+    #[tokio::test]
+    async fn no_sidebar_sizes_unchanged() {
+        let (state, id, session) = sidebar_state((160, 50));
+        let status = status_lines(&state.model, session);
+        assert_eq!(window_size(&state, id, session), (160, 50 - status));
+        let c = state.clients.get(&id).expect("client");
+        assert_eq!(visible_size(&state, id, c), (160, 50 - status));
+    }
+
+    #[tokio::test]
+    async fn other_client_cropped() {
+        let (mut state, id, _session) = sidebar_state((160, 50));
+        show_sidebar(&mut state, id);
+        // A client the sidebar is not shown on keeps its whole width.
+        let c = state.clients.get(&id).expect("client");
+        let other = ClientId(2);
+        assert_eq!(visible_size(&state, other, c).0, 160);
+        assert_eq!(visible_size(&state, id, c).0, 127);
+    }
+
+    #[tokio::test]
+    async fn toggle_off_restores() {
+        let (mut state, id, session) = sidebar_state((160, 50));
+        let status = status_lines(&state.model, session);
+        show_sidebar(&mut state, id);
+        assert_eq!(window_size(&state, id, session).0, 127);
+        crate::server::sidebar::set(&mut state, id, crate::server::sidebar::SidebarOp::Off)
+            .expect("sidebar off");
+        assert_eq!(window_size(&state, id, session), (160, 50 - status));
+    }
+
+    #[test]
+    fn widening_keeps_cells_and_leaves_blank_columns() {
+        let mut s = Screen::new(2, 2);
+        s.cells[2].c = 'x';
+        let w = widen(s, 4);
+        assert_eq!((w.cols, w.rows), (4, 2));
+        assert_eq!(w.cells[4].c, 'x');
+        assert_eq!(w.cells[2].c, ' ');
     }
 
     #[test]
