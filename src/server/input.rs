@@ -1824,6 +1824,13 @@ pub fn default_bindings() -> KeyTables {
     );
     bind("M-Space", &["next-layout"], false, "Select next layout");
     bind("U", &["choose-agent"], false, "Pick an agent");
+    bind(
+        "b",
+        &["agent-sidebar", "toggle"],
+        false,
+        "Toggle the agent sidebar",
+    );
+    bind("O", &["agent-grid"], false, "Show all agents");
     bind("y", &["choose-notification"], false, "Show notifications");
     bind("?", &["list-keys", "-N"], false, "List key bindings");
     bind("r", &["refresh-client"], false, "Redraw the current client");
@@ -2010,7 +2017,7 @@ fn default_group(table: &str, cmds: &[Vec<String>]) -> &'static str {
         }
         "copy-mode" | "paste-buffer" | "list-buffers" | "choose-buffer" | "delete-buffer" => "copy",
         "next-layout" | "select-layout" => "layout",
-        "agent" | "choose-agent" => "agents",
+        "agent" | "choose-agent" | "agent-sidebar" | "agent-grid" => "agents",
         "show-messages" | "choose-notification" => "notifications",
         "detach-client" | "choose-client" | "suspend-client" | "refresh-client" => "client",
         _ => "other",
@@ -5483,6 +5490,28 @@ mod tests {
         assert_eq!(y.group.as_deref(), Some("notifications"));
         t.use_tmux_stock();
         assert!(t.exact(PREFIX_TABLE, &parse_key("y").unwrap()).is_none());
+    }
+
+    #[test]
+    fn b_and_o_grofe_only() {
+        let mut t = default_bindings();
+        for (key, cmd, note) in [
+            (
+                "b",
+                argv(&["agent-sidebar", "toggle"]),
+                "Toggle the agent sidebar",
+            ),
+            ("O", argv(&["agent-grid"]), "Show all agents"),
+        ] {
+            let b = t.exact(PREFIX_TABLE, &parse_key(key).unwrap()).unwrap();
+            assert_eq!(b.cmds, vec![cmd]);
+            assert_eq!(b.desc.as_deref(), Some(note));
+            assert_eq!(b.group.as_deref(), Some("agents"));
+        }
+        t.use_tmux_stock();
+        for key in ["b", "O"] {
+            assert!(t.exact(PREFIX_TABLE, &parse_key(key).unwrap()).is_none());
+        }
     }
 
     #[test]

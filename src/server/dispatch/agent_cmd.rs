@@ -6,8 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::cmd::{AgentCmd, AgentReport, Resolve, Target, expand};
 use crate::protocol::ClientCtx;
 use crate::server::agents::{Rank, Report, ReportState, rank};
-use crate::server::dispatch::agent;
 use crate::server::dispatch::options::{FormatCtx, ServerVars};
+use crate::server::dispatch::{agent, agent_new};
 use crate::server::{State, clients};
 use crate::types::PaneId;
 
@@ -19,6 +19,7 @@ pub fn run(state: &mut State, ctx: &ClientCtx, c: AgentCmd) -> Result<String, St
         AgentCmd::List { format } => Ok(list(state, format.as_deref().unwrap_or(LIST_FORMAT))),
         AgentCmd::Next => next(state, ctx),
         AgentCmd::Seen { target, all } => seen(state, ctx, &target, all),
+        AgentCmd::New(c) => agent_new::run(state, ctx, c),
     }
 }
 

@@ -25,6 +25,7 @@ pub mod drop;
 pub mod events;
 pub mod floating;
 pub mod graphics;
+pub(crate) mod grid;
 pub mod hooks;
 pub mod imgstore;
 pub mod input;
@@ -48,6 +49,7 @@ pub mod restore;
 pub mod resume;
 pub mod screenimg;
 pub mod shell_jobs;
+pub(crate) mod sidebar;
 pub mod sixel;
 pub mod snapshot;
 pub mod sources;
@@ -240,6 +242,8 @@ pub struct State {
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
     pub pickers: picker::Pickers,
+    pub sidebars: sidebar::Sidebars,
+    pub grids: grid::Grids,
     pub notify: notify::Notifier,
     pub notify_runner: notify::desktop::Runner,
     pub trays: tray::Trays,
@@ -258,6 +262,11 @@ pub struct State {
     pub agent_kinds: Vec<agents::kinds::Kind>,
     /// `[agents] enabled`; off, reports and scans change nothing.
     pub agents_enabled: bool,
+    /// `[agents.sidebar]`, `[agents.grid]`, `[agents.picker]` and `[agents.new]`.
+    pub agents_sidebar: crate::config::ConfigSidebar,
+    pub agents_grid: crate::config::ConfigGrid,
+    pub agents_picker: crate::config::ConfigPicker,
+    pub agents_new: crate::config::ConfigNew,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
     /// for who may wait); any task may hold a clone. The actor keeps this
     /// one, so the channel never closes while it runs.
@@ -375,6 +384,14 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
 /// (TC.7) comes next, then a popup (TC.6), so a prompt or menu a popup's
 /// command opens takes the keys and draws on top of it; then a chooser
 /// (TC.9) over its pane; then the mouse, and copy mode (TM.1).
+/// Copies the `[agents.*]` surface tables into the state.
+pub(crate) fn configure_surfaces(state: &mut State, r: &crate::config::Resolved) {
+    state.agents_sidebar = r.agents.sidebar.clone();
+    state.agents_grid = r.agents.grid.clone();
+    state.agents_picker = r.agents.picker.clone();
+    state.agents_new = r.agents.new.clone();
+}
+
 fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(prompt::PromptHook));
     register_overlay(state, Arc::new(prompt::PromptOverlay));
@@ -382,6 +399,10 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(menu::MenuOverlay));
     register_input_hook(state, Arc::new(popup::PopupHook));
     register_overlay(state, Arc::new(popup::PopupOverlay));
+    register_input_hook(state, Arc::new(sidebar::SidebarHook));
+    register_overlay(state, Arc::new(sidebar::SidebarOverlay));
+    register_input_hook(state, Arc::new(grid::GridHook));
+    register_overlay(state, Arc::new(grid::GridOverlay));
     register_input_hook(state, Arc::new(picker::PickerHook));
     register_overlay(state, Arc::new(picker::PickerOverlay));
     register_input_hook(state, Arc::new(tray::TrayHook));
@@ -633,6 +654,8 @@ async fn serve(
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
         pickers: picker::Pickers::default(),
+        sidebars: sidebar::Sidebars::default(),
+        grids: grid::Grids::default(),
         notify: notify::Notifier::default(),
         notify_runner: notify::desktop::Runner::default(),
         trays: tray::Trays::default(),
@@ -644,6 +667,10 @@ async fn serve(
         agents: agents::Agents::default(),
         agent_kinds: agents::kinds::builtin(),
         agents_enabled: true,
+        agents_sidebar: crate::config::ConfigAgents::default().sidebar,
+        agents_grid: crate::config::ConfigAgents::default().grid,
+        agents_picker: crate::config::ConfigAgents::default().picker,
+        agents_new: crate::config::ConfigAgents::default().new,
         jobs: jobs_tx,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
@@ -1363,6 +1390,8 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
         pickers: picker::Pickers::default(),
+        sidebars: sidebar::Sidebars::default(),
+        grids: grid::Grids::default(),
         notify: notify::Notifier::default(),
         notify_runner: notify::desktop::Runner::default(),
         trays: tray::Trays::default(),
@@ -1374,6 +1403,10 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         agents: agents::Agents::default(),
         agent_kinds: agents::kinds::builtin(),
         agents_enabled: true,
+        agents_sidebar: crate::config::ConfigAgents::default().sidebar,
+        agents_grid: crate::config::ConfigAgents::default().grid,
+        agents_picker: crate::config::ConfigAgents::default().picker,
+        agents_new: crate::config::ConfigAgents::default().new,
         jobs,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,

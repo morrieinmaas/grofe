@@ -24,6 +24,7 @@
 
 pub(crate) mod agent;
 mod agent_cmd;
+pub(crate) mod agent_new;
 pub mod bindings;
 pub mod buffers;
 pub mod client;
@@ -51,7 +52,7 @@ use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
-use crate::server::{State, clients, graphics, keymenu, picker, prompt, tray};
+use crate::server::{State, clients, graphics, grid, keymenu, picker, prompt, sidebar, tray};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
 
@@ -444,6 +445,16 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             let client = clients::current_client(state, ctx).ok_or("no client")?;
             picker::open(state, client).map(|()| String::new())
         }
+        Command::AgentSidebar(op) => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            sidebar::set(state, client, op)?;
+            clients::resize_for_sidebar(state, client);
+            Ok(String::new())
+        }
+        Command::AgentGrid => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            grid::open(state, client).map(|()| String::new())
+        }
         Command::ChooseNotification => {
             let client = clients::current_client(state, ctx).ok_or("no client")?;
             tray::open(state, client).map(|()| String::new())
@@ -626,6 +637,22 @@ mod tests {
         ] {
             assert!(!read_only(&argv(words)), "{words:?}");
         }
+    }
+
+    #[test]
+    fn sidebar_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let r = run(&mut state, &ctx, &argv(&["agent-sidebar", "toggle"]));
+        assert_eq!(r.err().as_deref(), Some("no client"));
+    }
+
+    #[test]
+    fn grid_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let r = run(&mut state, &ctx, &argv(&["agent-grid"]));
+        assert_eq!(r.err().as_deref(), Some("no client"));
     }
 
     #[test]
