@@ -86,6 +86,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("pane-gap", "pane-gap"),
     ("pane-frame-title", "pane-frame-title"),
     ("pane-frame-tab-ends", "pane-frame-tab-ends"),
+    ("prompt-position", "prompt-position"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),
@@ -109,6 +110,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("status.window.bell-style", "window-status-bell-style"),
     ("message.style", "message-style"),
     ("message.display-time-ms", "display-time"),
+    ("message.pill", "message-pill"),
     ("pane-border.style", "pane-border-style"),
     ("pane-border.active-style", "pane-active-border-style"),
     ("pane-border.format", "pane-border-format"),
@@ -277,7 +279,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "exit-unattached"
         | "variation-selector-always-wide"
         | "pane-frames"
-        | "pane-frame-title" => Ty::Bool,
+        | "pane-frame-title"
+        | "message.pill" => Ty::Bool,
         "base-index"
         | "pane-base-index"
         | "escape-time-ms"
