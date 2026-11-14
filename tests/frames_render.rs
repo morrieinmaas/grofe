@@ -510,7 +510,7 @@ fn attached(config: &str) -> (TestServer, Harness) {
             "40",
             "-y",
             "12",
-            "exec cat",
+            "exec /bin/cat",
         ],
         &[
             "set",
@@ -519,8 +519,8 @@ fn attached(config: &str) -> (TestServer, Harness) {
             "#{pane_index}: #{pane_current_command}",
         ],
         &["set", "-g", "status", "off"],
-        &["split-window", "-h", "-t", "f", "exec cat"],
-        &["split-window", "-v", "-t", "f:.1", "exec cat"],
+        &["split-window", "-h", "-t", "f", "exec /bin/cat"],
+        &["split-window", "-v", "-t", "f:.1", "exec /bin/cat"],
     ];
     for args in cmds {
         srv.cmd(args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
