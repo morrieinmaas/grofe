@@ -435,6 +435,17 @@ pub fn switch_client(
             .get(&id)
             .copied()
             .filter(|s| model.sessions.contains_key(s))
+            // A client with no history yet (a new attach, or the first
+            // after a restart, whose restore keeps the order of use) takes
+            // the session used most recently before its own.
+            .or_else(|| {
+                model
+                    .sessions
+                    .values()
+                    .filter(|s| s.id != current)
+                    .max_by_key(|s| s.activity)
+                    .map(|s| s.id)
+            })
             .ok_or_else(|| "can't find last session".to_string())?
     } else if c.next || c.previous {
         neighbour_session(model, current, c.next, &sort).ok_or_else(|| {

@@ -532,10 +532,13 @@ fn switch_client_moves_the_current_client_between_sessions() {
     );
     let mut a = Harness::spawn(attach(&srv, "main"), 80, 24);
     a.wait_for("[main]");
-    assert_eq!(
-        srv.cmd(&["switch-client", "-l"]),
-        Err("can't find last session\n".to_string())
-    );
+    // A client with no history yet (a new attach, or the first after a
+    // restart) goes back to the session used most recently before its own,
+    // here `c`, made last; then `-l` flips between the two.
+    srv.cmd(&["switch-client", "-l"]).expect("-l, no history");
+    wait_client_session(&srv, "c");
+    srv.cmd(&["switch-client", "-l"]).expect("-l back");
+    wait_client_session(&srv, "main");
     // Sessions in name order, wrapping: b, c, main.
     srv.cmd(&["switch-client", "-n"]).expect("-n");
     wait_client_session(&srv, "b");
