@@ -23,7 +23,7 @@ pub use parse::{
 };
 pub use target::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 
-use crate::types::{CaptureOpts, Dir, Edge, SplitSize};
+use crate::types::{CaptureOpts, Dir, Edge, PaneId, SplitSize};
 
 /// An error parsing a command's argv, worded like tmux's own CLI errors
 /// (spec §4.5: bad flags give tmux-like errors).
@@ -1292,6 +1292,35 @@ pub struct PlacePane {
     pub y: Option<Offset>,
 }
 
+/// `new-scratchpad` (grofe's own; tmux 3.7b has no such verb): opens a hidden
+/// scratchpad pane, running the shell command or the default shell in `-c`.
+/// Hidden scratchpads are kept server-wide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewScratchpad {
+    /// `-t`.
+    pub target: Target,
+    /// `-c`: the start directory.
+    pub cwd: Option<String>,
+    pub command: Option<Vec<String>>,
+}
+
+/// `toggle-scratchpad` (grofe's own; tmux 3.7b has no such verb): shows the
+/// scratchpad hidden or shown, or hides the one shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToggleScratchpad {
+    /// `-t`.
+    pub target: Target,
+}
+
+/// `show-scratchpad` (grofe's own; tmux 3.7b has no such verb): shows the
+/// hidden scratchpad whose pane is the one given as `%N`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowScratchpad {
+    /// `-t`.
+    pub target: Target,
+    pub pane: PaneId,
+}
+
 /// One `display-menu` item: tmux reads its arguments as `name key command`
 /// triples, except that an empty name is a separator on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1695,6 +1724,13 @@ pub enum Command {
     UnfloatPane(UnfloatPane),
     DragPane(DragPane),
     PlacePane(PlacePane),
+    NewScratchpad(NewScratchpad),
+    ToggleScratchpad(ToggleScratchpad),
+    ShowScratchpad(ShowScratchpad),
+    /// `list-scratchpads` (grofe's own): lists the hidden scratchpads.
+    ListScratchpads,
+    /// `choose-scratchpad` (grofe's own): picks a hidden scratchpad to show.
+    ChooseScratchpad,
     DisplayMenu(DisplayMenu),
     DisplayPanes(DisplayPanes),
     ConfirmBefore(ConfirmBefore),

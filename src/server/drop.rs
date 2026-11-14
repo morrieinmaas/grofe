@@ -252,6 +252,7 @@ pub fn float_at(model: &mut Model, window: WindowId, pane: PaneId, (x, y): (i32,
             cols,
             rows,
             z,
+            scratch: false,
         });
     }
     w.set_active(pane);
@@ -421,6 +422,7 @@ mod tests {
             cols: 20,
             rows: 5,
             z: 1,
+            scratch: false,
         });
         // The left quarter of %0: %1 goes on its left.
         let d = plan(&w, PaneId(1), (3, 10)).expect("a dock");
@@ -458,6 +460,7 @@ mod tests {
             cols: 10,
             rows: 5,
             z: 1,
+            scratch: false,
         });
         let d = plan(&w, PaneId(1), (10, 11)).expect("a dock");
         let after = rects(&d.layout, &w);
@@ -478,6 +481,7 @@ mod tests {
                 cols: 20,
                 rows: 5,
                 z: 1,
+                scratch: false,
             });
         }
         let d = plan(&w, PaneId(1), (10, 15)).expect("into the hole");

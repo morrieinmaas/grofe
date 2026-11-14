@@ -15,17 +15,17 @@ use super::{
     DisplayPopup, DragPane, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
     KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
     ListPlugins, ListSessions, ListWindows, LoadBuffer, Lock, LockScope, Mark, MenuEntry,
-    MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
-    PaneSetResume, PaneSetup, ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart,
+    MoveWindow, NewPane, NewScratchpad, NewSession, NewWindow, NextLayout, Offset, OptionScope,
+    Pan, PaneSetResume, PaneSetup, ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart,
     PromptHistory, RebootCheck, RefreshClient, RegisterSource, Reload, Rename, ResizeAction,
     ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout,
     SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, ServerAccess, SetBuffer,
     SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
-    ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane,
-    SwapWindow, SwitchClient, Target, UnbindKey, UnfloatPane, UnlinkWindow, WaitFor, WindowMove,
-    WindowStep,
+    ShowOptions, ShowScratchpad, SortFlags, SourceFile, SplitWindow, Subscribe, SuspendClient,
+    SwapPane, SwapWindow, SwitchClient, Target, ToggleScratchpad, UnbindKey, UnfloatPane,
+    UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
-use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
+use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, PaneId, SplitSize, WINDOW_MAXIMUM};
 
 /// Whether a short/long flag takes a value, and if so whether it's
 /// required.
@@ -2563,6 +2563,39 @@ fn parse_unfloat_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+fn parse_new_scratchpad(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('c', FlagKind::Value)];
+    let flags = flags_for(argv, SHORT, "new-scratchpad")?;
+    Ok(Command::NewScratchpad(NewScratchpad {
+        target: target_or_current(&flags.values, 't')?,
+        cwd: flags.values.get(&'c').cloned(),
+        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+    }))
+}
+
+/// A command that takes no flags and no positionals.
+fn no_args(argv: &[String], cmd_name: &str) -> Result<(), ParseError> {
+    let flags = flags_for(argv, &[], cmd_name)?;
+    no_extra_positionals(&flags, cmd_name, 0)
+}
+
+fn parse_show_scratchpad(argv: &[String]) -> Result<Command, ParseError> {
+    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value)];
+    let flags = flags_for(argv, SHORT, "show-scratchpad")?;
+    no_extra_positionals(&flags, "show-scratchpad", 1)?;
+    let word = flags
+        .positionals
+        .first()
+        .ok_or_else(|| ParseError::MissingArgument("show-scratchpad".to_string()))?;
+    let pane = word
+        .parse::<PaneId>()
+        .map_err(|_| ParseError::Other(format!("invalid pane id: {word}")))?;
+    Ok(Command::ShowScratchpad(ShowScratchpad {
+        target: target_or_current(&flags.values, 't')?,
+        pane,
+    }))
+}
+
 fn parse_drag_pane(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[('M', FlagKind::Bool)];
     let flags = flags_for(argv, SHORT, "drag-pane")?;
@@ -3920,6 +3953,14 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
         "new-pane" => parse_new_pane(rest),
         "float-pane" => parse_float_pane(rest),
         "unfloat-pane" => parse_unfloat_pane(rest),
+        "new-scratchpad" => parse_new_scratchpad(rest),
+        "toggle-scratchpad" => parse_target_only(rest, "toggle-scratchpad")
+            .map(|target| Command::ToggleScratchpad(ToggleScratchpad { target })),
+        "show-scratchpad" => parse_show_scratchpad(rest),
+        "list-scratchpads" => no_args(rest, "list-scratchpads").map(|()| Command::ListScratchpads),
+        "choose-scratchpad" => {
+            no_args(rest, "choose-scratchpad").map(|()| Command::ChooseScratchpad)
+        }
         "drag-pane" => parse_drag_pane(rest),
         "place-pane" => parse_place_pane(rest),
         "display-menu" => parse_display_menu(rest),
@@ -6170,5 +6211,102 @@ mod unfloat_pane_tests {
             "command unfloat-pane: unknown flag -x"
         );
         assert!(parse(&argv(&["unfloat-pane", "extra"])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod scratchpad_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn new_scratchpad_defaults_to_the_current_pane_and_shell() {
+        let Ok(Command::NewScratchpad(c)) = parse(&argv(&["new-scratchpad"])) else {
+            panic!("new-scratchpad");
+        };
+        assert_eq!(c.target, Target::Current);
+        assert_eq!(c.cwd, None);
+        assert_eq!(c.command, None);
+    }
+
+    #[test]
+    fn new_scratchpad_reads_target_cwd_and_command() {
+        let Ok(Command::NewScratchpad(c)) = parse(&argv(&["new-scratchpad", "-c", "/tmp", "htop"]))
+        else {
+            panic!("new-scratchpad -c");
+        };
+        assert_eq!(c.target, Target::Current);
+        assert_eq!(c.cwd, Some("/tmp".to_string()));
+        assert_eq!(c.command, Some(vec!["htop".to_string()]));
+        let Ok(Command::NewScratchpad(c)) = parse(&argv(&["new-scratchpad", "-t", "%2"])) else {
+            panic!("new-scratchpad -t");
+        };
+        assert_eq!(c.target, parse_target("%2").unwrap());
+    }
+
+    #[test]
+    fn toggle_scratchpad_defaults_and_reads_target() {
+        let Ok(Command::ToggleScratchpad(c)) = parse(&argv(&["toggle-scratchpad"])) else {
+            panic!("toggle-scratchpad");
+        };
+        assert_eq!(c.target, Target::Current);
+        let Ok(Command::ToggleScratchpad(c)) = parse(&argv(&["toggle-scratchpad", "-t", "%3"]))
+        else {
+            panic!("toggle-scratchpad -t");
+        };
+        assert_eq!(c.target, parse_target("%3").unwrap());
+    }
+
+    #[test]
+    fn toggle_scratchpad_unknown_flag() {
+        assert_eq!(
+            parse(&argv(&["toggle-scratchpad", "-x"]))
+                .unwrap_err()
+                .to_string(),
+            "command toggle-scratchpad: unknown flag -x"
+        );
+    }
+
+    #[test]
+    fn show_scratchpad_reads_its_pane_id() {
+        let Ok(Command::ShowScratchpad(c)) = parse(&argv(&["show-scratchpad", "%4"])) else {
+            panic!("show-scratchpad %4");
+        };
+        assert_eq!(c.target, Target::Current);
+        assert_eq!(c.pane, PaneId(4));
+        let Ok(Command::ShowScratchpad(c)) = parse(&argv(&["show-scratchpad", "-t", "%2", "%4"]))
+        else {
+            panic!("show-scratchpad -t");
+        };
+        assert_eq!(c.target, parse_target("%2").unwrap());
+        assert_eq!(c.pane, PaneId(4));
+    }
+
+    #[test]
+    fn show_scratchpad_needs_a_pane_id() {
+        assert!(parse(&argv(&["show-scratchpad"])).is_err());
+        assert!(parse(&argv(&["show-scratchpad", "4"])).is_err());
+        assert!(parse(&argv(&["show-scratchpad", "%4", "%5"])).is_err());
+    }
+
+    #[test]
+    fn list_scratchpads_takes_no_args() {
+        assert!(matches!(
+            parse(&argv(&["list-scratchpads"])),
+            Ok(Command::ListScratchpads)
+        ));
+        assert!(parse(&argv(&["list-scratchpads", "x"])).is_err());
+    }
+
+    #[test]
+    fn choose_scratchpad_takes_no_args() {
+        assert!(matches!(
+            parse(&argv(&["choose-scratchpad"])),
+            Ok(Command::ChooseScratchpad)
+        ));
+        assert!(parse(&argv(&["choose-scratchpad", "x"])).is_err());
     }
 }
