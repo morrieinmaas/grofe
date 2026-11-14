@@ -296,6 +296,12 @@ fn the_hello_carries_the_invoking_name_s_dialect() {
         other => panic!("{other:?}"),
     }
 
+    // A socket of its own: a CLI whose request goes unanswered connects once
+    // more to see whether a server is still there, and that connection
+    // waits in the first listener's queue.
+    let fake = root(&srv).join("fake2.sock");
+    let listener = UnixListener::bind(&fake).unwrap();
+    let fake_arg = fake.display().to_string();
     let mut cmd = srv.command();
     isolate(&srv, &mut cmd);
     cmd.args(["-S", &fake_arg, "list-sessions"]);
