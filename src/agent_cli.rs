@@ -54,7 +54,17 @@ fn hook(socket: &Path, args: &[String], pane: Option<&str>, stdin: &mut dyn Read
     };
     let mut payload = Vec::new();
     let _ = stdin.take(MAX_PAYLOAD).read_to_end(&mut payload);
-    send(socket, &hook_argv(state, kind, &payload, pane, ts));
+    let mut argv = hook_argv(state, kind, &payload, pane, ts);
+    // Only a value the server accepts, so a bad one cannot fail the report.
+    if let Some(b) = args
+        .iter()
+        .position(|a| a == "--blocked")
+        .and_then(|i| args.get(i + 1))
+        .filter(|b| matches!(b.as_str(), "permission" | "question" | "auth"))
+    {
+        argv.extend(["--blocked".to_string(), b.clone()]);
+    }
+    send(socket, &argv);
 }
 
 /// Connects (30 ms at most), writes the hello and request, and does not
@@ -258,6 +268,42 @@ mod tests {
         let n = s.read(&mut buf).unwrap();
         got.push_str(&String::from_utf8_lossy(&buf[..n]));
         assert!(got.contains(r#""agent""#) && got.contains("--ts"), "{got}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The hooks `agent setup` writes pass `--blocked permission` (spec §8);
+    /// hook mode forwards a valid one and drops anything else.
+    #[test]
+    fn hook_forwards_blocked_kind() {
+        let dir = tempfile_dir("blocked");
+        let sock = dir.join("s.sock");
+        let l = UnixListener::bind(&sock).unwrap();
+        let read = |l: &UnixListener| {
+            let (mut s, _) = l.accept().unwrap();
+            let mut got = String::new();
+            s.read_to_string(&mut got).unwrap();
+            got
+        };
+        let args = strs(&[
+            "agent",
+            "report",
+            "blocked",
+            "--blocked",
+            "permission",
+            "--hook",
+            "claude",
+        ]);
+        hook(&sock, &args, Some("%1"), &mut &b"{}"[..], 1);
+        let got = read(&l);
+        assert!(got.contains(r#""--blocked","permission""#), "{got}");
+        let mut args = args;
+        args[4] = "$(touch x)".into();
+        hook(&sock, &args, Some("%1"), &mut &b"{}"[..], 1);
+        let got = read(&l);
+        assert!(
+            !got.contains("--blocked") && !got.contains("touch"),
+            "{got}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
