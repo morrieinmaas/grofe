@@ -458,6 +458,9 @@ fn setup_opencode(
             return Ok(());
         }
         std::fs::remove_file(&target).map_err(io)?;
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            std::fs::remove_file(path).map_err(io)?;
+        }
         return writeln!(out, "done").map_err(io);
     }
     let source = plugin_source(grofe);
@@ -921,6 +924,22 @@ mod tests {
         assert!(other.exists());
         setup_opencode(&p, G, &rm(), &mut std::io::empty(), &mut out).unwrap();
         assert!(!p.exists());
+    }
+
+    #[test]
+    fn opencode_remove_unlinks_a_symlinked_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.js");
+        let link = dir.path().join("grofe.js");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut out = Vec::new();
+        std::fs::write(&real, "// mine\n").unwrap();
+        setup_opencode(&link, G, &rm(), &mut std::io::empty(), &mut out).unwrap();
+        assert!(real.exists() && std::fs::symlink_metadata(&link).is_ok());
+        std::fs::write(&real, format!("{PLUGIN_MARKER}\n")).unwrap();
+        setup_opencode(&link, G, &rm(), &mut std::io::empty(), &mut out).unwrap();
+        assert!(!real.exists());
+        assert!(std::fs::symlink_metadata(&link).is_err());
     }
 
     #[test]
