@@ -114,7 +114,22 @@ fn wait_prompt(srv: &TestServer, target: &str) {
         .unwrap_or_else(|e| panic!("{target} prompt: {e}"));
 }
 
-fn wait_command(srv: &TestServer, target: &str, command: &str) {
+/// The command a pane's `/bin/sh` reports, as tmux reports it too: macOS's
+/// `/bin/sh` execs bash, so the process carries bash's name.
+// ponytail: assumes macOS's default `/private/var/select/sh` (bash); a Mac
+// that points it at dash or zsh reports that name instead.
+const SH: &str = if cfg!(target_os = "macos") {
+    "bash"
+} else {
+    "sh"
+};
+
+/// Waits until `target`'s foreground process is `fake-agent` run with
+/// `args`, told by its argv (`/bin/sh <agent> <args>`): a script's name is
+/// its interpreter's on macOS (`bash`, as tmux reports it too), and so is
+/// the shell's that runs it.
+fn wait_agent(srv: &TestServer, agent: &Agent, target: &str, args: &str) {
+    let want = format!(" {} {args}", agent.path());
     srv.wait_for(
         || {
             srv.cmd(&[
@@ -122,13 +137,13 @@ fn wait_command(srv: &TestServer, target: &str, command: &str) {
                 "-p",
                 "-t",
                 target,
-                "#{pane_current_command}",
+                "#{pane_current_argv}",
             ])
-            .is_ok_and(|c| c.trim() == command)
+            .is_ok_and(|c| c.trim_end().ends_with(&want))
         },
         WAIT,
     )
-    .unwrap_or_else(|e| panic!("{target} runs {command}: {e}"));
+    .unwrap_or_else(|e| panic!("{target} runs fake-agent {args}: {e}"));
 }
 
 /// The snapshot's resumes by pane `uid`.
@@ -277,9 +292,11 @@ fn wait_started(srv: &TestServer, what: &str, n: usize) -> Vec<(String, u64)> {
 
 /// Three panes in two windows, each running `fake-agent --session-id <id>`
 /// from its shell (the temp dir only on that command's `PATH`) and bound
-/// from outside with `pane-set-resume -- fake-agent --resume <id>`, under a
-/// server started as `env -i PATH=/usr/bin:/bin`; the state is saved;
-/// returns `(window index, uid)` per id.
+/// from outside with `pane-set-resume -- <its absolute path> --resume <id>`
+/// (macOS 27 hides the environment of the `/bin/sh` the script runs
+/// under, so no `PATH` of its own can resolve a bare name), under a server
+/// started as `env -i PATH=/usr/bin:/bin`; the state is saved; returns
+/// `(window index, uid)` per id.
 fn three_agents(srv: &TestServer, agent: &Agent) -> Vec<(String, String)> {
     ok(
         srv,
@@ -299,7 +316,7 @@ fn three_agents(srv: &TestServer, agent: &Agent) -> Vec<(String, String)> {
                 agent.bin.display()
             ),
         );
-        wait_command(srv, target, "fake-agent");
+        wait_agent(srv, agent, target, &format!("--session-id {id}"));
         let pane = fmt(srv, target, "#{pane_id}");
         ok(
             srv,
@@ -308,7 +325,7 @@ fn three_agents(srv: &TestServer, agent: &Agent) -> Vec<(String, String)> {
                 "-t",
                 &pane,
                 "--",
-                "fake-agent",
+                &agent.path(),
                 "--resume",
                 id,
             ],
@@ -345,7 +362,7 @@ fn window_and_uid(srv: &TestServer) -> Vec<String> {
 /// **The M4 done-means.** After a crash (`kill_hard`) and a restart, every
 /// transcript reads `launch <id>` then `resume <id>`, each pane is in the
 /// window it was in and every `uid` is unchanged, although `fake-agent`
-/// sits only on the setter's `PATH` and the server runs under
+/// sits on no `PATH` the server or its panes have and the server runs under
 /// `env -i PATH=/usr/bin:/bin`.
 #[test]
 fn agent_panes_come_back_running_their_resume_after_a_crash() {
@@ -376,7 +393,7 @@ fn agent_panes_come_back_running_their_resume_after_a_crash() {
     // Each runs its resume directly (no shell), and keeps it for the next save.
     for (i, id) in ["a", "b", "c"].iter().enumerate() {
         let target = ["main:1.1", "main:1.2", "main:2.1"][i];
-        wait_command(&srv, target, "fake-agent");
+        wait_agent(&srv, &agent, target, &format!("--resume {id}"));
         assert_eq!(
             fmt(&srv, target, "#{pane_resume}"),
             format!("{} --resume {id}", agent.path())
@@ -627,7 +644,7 @@ fn a_killed_restored_agent_leaves_a_shell_in_its_cwd() {
     wait_prompt(&srv, target);
     assert_eq!(fmt(&srv, target, "#{pane_uid}"), "01UIDA");
     assert_eq!(fmt(&srv, target, "#{pane_dead}"), "0");
-    assert_eq!(fmt(&srv, target, "#{pane_current_command}"), "sh");
+    assert_eq!(fmt(&srv, target, "#{pane_current_command}"), SH);
     assert_eq!(
         fmt(&srv, target, "#{pane_current_path}"),
         cwd.display().to_string()
