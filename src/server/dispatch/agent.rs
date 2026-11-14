@@ -639,6 +639,54 @@ mod tests {
         assert_eq!(text, "a:1.1 blocked: perm");
     }
 
+    /// `auto` (spec §6.4): with a client attached and none known unfocused
+    /// nothing leaves the terminal; once one is unfocused OSC 9 does, and the
+    /// command never runs while any client is attached.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn auto_with_a_focused_client_delivers_nothing() {
+        let (mut state, pane) = state_with_pane();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("ran");
+        state.notify.cfg.delivery = "auto".into();
+        state.notify.cfg.skip_when_seen = false;
+        state.notify.cfg.min_interval = Duration::ZERO;
+        state.notify.cfg.command = Some(
+            ["sh", "-c", &format!("touch {}", file.display())]
+                .map(String::from)
+                .to_vec(),
+        );
+        let mut accepted = attach_unfocused(&mut state);
+        if let Some(c) = state.clients.get_mut(&accepted.id) {
+            c.focused = true;
+        }
+        let mut at = Instant::now();
+        let mut out = |state: &mut State, rx: &mut mpsc::Receiver<Vec<u8>>| {
+            at += Duration::from_secs(1);
+            crate::server::clients::tick(state, at);
+            String::from_utf8_lossy(&drain(rx)).into_owned()
+        };
+        apply(&mut state, pane, blocked("focused", 1));
+        assert_eq!(state.notify.items().len(), 1, "raised to the tray");
+        assert!(!out(&mut state, &mut accepted.output).contains("\x1b]9;"));
+
+        if let Some(c) = state.clients.get_mut(&accepted.id) {
+            c.focused = false;
+        }
+        apply(
+            &mut state,
+            pane,
+            report(ReportState::Set(AgentState::Working), 2),
+        );
+        apply(&mut state, pane, blocked("unfocused", 3));
+        assert!(
+            out(&mut state, &mut accepted.output)
+                .contains("\x1b]9;grofe: claude: a:1.1 blocked: unfocused")
+        );
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!file.exists(), "the command ran with a client attached");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worked_time_from_working_since() {
         let (mut state, pane) = state_with_pane();
@@ -671,6 +719,221 @@ mod tests {
             Some("always")
         );
         assert_eq!(find("codex").and_then(|k| k.worktree.clone()), None);
+    }
+
+    /// Agent text with a format job, two status ranges, ESC, BEL and a C1
+    /// control. `x` is a file only a run command would make.
+    fn evil(x: &std::path::Path) -> String {
+        format!(
+            "A\x1b]2;PWN\x07B\u{85}C\x1b[31mD#[range=user|x]E##[range=user|y]F#(touch {})",
+            x.display()
+        )
+    }
+
+    /// What the sanitised text looks like on a surface that draws it raw.
+    const SHOWN: &str = "A]2;PWNBC[31mD##[range=user|x]E####[range=user|y]F_(touch";
+
+    fn drain(rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Ok(frame) = rx.try_recv() {
+            out.extend(frame);
+        }
+        out
+    }
+
+    /// No byte of the injected controls reaches the client: no ESC before
+    /// the OSC or SGR text, no BEL, no C1 (UTF-8 `C2 85`).
+    fn assert_inert(bytes: &[u8], what: &str) {
+        let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+        let text = String::from_utf8_lossy(bytes);
+        assert!(!has(b"\x1b]2;PWN"), "{what}: OSC reached the client");
+        assert!(!has(b"PWN\x07"), "{what}: BEL reached the client");
+        assert!(!has(b"\x1b[31mD"), "{what}: SGR reached the client");
+        assert!(!has("\u{85}".as_bytes()), "{what}: C1 reached the client");
+        assert!(!has(b"#(touch"), "{what}: a format job survived");
+        assert!(text.contains("PWNBC[31mD"), "{what}: not drawn: {text:?}");
+    }
+
+    /// Spec §2.7 at every sink an attached client sees: the status line
+    /// (`#{agent_msg}` runs no job and opens no range), the toast, the
+    /// picker, the tray, the sidebar and the grid.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_text_is_inert_on_every_surface() {
+        let (mut state, p1) = state_with_pane();
+        crate::server::register_builtins(&mut state);
+        state.notify.cfg.delivery = "off".into();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let x = dir.path().join("X");
+        let run = |state: &mut State, ctx: &ClientCtx, words: &[&str]| {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            dispatch::run(state, ctx, &argv).unwrap_or_else(|e| panic!("{words:?}: {e}"));
+        };
+        run(
+            &mut state,
+            &test_ctx(),
+            &["new-window", "-t", "a", "sleep 600"],
+        );
+        let p2 = *state
+            .model
+            .panes
+            .keys()
+            .find(|p| **p != p1)
+            .expect("second pane");
+        for (option, value) in [("status-left", ""), ("status-right-length", "200")] {
+            run(
+                &mut state,
+                &test_ctx(),
+                &["set-option", "-g", option, value],
+            );
+        }
+        let mut accepted = {
+            use crate::server::clients::{self, AttachRequest};
+            clients::attach(
+                &mut state,
+                AttachRequest {
+                    ctx: ClientCtx {
+                        client: None,
+                        ..test_ctx()
+                    },
+                    size: (160, 50),
+                    term: "xterm".into(),
+                    caps: Default::default(),
+                    pid: None,
+                    target: Some("a".into()),
+                    detach_others: false,
+                    nest: false,
+                    tty: None,
+                    created: false,
+                    extras: Default::default(),
+                },
+            )
+            .expect("attach")
+        };
+        let ctx = ClientCtx {
+            client: Some(accepted.id),
+            ..test_ctx()
+        };
+        let mut at = Instant::now();
+        let mut frame = |state: &mut State, rx: &mut mpsc::Receiver<Vec<u8>>| {
+            at += Duration::from_secs(1);
+            clients::tick(state, at);
+            drain(rx)
+        };
+        frame(&mut state, &mut accepted.output);
+        // p2 is in view (status line); p1 is not, so it toasts.
+        apply(&mut state, p2, blocked(&evil(&x), 1));
+        apply(&mut state, p1, blocked(&evil(&x), 1));
+        let shown = state.agents.get(p1).and_then(|a| a.msg.clone());
+        assert!(shown.is_some_and(|m| m.starts_with(SHOWN)));
+
+        let out = frame(&mut state, &mut accepted.output);
+        assert_inert(&out, "toast");
+        let toast = crate::server::toast::deadline(&state, accepted.id);
+        assert!(toast.is_some(), "a toast is up");
+
+        run(
+            &mut state,
+            &test_ctx(),
+            &["set-option", "-g", "status-right", "#{agent_msg}"],
+        );
+        clients::mark_all_dirty(&mut state);
+        let out = frame(&mut state, &mut accepted.output);
+        assert_inert(&out, "status line");
+        let (rows, _) = clients::drawn_status(&state, accepted.id).expect("status");
+        use crate::server::status::RangeKind;
+        let user: Vec<_> = rows
+            .iter()
+            .flat_map(|r| &r.ranges)
+            .filter(|r| matches!(r.kind, RangeKind::User(_)))
+            .collect();
+        assert!(user.is_empty(), "agent text opened a range: {user:?}");
+        let line: String = rows
+            .iter()
+            .flat_map(|r| &r.line.spans)
+            .map(|s| s.text.as_str())
+            .collect();
+        assert!(
+            line.contains("D#[range=user|x]E##[range=user|y]F_(touch"),
+            "{line:?}"
+        );
+        for surface in [
+            &["choose-agent"][..],
+            &["choose-notification"],
+            &["agent-sidebar", "on"],
+            &["agent-grid"],
+        ] {
+            run(&mut state, &ctx, surface);
+            let out = frame(&mut state, &mut accepted.output);
+            assert_inert(&out, &surface.join(" "));
+            // Close it so the next one is not drawn under it.
+            let id = accepted.id;
+            match surface[0] {
+                "choose-agent" => crate::server::picker::client_gone(&mut state, id),
+                "choose-notification" => crate::server::tray::client_gone(&mut state, id),
+                _ => {}
+            }
+            clients::mark_all_dirty(&mut state);
+            frame(&mut state, &mut accepted.output);
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!x.exists(), "a job ran agent text");
+    }
+
+    /// Spec §2.7 and §6.4 at the outbound sinks: OSC 9 to an unfocused
+    /// client carries no control byte, and the notifier gets the text as
+    /// one argv element that no shell reads.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_text_is_inert_in_osc9_and_notifier_argv() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let x = dir.path().join("X");
+        let (mut state, pane) = state_with_pane();
+        let mut accepted = attach_unfocused(&mut state);
+        state.notify.cfg.delivery = "auto".into();
+        apply(&mut state, pane, blocked(&evil(&x), 1));
+        crate::server::clients::tick(&mut state, Instant::now() + Duration::from_secs(1));
+        let out = drain(&mut accepted.output);
+        let text = String::from_utf8_lossy(&out);
+        let start = text.find("\x1b]9;").expect("an OSC 9") + 4;
+        let end = start + text[start..].find("\x1b\\").expect("its ST");
+        let body = &text[start..end];
+        assert!(!body.chars().any(char::is_control), "{body:?}");
+        assert!(body.contains(SHOWN), "{body:?}");
+
+        let (mut state, pane) = state_with_pane();
+        let file = dir.path().join("argv");
+        state.notify.cfg.delivery = "auto".into();
+        state.notify.cfg.command = Some(
+            [
+                "sh",
+                "-c",
+                &format!("printf '%s' \"$1\" > {}", file.display()),
+                "sh",
+                "{message}",
+            ]
+            .map(String::from)
+            .to_vec(),
+        );
+        let msg = format!(
+            "{} $(touch {}) `touch {}`",
+            evil(&x),
+            x.display(),
+            x.display()
+        );
+        apply(&mut state, pane, blocked(&msg, 1));
+        for _ in 0..100 {
+            if file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let got = std::fs::read_to_string(&file).expect("notifier ran");
+        assert!(
+            got.starts_with(&format!("a:1.1 blocked: {SHOWN}")),
+            "{got:?}"
+        );
+        assert!(got.contains("$(touch") && got.contains("`touch"), "{got:?}");
+        assert!(!got.chars().any(char::is_control), "{got:?}");
+        assert!(!x.exists(), "the notifier argv went through a shell");
     }
 
     #[test]
