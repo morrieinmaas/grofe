@@ -11,6 +11,7 @@
 //! back. Commands run through the single [`dispatch`] seam.
 
 pub mod adopt;
+pub mod agents;
 pub mod alerts;
 pub mod borders;
 pub mod buffers;
@@ -239,6 +240,12 @@ pub struct State {
     pub clocks: clock::Clocks,
     /// Each window's silence wait (`alerts`).
     pub alerts: alerts::Alerts,
+    /// The agent records, by pane (`agents`).
+    pub agents: agents::Agents,
+    /// The kinds agents are recognised by: the built-ins merged with `[agents.kinds]`.
+    pub agent_kinds: Vec<agents::kinds::Kind>,
+    /// `[agents] enabled`; off, reports and scans change nothing.
+    pub agents_enabled: bool,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
     /// for who may wait); any task may hold a clone. The actor keeps this
     /// one, so the channel never closes while it runs.
@@ -418,7 +425,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         | PaneEventKind::Clipboard { .. }
         | PaneEventKind::ClipboardQuery { .. }
         | PaneEventKind::Path(_)
-        | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
+        | PaneEventKind::Osc(_)
+        | PaneEventKind::AgentStatus(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
         // The reader handles sixel images; they never reach the actor.
         PaneEventKind::Sixel { .. } => {}
@@ -608,6 +616,9 @@ async fn serve(
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
+        agents: agents::Agents::default(),
+        agent_kinds: agents::kinds::builtin(),
+        agents_enabled: true,
         jobs: jobs_tx,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
@@ -1330,6 +1341,9 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
+        agents: agents::Agents::default(),
+        agent_kinds: agents::kinds::builtin(),
+        agents_enabled: true,
         jobs,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
