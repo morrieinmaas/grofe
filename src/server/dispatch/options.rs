@@ -2609,6 +2609,8 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     crate::server::plugins::configure(state, resolved);
     crate::server::hooks::configure(state, resolved);
     crate::server::menu::configure(state, resolved);
+    crate::server::dispatch::agent::configure(state, resolved);
+    crate::server::clients::set_scan_interval(state, resolved.agents.scan_interval);
     // `[environment]`, then `load-commands` (TP.0), as tmux runs a config
     // file's `set-environment` and other commands each time it reads it.
     for (name, value) in &resolved.environment {
