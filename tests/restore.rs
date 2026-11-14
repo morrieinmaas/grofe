@@ -309,9 +309,16 @@ fn restored_panes_run_a_shell_in_their_cwd() {
     write_snapshot(&srv, &sample(&home(&srv)));
     ok(&srv, &["start-server", "--restore"]);
     ok(&srv, &["send-keys", "-t", "work:1.1", "pwd", "Enter"]);
+    // The keys can land before the shell's first prompt, which then
+    // prefixes the output line, and a long temp path wraps the 40-column
+    // pane: join wrapped rows and match the line's end.
     let want = home(&srv).join("a").display().to_string();
-    srv.wait_for(|| srv.capture("work:1.1").lines().any(|l| l == want), WAIT)
-        .unwrap_or_else(|_| panic!("pwd in the pane: {}", srv.capture("work:1.1")));
+    let joined = || ok(&srv, &["capture-pane", "-p", "-J", "-t", "work:1.1"]);
+    srv.wait_for(
+        || joined().lines().any(|l| l.trim_end().ends_with(&want)),
+        WAIT,
+    )
+    .unwrap_or_else(|_| panic!("pwd in the pane: {}", joined()));
 }
 
 /// Into a server that has a session, `--restore` errors and changes
