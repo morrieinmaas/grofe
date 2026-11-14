@@ -429,7 +429,7 @@ const BUILTINS: &[Builtin] = &[
     // a box in the middle of the window.
     Builtin {
         name: "prompt-position",
-        kind: Kind::Choice(&["status", "centre"]),
+        kind: Kind::Choice(&["status", "centre", "center"]),
         scope: OptionScope::Session,
         default: "status",
     },

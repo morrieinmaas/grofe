@@ -1636,8 +1636,10 @@ impl Overlay for PromptOverlay {
             .unwrap_or(0)
             .min(lines.saturating_sub(1));
         let row = row.saturating_add(line).min(screen.rows - 1);
-        if model.options.lookup("prompt-position", &chain) == Some("centre")
-            && screen.cols >= 8
+        if matches!(
+            model.options.lookup("prompt-position", &chain),
+            Some("centre" | "center")
+        ) && screen.cols >= 8
             && screen.rows >= 3
         {
             let border = model

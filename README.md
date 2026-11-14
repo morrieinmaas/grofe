@@ -250,7 +250,7 @@ the frames' glyphs. The command prompt (`prefix :`, `command-prompt`,
 rounded box a third down the window:
 
 ```toml
-prompt-position = "status"  # "centre": a box in the middle of the window
+prompt-position = "status"  # "centre" (or "center"): a box in the middle of the window
 
 [message]
 pill = true                 # false: tmux's full-width bar in message-style
