@@ -38,6 +38,8 @@ pub mod session;
 pub mod sorting;
 pub mod structure;
 pub mod window;
+pub(crate) mod agent;
+mod agent_cmd;
 
 use std::path::{Path, PathBuf};
 
@@ -251,6 +253,7 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::ShowBuffer(_)
                 | Command::SaveBuffer(_)
                 | Command::ListBuffers(_)
+                | Command::Agent(cmd::AgentCmd::List { .. })
                 | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
         )
     })
@@ -435,6 +438,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::CustomizeMode(c) => client::customize_mode(state, ctx, c),
         // M5: copy mode (TM.1).
         Command::CopyMode(c) => copy::copy_mode(state, ctx, c),
+        Command::Agent(c) => agent_cmd::run(state, ctx, c),
     }
 }
 
