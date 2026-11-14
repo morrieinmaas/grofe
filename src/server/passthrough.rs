@@ -72,9 +72,11 @@ const DCS_TMUX: &[u8] = b"\x1bPtmux;";
 const MAX_DCS_TMUX: usize = 1024 * 1024 - 6;
 /// The OSC numbers a wrapper may carry: those the bare path acts on. Title
 /// (0, 2), cwd (7), hyperlink (8), notifications (9, 777), cursor colour
-/// (12, 112) and clipboard (52); each then meets its bare filters (the
+/// (12, 112), clipboard (52) and agent status (7501); each then meets its bare filters (the
 /// OSC 7 text check, [`relayed`] leaving `12;?` to the emulator).
-const WRAPPED_OSC: &[&[u8]] = &[b"0", b"2", b"7", b"8", b"9", b"12", b"52", b"112", b"777"];
+const WRAPPED_OSC: &[&[u8]] = &[
+    b"0", b"2", b"7", b"8", b"9", b"12", b"52", b"112", b"777", b"7501",
+];
 
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
@@ -593,6 +595,8 @@ impl Scanner {
             found.push(PaneEventKind::Path(text));
         } else if let Some(body) = payload.strip_prefix(b"52;") {
             found.extend(osc52_store(body).or_else(|| osc52_query(body, bel)));
+        } else if let Some(body) = payload.strip_prefix(b"7501;") {
+            found.push(PaneEventKind::AgentStatus(body.to_vec()));
         } else if relayed(&payload) {
             found.push(PaneEventKind::Osc(payload));
         }
@@ -733,6 +737,25 @@ pub(crate) fn hostname() -> &'static str {
     })
 }
 
+/// What a pane's OSC 7501 query is answered with.
+const AGENT_QUERY_REPLY: &[u8] = b"\x1b]7501;ok\x1b\\";
+
+/// The message of an OSC 9 or 777 notification body, which counts as the
+/// pane wanting attention. An OSC 9 whose text is a number then `;` (the
+/// ConEmu `9;4;1;50` progress and its kin) is not a notification.
+fn notification_text(body: &[u8]) -> Option<String> {
+    if let Some(text) = body.strip_prefix(b"9;") {
+        let digits = text.iter().take_while(|b| b.is_ascii_digit()).count();
+        if digits > 0 && text.get(digits) == Some(&b';') {
+            return None;
+        }
+        return Some(String::from_utf8_lossy(text).into_owned());
+    }
+    let rest = body.strip_prefix(b"777;")?;
+    let last = rest.rsplit(|&b| b == b';').next().unwrap_or_default();
+    Some(String::from_utf8_lossy(last).into_owned())
+}
+
 /// A `Title`, `Bell`, `Clipboard`, `Cwd` or `Osc` (notification or cursor
 /// colour) event from `pane`.
 pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
@@ -747,7 +770,35 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
         PaneEventKind::Path(text) => p.handle.set_reported_path(text),
         // The terminal rings from `alerts`, by `visual-bell` and the
         // window's alert settings, as tmux's `alerts_set_message` does.
-        PaneEventKind::Bell => crate::server::alerts::bell(state, window),
+        PaneEventKind::Bell => {
+            crate::server::alerts::bell(state, window);
+            crate::server::dispatch::agent::attention(state, pane, None);
+        }
+        PaneEventKind::AgentStatus(body) => match crate::server::agents::osc::parse(&body) {
+            Some(crate::server::agents::osc::Osc7501::Query) => {
+                let _ = p.handle.enqueue_input(AGENT_QUERY_REPLY.to_vec());
+            }
+            Some(crate::server::agents::osc::Osc7501::Report {
+                state: report_state,
+                blocked,
+                msg,
+                app,
+            }) => {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_micros() as u64);
+                let report = crate::server::agents::Report {
+                    state: report_state,
+                    kind: app,
+                    msg,
+                    blocked,
+                    session_id: None,
+                    ts,
+                };
+                crate::server::dispatch::agent::apply(state, pane, report);
+            }
+            None => {}
+        },
         // As tmux 3.7b's `input_osc_52` (recorded): only under `on`, a
         // store makes a buffer and goes, with the pane's own parameter, to
         // the clients showing its window; `external` and `off` drop it.
@@ -789,7 +840,12 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
             }
             refresh_session(state, session);
         }
-        PaneEventKind::Osc(body) => send(state, clients_on(state, session), &osc(&body)),
+        PaneEventKind::Osc(body) => {
+            if let Some(msg) = notification_text(&body) {
+                crate::server::dispatch::agent::attention(state, pane, Some(msg));
+            }
+            send(state, clients_on(state, session), &osc(&body));
+        }
         _ => {}
     }
 }
@@ -1665,6 +1721,43 @@ mod tests {
             let (_, events) = scan_all(&[input]);
             assert!(events.is_empty(), "{input:?}: {events:?}");
         }
+    }
+
+    #[test]
+    fn osc7501_not_relayed() {
+        for term in [&b"\x07"[..], b"\x1b\\"] {
+            let input = [&b"\x1b]7501;state=working"[..], term].concat();
+            let (_, events) = scan_all(&[&input]);
+            assert_eq!(
+                events,
+                vec![PaneEventKind::AgentStatus(b"state=working".to_vec())]
+            );
+        }
+        assert!(!relayed(b"7501;state=working"));
+    }
+
+    #[test]
+    fn wrapped_7501_read() {
+        let inner: &[u8] = b"\x1b]7501;?\x1b\\";
+        let (_, bare) = scan_all(&[inner]);
+        let (_, wrapped) = scan_all(&[&wrap(inner)]);
+        assert_eq!(bare, vec![PaneEventKind::AgentStatus(b"?".to_vec())]);
+        assert_eq!(wrapped, bare);
+    }
+
+    #[test]
+    fn query_reply_is_ok_st() {
+        assert_eq!(AGENT_QUERY_REPLY, b"\x1b]7501;ok\x1b\\");
+    }
+
+    #[test]
+    fn osc9_progress_ignored() {
+        assert_eq!(notification_text(b"9;4;1;50"), None);
+        assert_eq!(notification_text(b"9;4;0"), None);
+        assert_eq!(notification_text(b"9;done"), Some("done".into()));
+        assert_eq!(notification_text(b"9;4 done"), Some("4 done".into()));
+        assert_eq!(notification_text(b"777;notify;T;B"), Some("B".into()));
+        assert_eq!(notification_text(b"12;#fff"), None);
     }
 
     // ---- TC.12: `DCS tmux;` ----
