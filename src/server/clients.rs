@@ -424,9 +424,25 @@ pub struct Registry {
     /// each may only read (uid, read-only). Root and the server's own user
     /// are always in it, as tmux's `server_acl_init`.
     acl: BTreeMap<u32, bool>,
+    /// When each pane was last scanned for an agent program.
+    // ponytail: never pruned except by `scan_agents` dropping gone panes,
+    // so it holds at most one instant per pane that has produced output.
+    agent_scans: BTreeMap<PaneId, Instant>,
+    /// `agents.scan-interval`; the config sets it with `set_scan_interval`.
+    scan_interval: Duration,
 }
 
 impl Registry {
+    #[cfg(test)]
+    pub(crate) fn scanned(&self, pane: PaneId) -> bool {
+        self.agent_scans.contains_key(&pane)
+    }
+
+    /// The next scan of `pane` is not throttled.
+    pub(crate) fn forget_scan(&mut self, pane: PaneId) {
+        self.agent_scans.remove(&pane);
+    }
+
     pub(crate) fn acl_contains(&self, uid: u32) -> bool {
         self.acl.contains_key(&uid)
     }
@@ -470,6 +486,8 @@ impl Default for Registry {
                 .into_iter()
                 .map(|uid| (uid, false))
                 .collect(),
+            agent_scans: BTreeMap::new(),
+            scan_interval: Duration::from_secs(1),
         }
     }
 }
@@ -1691,6 +1709,7 @@ pub fn wake(state: &mut State) {
         .map(|p| p.id)
         .collect();
     crate::server::alerts::output(state, &dirty);
+    scan_agents(state, &dirty);
     if !dirty.is_empty() {
         arm_names(state, Instant::now());
     }
@@ -1712,6 +1731,86 @@ pub fn wake(state: &mut State) {
     if any {
         request_render(state, Instant::now());
     }
+}
+
+/// Sets how often a busy pane is checked for an agent program.
+pub fn set_scan_interval(state: &mut State, interval: Duration) {
+    state.registry.scan_interval = interval;
+}
+
+/// A foreground leader's pid and argv.
+type Leader = (i32, Vec<String>);
+
+/// The foreground leader of `pane`: its pid and argv, read now.
+fn leader_argv(p: &crate::server::model::Pane) -> Option<Leader> {
+    let pgrp = p.handle.foreground_group()?;
+    let argv = crate::server::pane::procinfo::leader(pgrp).argv?;
+    Some((pgrp, argv))
+}
+
+/// Checks each of `panes` for an agent program (agents spec 3.1), at most
+/// once per `agents.scan-interval` per pane; a match with no record makes
+/// one, bound to the leader process.
+pub fn scan_agents(state: &mut State, panes: &BTreeSet<PaneId>) {
+    scan_agents_with(state, panes, Instant::now(), &mut leader_argv);
+}
+
+fn scan_agents_with(
+    state: &mut State,
+    panes: &BTreeSet<PaneId>,
+    now: Instant,
+    read: &mut dyn FnMut(&crate::server::model::Pane) -> Option<Leader>,
+) {
+    if !state.agents_enabled {
+        return;
+    }
+    let interval = state.registry.scan_interval;
+    let mut created = Vec::new();
+    for &id in panes {
+        let Some(p) = state.model.panes.get(&id).filter(|p| p.dead.is_none()) else {
+            continue;
+        };
+        let last = state.registry.agent_scans.get(&id);
+        if last.is_some_and(|&t| now.saturating_duration_since(t) < interval) {
+            continue;
+        }
+        state.registry.agent_scans.insert(id, now);
+        let Some((leader, argv)) = read(p) else {
+            continue;
+        };
+        let Some(kind) = crate::server::agents::kinds::match_argv(&state.agent_kinds, &argv) else {
+            continue;
+        };
+        let binding = crate::server::resume::Binding::of(leader);
+        if state.agents.ensure(id, kind, binding, now) {
+            created.push(id);
+        }
+    }
+    let model = &state.model;
+    state
+        .registry
+        .agent_scans
+        .retain(|id, _| model.panes.contains_key(id));
+    if !created.is_empty() {
+        crate::server::resume::watch(state);
+    }
+    for id in created {
+        let change = crate::server::agents::Change {
+            old: None,
+            new: Some(crate::server::agents::AgentState::Idle),
+            session_changed: false,
+        };
+        crate::server::events::emit_agent_changed(state, id, &change);
+        redraw_all(state, now);
+    }
+}
+
+/// Every client redraws: an agent record appeared or went.
+pub(crate) fn redraw_all(state: &mut State, now: Instant) {
+    for c in state.clients.values_mut() {
+        c.dirty = true;
+    }
+    request_render(state, now);
 }
 
 /// Schedules a render of the dirty clients, at most once per
@@ -4017,6 +4116,64 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    fn pane_with_agents() -> (State, PaneId) {
+        let mut state = crate::server::test_state();
+        crate::server::dispatch::run(
+            &mut state,
+            &crate::server::test_ctx(),
+            &["new-session".into(), "-d".into(), "-s".into(), "m".into()],
+        )
+        .expect("new-session");
+        state.agents_enabled = true;
+        state.agent_kinds = crate::server::agents::kinds::builtin();
+        let id = *state.model.panes.keys().next().expect("pane");
+        (state, id)
+    }
+
+    /// Two outputs within the interval read the leader's argv once.
+    #[tokio::test]
+    async fn scan_throttled_per_pane() {
+        let (mut state, id) = pane_with_agents();
+        let reads = std::cell::Cell::new(0);
+        let mut read = |_: &crate::server::model::Pane| {
+            reads.set(reads.get() + 1);
+            Some((i32::MAX, vec!["claude".to_string()]))
+        };
+        let panes = BTreeSet::from([id]);
+        state.registry.forget_scan(id);
+        let t0 = Instant::now();
+        scan_agents_with(&mut state, &panes, t0, &mut read);
+        scan_agents_with(
+            &mut state,
+            &panes,
+            t0 + Duration::from_millis(900),
+            &mut read,
+        );
+        assert_eq!(reads.get(), 1);
+        scan_agents_with(
+            &mut state,
+            &panes,
+            t0 + Duration::from_millis(1100),
+            &mut read,
+        );
+        assert_eq!(reads.get(), 2);
+        assert_eq!(
+            state.agents.get(id).and_then(|a| a.kind.as_deref()),
+            Some("claude")
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_skips_when_disabled() {
+        let (mut state, id) = pane_with_agents();
+        state.agents_enabled = false;
+        let mut read = |_: &crate::server::model::Pane| -> Option<(i32, Vec<String>)> {
+            panic!("read while disabled")
+        };
+        scan_agents_with(&mut state, &BTreeSet::from([id]), Instant::now(), &mut read);
+        assert!(state.agents.get(id).is_none());
+    }
 
     /// A hello's tty names the client only if it is a device path: else
     /// it is taken as none and the client is `client-N`.
