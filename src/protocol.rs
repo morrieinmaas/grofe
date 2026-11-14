@@ -144,7 +144,7 @@ pub struct Caps {
     /// The terminal's default `(foreground, background)` from OSC 10 and
     /// 11; `None` when it did not say. Panes answer their programs' colour
     /// queries with it where `window-style` sets no colour.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colours: Option<([u8; 3], [u8; 3])>,
 }
 
