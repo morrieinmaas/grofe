@@ -586,6 +586,10 @@ fn tmux_identity_with_frames_on_keeps_the_stock_title_buttons() {
     srv.cmd(&["set", "-gu", "pane-border-format"])
         .expect("default format");
     srv.cmd(&["set", "-g", "mouse", "on"]).expect("mouse");
+    // The default title is the host name, long enough on some hosts to push
+    // the buttons out of the frame, as in tmux: a short one keeps them.
+    srv.cmd(&["select-pane", "-t", "f:.1", "-T", "t"])
+        .expect("title");
     // Zoomed, so the one frame is wide enough for the whole title.
     srv.cmd(&["resize-pane", "-Z", "-t", "f:.1"]).expect("zoom");
     client.wait_for("[u][x]");

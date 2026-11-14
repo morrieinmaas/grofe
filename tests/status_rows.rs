@@ -484,12 +484,18 @@ fn window_flags_and_the_pane_title_reach_the_status_line() {
         .unwrap();
     srv.cmd(&["split-window", "-t", "s", "cat"]).unwrap();
     srv.cmd(&["resize-pane", "-Z", "-t", "s"]).unwrap();
+    // Ten cells of each: a long host name would otherwise push the window
+    // list off the line, as in tmux.
     set(
         &srv,
-        &["-g", "status-right", "|#{pane_title}|#{host_short}|"],
+        &[
+            "-g",
+            "status-right",
+            "|#{=10:pane_title}|#{=10:host_short}|",
+        ],
     );
     set(&srv, &["-g", "status-right-length", "100"]);
-    let host = display(&srv, "#{host_short}");
+    let host = display(&srv, "#{=10:host_short}");
     assert!(!host.is_empty());
     let mut h = attach(&srv, 60, 5);
     h.wait_until("flags", WAIT, |t| {

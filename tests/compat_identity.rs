@@ -967,9 +967,12 @@ fn a_stale_dollar_tmux_pane_falls_back_under_the_tmux_name() {
     // The case a plugin hits: the server's environment carries the stale
     // pane into its jobs.
     grofe(&srv, &["set-environment", "-g", "TMUX_PANE", "%99"]).expect("setenv");
+    // `##`: run-shell expands its command first, and the job's own
+    // display-message must look the pane up. A `%0` already in the text
+    // is a strftime conversion to display-message, `0` on macOS.
     let out = tmux(
         &srv,
-        &["run-shell", "tmux display-message -p 'job #{pane_id}'"],
+        &["run-shell", "tmux display-message -p 'job ##{pane_id}'"],
     );
     assert!(out.status.success(), "{}", out.stderr);
     assert_eq!(out.stdout, format!("job {active}"));
