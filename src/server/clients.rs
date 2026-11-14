@@ -1855,6 +1855,7 @@ pub fn deadline(state: &State) -> Option<Instant> {
         r.names_at,
         dispatch::lock::deadline(state),
         crate::server::picker::deadline(state),
+        state.notify.mute_deadline(),
     ]
     .into_iter()
     .chain(state.clients.iter().map(|(id, c)| {
@@ -1934,6 +1935,13 @@ pub fn tick(state: &mut State, now: Instant) {
     }
     if switched {
         changed(state);
+    }
+
+    if state.notify.expire_mute(now) {
+        for c in state.clients.values_mut() {
+            c.dirty = true;
+        }
+        request_render(state, now);
     }
 
     if state.registry.status_at.is_some_and(|at| at <= now) {
@@ -2022,6 +2030,16 @@ const STATIC_STATUS_VARS: &[&str] = &[
     "window_panes",
     "host",
     "host_short",
+    // Agent state changes arrive as events and redraw. The plain words are
+    // the default formats' glyph option names and state names.
+    "window_agent_state",
+    "agents_badge",
+    "agent",
+    "glyph",
+    "blocked",
+    "error",
+    "unseen",
+    "working",
 ];
 
 /// Whether format `text` expands to the same thing at any time: no
@@ -4589,6 +4607,21 @@ mod tests {
         assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
     }
 
+    /// A timed mute wakes the server once, when it ends, and redraws; a
+    /// permanent one needs no timer.
+    #[test]
+    fn a_timed_mute_wakes_once_at_its_end() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        state.notify.mute(None);
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
+        state.notify.mute(Some(now + Duration::from_secs(1)));
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 1);
+        assert!(!state.notify.muted(now + Duration::from_secs(2)));
+        assert!(state.notify.mute_deadline().is_none());
+        assert!(state.clients.contains_key(&id));
+    }
+
     /// G2: a clock put into a static status line starts ticking again, and
     /// a pane change arms exactly one name check that does not re-arm.
     #[test]
@@ -4948,9 +4981,9 @@ mod tests {
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 9);
+        assert_eq!(state.registry.input_hooks.len(), 11);
         // TM.6 removed the mouse's scrollback view overlay.
-        assert_eq!(state.registry.overlays.len(), 8);
+        assert_eq!(state.registry.overlays.len(), 10);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),

@@ -32,7 +32,7 @@ const HEIGHT: u16 = 4;
 fn shown(state: &State, client: ClientId, now: Instant) -> Option<&Notification> {
     let n = state.notify.newest_unread()?;
     let cfg = &state.notify.cfg;
-    if !cfg.toast.iter().any(|s| *s == n.state)
+    if !cfg.toast.contains(&n.state)
         || now.saturating_duration_since(n.at) >= cfg.toast_time
         || state.notify.muted(now)
     {

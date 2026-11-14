@@ -162,6 +162,20 @@ impl Notifier {
         self.muted = None;
     }
 
+    /// When a timed mute ends, so the server wakes to redraw the badge.
+    pub fn mute_deadline(&self) -> Option<Instant> {
+        self.muted.flatten()
+    }
+
+    /// Forgets a timed mute that has ended; whether one did.
+    pub fn expire_mute(&mut self, now: Instant) -> bool {
+        let ended = matches!(self.muted, Some(Some(t)) if t <= now);
+        if ended {
+            self.muted = None;
+        }
+        ended
+    }
+
     pub fn muted(&self, now: Instant) -> bool {
         match self.muted {
             None => false,

@@ -23,7 +23,6 @@
 //! [`spawn_pane`] and [`resolve_cwd`].
 
 pub(crate) mod agent;
-pub(crate) mod notify;
 mod agent_cmd;
 pub mod bindings;
 pub mod buffers;
@@ -32,6 +31,7 @@ pub mod copy;
 pub mod hooks;
 pub mod lock;
 pub mod menu;
+pub(crate) mod notify;
 pub mod options;
 pub mod pane;
 pub mod persist;
