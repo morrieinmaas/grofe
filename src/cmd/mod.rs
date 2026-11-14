@@ -714,6 +714,29 @@ pub enum AgentCmd {
     List { format: Option<String> },
     Next,
     Seen { target: Target, all: bool },
+    New(AgentNew),
+}
+
+/// `agent new <kind> [-p] [-c dir] [-n name] [-w|-W] [-b branch] [-d]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentNew {
+    pub kind: String,
+    pub split: bool,
+    pub cwd: Option<String>,
+    pub name: Option<String>,
+    /// `-w` is `Some(true)`, `-W` is `Some(false)`, neither is `None`.
+    pub worktree: Option<bool>,
+    pub branch: Option<String>,
+    pub detached: bool,
+}
+
+/// `agent-sidebar on|off|toggle|focus`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarOp {
+    On,
+    Off,
+    Toggle,
+    Focus,
 }
 
 /// `notify list|dismiss|clear|mute|unmute` (grofe's own): the notification tray.
@@ -1762,6 +1785,10 @@ pub enum Command {
     CopyMode(CopyMode),
     /// `choose-agent`: the agent picker overlay.
     ChooseAgent,
+    /// `agent-sidebar on|off|toggle|focus`.
+    AgentSidebar(SidebarOp),
+    /// `agent-grid`: the all-agents grid overlay.
+    AgentGrid,
     /// `choose-notification`: the notification tray overlay.
     ChooseNotification,
     Notify(NotifyCmd),

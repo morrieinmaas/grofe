@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys;
 use super::target::parse_target;
 use super::{
-    AgentCmd, AgentReport, AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer,
+    AgentCmd, AgentNew, AgentReport, AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer,
     ChooseClient, ChooseOpts, ChooseTree, ClearHistory, ClockMode, Command, CommandPrompt,
     Condition, ConfirmBefore, CopyMode, CustomizeMode, DeleteBuffer, DetachClient, DisplayMenu,
     DisplayMessage, DisplayPanes, DisplayPopup, DragPane, FindWindow, FloatPane, HasSession, If,
@@ -21,9 +21,9 @@ use super::{
     RegisterSource, Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane,
     RotateWindow, RunShell, SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys,
     SendKeysItem, SendPrefix, ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption,
-    ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SortFlags, SourceFile,
-    SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey,
-    UnfloatPane, UnlinkWindow, WaitFor, WindowMove, WindowStep,
+    ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, SidebarOp, SortFlags,
+    SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target,
+    UnbindKey, UnfloatPane, UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -1223,6 +1223,54 @@ fn parse_agent(argv: &[String]) -> Result<Command, ParseError> {
                 target: target_or_current(&flags.values, 't')?,
                 all,
             }))
+        }
+        "new" => {
+            // The kind may come first (`agent new claude -w`), so flags
+            // are read from what follows it.
+            let (lead, flag_argv) = match rest.split_first() {
+                Some((k, tail)) if !k.starts_with('-') => (Some(k.clone()), tail),
+                _ => (None, rest),
+            };
+            let flags = flags_for(
+                flag_argv,
+                &[
+                    ('p', FlagKind::Bool),
+                    ('c', FlagKind::Value),
+                    ('n', FlagKind::Value),
+                    ('w', FlagKind::Bool),
+                    ('W', FlagKind::Bool),
+                    ('b', FlagKind::Value),
+                    ('d', FlagKind::Bool),
+                ],
+                "agent new",
+            )?;
+            let mut positionals = flags.positionals.clone();
+            if let Some(k) = lead {
+                positionals.insert(0, k);
+            }
+            if positionals.len() > 1 {
+                return Err(ParseError::TooManyArguments("agent new".into(), 1));
+            }
+            let kind = positionals
+                .pop()
+                .ok_or_else(|| ParseError::Other("agent new: kind required".into()))?;
+            let worktree = match (flags.present.contains(&'w'), flags.present.contains(&'W')) {
+                (true, true) => {
+                    return Err(ParseError::Other("agent new: -w and -W conflict".into()));
+                }
+                (true, false) => Some(true),
+                (false, true) => Some(false),
+                (false, false) => None,
+            };
+            Ok(Command::Agent(AgentCmd::New(AgentNew {
+                kind,
+                split: flags.present.contains(&'p'),
+                cwd: flags.values.get(&'c').cloned(),
+                name: flags.values.get(&'n').cloned(),
+                worktree,
+                branch: flags.values.get(&'b').cloned(),
+                detached: flags.present.contains(&'d'),
+            })))
         }
         other => Err(ParseError::Other(format!(
             "agent: unknown subcommand {other}"
@@ -4208,6 +4256,32 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             no_extra_positionals(&flags, "choose-agent", 0)?;
             Ok(Command::ChooseAgent)
         }
+        "agent-sidebar" => {
+            let flags = flags_for(rest, &[], "agent-sidebar")?;
+            no_extra_positionals(&flags, "agent-sidebar", 1)?;
+            let op = match flags.positionals.first().map(String::as_str) {
+                Some("on") => SidebarOp::On,
+                Some("off") => SidebarOp::Off,
+                Some("toggle") => SidebarOp::Toggle,
+                Some("focus") => SidebarOp::Focus,
+                Some(other) => {
+                    return Err(ParseError::Other(format!(
+                        "agent-sidebar: unknown operation {other}"
+                    )));
+                }
+                None => {
+                    return Err(ParseError::Other(
+                        "agent-sidebar: on, off, toggle or focus required".into(),
+                    ));
+                }
+            };
+            Ok(Command::AgentSidebar(op))
+        }
+        "agent-grid" => {
+            let flags = flags_for(rest, &[], "agent-grid")?;
+            no_extra_positionals(&flags, "agent-grid", 0)?;
+            Ok(Command::AgentGrid)
+        }
         "choose-notification" => {
             let flags = flags_for(rest, &[], "choose-notification")?;
             no_extra_positionals(&flags, "choose-notification", 0)?;
@@ -4276,6 +4350,49 @@ mod tests {
             parse(&argv(&["agent", "x"])),
             Err(ParseError::Other("agent: unknown subcommand x".into()))
         );
+    }
+
+    #[test]
+    fn agent_new_example() {
+        assert_eq!(
+            parse(&argv(&["agent", "new", "claude", "-w", "-b", "feat/x"])),
+            Ok(Command::Agent(AgentCmd::New(AgentNew {
+                kind: "claude".into(),
+                split: false,
+                cwd: None,
+                name: None,
+                worktree: Some(true),
+                branch: Some("feat/x".into()),
+                detached: false,
+            })))
+        );
+        let Ok(Command::Agent(AgentCmd::New(n))) = parse(&argv(&[
+            "agent", "new", "pi", "-p", "-d", "-W", "-c", "/r", "-n", "nm",
+        ])) else {
+            panic!("parse")
+        };
+        assert!(n.split && n.detached);
+        assert_eq!(n.worktree, Some(false));
+        assert_eq!(n.cwd.as_deref(), Some("/r"));
+        assert_eq!(n.name.as_deref(), Some("nm"));
+        assert!(parse(&argv(&["agent", "new"])).is_err());
+    }
+
+    #[test]
+    fn w_and_big_w_conflict() {
+        assert!(parse(&argv(&["agent", "new", "claude", "-w", "-W"])).is_err());
+    }
+
+    #[test]
+    fn sidebar_op_required() {
+        assert!(parse(&argv(&["agent-sidebar"])).is_err());
+        assert!(parse(&argv(&["agent-sidebar", "sideways"])).is_err());
+        assert_eq!(
+            parse(&argv(&["agent-sidebar", "focus"])),
+            Ok(Command::AgentSidebar(SidebarOp::Focus))
+        );
+        assert_eq!(parse(&argv(&["agent-grid"])), Ok(Command::AgentGrid));
+        assert!(parse(&argv(&["agent-grid", "x"])).is_err());
     }
 
     #[test]
