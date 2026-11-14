@@ -3,35 +3,15 @@
 **Goal:** an in-process Luau runtime (`init.luau`, a small `grofe.*` API) that can never freeze the server, and `grofe pack`, a git plus lockfile plugin manager for Luau and tmux plugins.
 **Architecture:** Luau runs on the server actor inside every callback's time budget; async work runs off the actor and posts its callback back as a `Job`. `grofe pack` is client-side and never runs inside the server.
 **Tech stack:** Rust 2024, mlua 0.12 (`luau`, `send`), tokio, toml, git CLI.
-**Spec:** this doc's Design section; amends spec §5.1 and §7 (owner ruling 2026-11-14 reverses the 2026-09-29 Lua drop).
+**Spec:** docs/specs/2026-11-14-lua-plugins.md; amends spec §5.1 and §7 (owner ruling 2026-11-14 reverses the 2026-09-29 Lua drop).
 **Detail:** tests (T1 full)
 **Target-min:** 14
 
 ## Design
 
-What the owner said (2026-11-14): Lua like Neovim, for plugins and scripting grofe; a built-in plugin manager; option A with guard rails, "guarantee no freeze"; a `grofe-plugin.toml` manifest with an API version; one lockfile that also covers tmux plugins (it replaces TPM). First consumers: status-line widgets and layout/workspace scripts.
+In docs/specs/2026-11-14-lua-plugins.md (rulings, no-freeze contract, API v1, loading, grofe pack).
 
-- Ruling: Luau, not Lua 5.4 (because sandboxing and the interrupt hook are its defaults, not a stdlib list we maintain).
-- Ruling: model on Neovim 0.12 `vim.pack` (because 0.13's changes could not be confirmed).
-- Ruling: plugins are declared in TOML `[[pack]]`, not in Lua (because cloning must never run inside the budgeted actor).
-- Ruling: status widgets push, not pull. A widget is `grofe.every` plus `grofe.system` plus `set-option @name`, shown with `#{@name}` (because the render path then never calls Lua, as spec D8 has status sources push).
-
-**No-freeze contract.** Every entry into Luau (init, key, event, timer, system callback, the `lua` verb) is one guarded call with a 50 ms budget and a 64 MiB memory limit. Once over budget, every interrupt raises, so even `pcall` loops end within 2× the budget. Luau has no `io` and no `os.execute`; `require` is limited to plugin and config dirs; no native modules. The worst case is a stutter of one budget plus a logged error naming the plugin. Nested entry (Lua running the `lua` verb) is an error, not a deadlock.
-
-**API v1** (`grofe.api == 1`):
-- `cmd(argv | string) -> string`
-- `fmt(format, target?) -> string`
-- `bind(table, key, fn, {desc?, ["repeat"]?}) -> id`
-- `on(event, fn) -> id`, with event names from the v1 catalog
-- `every(ms, fn) -> id`, at least 100 ms
-- `system(argv, fn, {cwd?, timeout_ms?}) -> id`, where `fn` receives `{code, stdout, stderr}`
-- `cancel(id)`, `log(msg)`, `plugin(name) -> table`
-
-Errors from `cmd` raise as Lua errors.
-
-**Loading** at start and on `reload`: `lua_host::reset` drops the old runtime with its bindings, timers and subscriptions. Then every enabled, locked and installed pack loads in name order: a Luau pack runs `init.luau` (its return value is what `grofe.plugin(name)` gives), a tmux pack `run-shell`s each `*.tmux`. Then `<config>/init.luau` runs, or `init.lua` if that exists instead. Errors go to the server log and `show-messages`, and never stop startup.
-
-**grofe pack:** `sync` (clone missing, check out the locked revs), `update [name] [--yes]` (fetch, print the commit log of each change, ask, then write the lock), `list`, `clean`. Clones go to `$XDG_DATA_HOME/grofe/pack/<name>` and the lock to `<config>/pack-lock.toml`. The kind comes from `grofe-plugin.toml` (`name`, `api`), else from any `*.tmux` file. An `api` other than 1 fails at sync with the plugin's name.
+Ruling: sequential [chain-16a3] - T2 runs Luau through T1's budgeted runtime and T3 through T2's scoped host, so each needs the previous one's real behaviour to test - cost if wrong: about 10 min of wall time.
 
 ## Main diagram
 
@@ -50,11 +30,7 @@ flowchart LR
 
 ## File structure
 
-- `src/lua/{mod.rs,runtime.rs,api.rs}`: sandboxed VM with budget; `grofe.*` over a `Host` trait.
-- `src/server/{lua_host.rs,lua_async.rs,pack_load.rs}`: `Host` for `State`; timers, events, processes; pack loading.
-- `src/pack/{mod.rs,spec.rs,manifest.rs,lock.rs,git.rs,cli.rs}`: specs, manifest, lockfile, git ops, CLI.
-- `src/config/load/pack.rs`: `[[pack]]` parsing.
-- Wiring: `src/cmd/{mod.rs,parse.rs}`, `src/server/dispatch/mod.rs`, `src/server/mod.rs`, `src/server/dispatch/options.rs`, `src/main.rs`, `src/lib.rs`, `Cargo.toml`.
+`src/lua/` VM and API; `src/server/{lua_host,lua_async,pack_load}.rs`; `src/pack/` manager; per-task Owns below.
 
 ## Task graph
 
@@ -71,6 +47,7 @@ flowchart LR
   T9[pack_load]
   T10[integration]
   T11[docs]
+  T12[pack manifest]
   %% taskgraph
   T1 --> T2
   T2 --> T3
@@ -80,6 +57,8 @@ flowchart LR
   T7 --> T10
   T8 --> T10
   T9 --> T10
+  T6 --> T10
+  T12 --> T10
   T10 --> T11
 ```
 
@@ -90,14 +69,14 @@ gantt
   dateFormat X
   axisFormat %M:%S
   section lane 1
-  T6 pack model :t6, 0, 503s
+  T8 pack config and CLI :t8, 0, 377s
   T3 lua_host :t3, 614, 330s
   T10 integration :t10, 944, 470s
-  T11 docs :t11, 1414, 292s
+  T11 docs :t11, 1414, 366s
   section lane 2
-  T8 pack config and CLI :t8, 0, 377s
-  section lane 3
   T7 pack git :t7, 0, 366s
+  section lane 3
+  T6 pack spec and lock :t6, 0, 332s
   section lane 4
   T5 wiring :t5, 0, 309s
   section lane 5
@@ -107,9 +86,11 @@ gantt
   T2 api :t2, 262, 352s
   section lane 7
   T9 pack_load :t9, 0, 194s
+  section lane 8
+  T12 pack manifest :t12, 0, 172s
 ```
 
-critical path: T1 → T2 → T3 → T10 → T11 (28.4 min) · peak width 7 · predicted build 28.4 min · predicted total ≈ 31.9 min (target ✗ 14.0)
+critical path: T1 → T2 → T3 → T10 → T11 (29.7 min) · peak width 8 · predicted build 29.7 min · predicted total ≈ 33.2 min (target ✗ 14.0)
 
 ## Global constraints
 
@@ -117,7 +98,7 @@ critical path: T1 → T2 → T3 → T10 → T11 (28.4 min) · peak width 7 · pr
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings`. No `unwrap`/`expect` on socket, pty or Lua entry paths outside tests.
 - No em dash as a sentence break. Conventional commits. No AI attribution.
 - `pub const PLUGIN_API: u32 = 1` lives in `src/pack/mod.rs` (T0). Bindings made by Lua use `BindingSource::Plugin("lua".into())`. Callback ids are `u32` from 1.
-- Wave 0 (T0): `mlua = { version = "0.12", features = ["luau", "send"] }`; `pub mod lua; pub mod pack;` in `src/lib.rs`; `src/lua/mod.rs` (`pub mod runtime; pub mod api;`) and `src/pack/mod.rs` (the const plus `pub mod spec; pub mod manifest; pub mod lock; pub mod git; pub mod cli;`); stubs for every Produces.
+- Wave 0 (T0): `.superlite/briefs/wave0-stubs.md`.
 
 ## Lua runtime
 
@@ -225,18 +206,30 @@ e.g. `run_chunk(state, ctx, "grofe.cmd{'lua','return 1'}")` -> `Err` containing 
 
 ## Plugin manager
 
-### T6 pack model · Complexity 4 · Est. context 26k
-**Owns:** src/pack/spec.rs, src/pack/manifest.rs, src/pack/lock.rs
-**Components:** 3
-**LOC owned:** 170
+### T6 pack spec and lock · Complexity 3 · Est. context 24k
+**Owns:** src/pack/spec.rs, src/pack/lock.rs
+**Components:** 2
+**LOC owned:** 110
 **Tests:** fast
 **Model:** sonnet
 **Kind:** design
-**Produces:** `pack::spec::Spec { name: String, src: String, rev: Option<String>, enabled: bool }` · `pack::spec::normalize_src(s: &str) -> Result<String, String>` · `pack::spec::name_of(src: &str) -> String` · `pack::spec::pack_root(home: &Path, xdg_data_home: Option<&Path>) -> PathBuf` · `pack::manifest::detect(dir: &Path) -> Result<Kind, String>` with `enum Kind { Luau, Tmux }` · `pack::lock::Lock { plugins: BTreeMap<String, Locked> }`, `Locked { src: String, rev: String }`, `Lock::read(path: &Path) -> Result<Lock, String>`, `Lock::write(&self, path: &Path) -> Result<(), String>`
+**Produces:** `pack::spec::Spec { name: String, src: String, rev: Option<String>, enabled: bool }` · `pack::spec::normalize_src(s: &str) -> Result<String, String>` · `pack::spec::name_of(src: &str) -> String` · `pack::spec::pack_root(home: &Path, xdg_data_home: Option<&Path>) -> PathBuf` · `pack::lock::Lock { plugins: BTreeMap<String, Locked> }`, `Locked { src: String, rev: String }`, `Lock::read(path: &Path) -> Result<Lock, String>`, `Lock::write(&self, path: &Path) -> Result<(), String>`
 e.g. `normalize_src("github:x/grofe-git")` -> `Ok("https://github.com/x/grofe-git")`; `normalize_src("ftp://x")` -> `Err`
 e.g. `name_of("https://github.com/x/tmux-yank.git")` -> `"tmux-yank"`
-e.g. `detect(dir with grofe-plugin.toml api = 2)` -> `Err("<name> needs grofe plugin API 2, this grofe has 1")`; `detect(dir with yank.tmux)` -> `Ok(Kind::Tmux)`
-**Review Focus:** file: `test_lock_missing_is_empty`; `test_lock_write_is_atomic_and_sorted`; `test_name_rejects_path_traversal` (`name_of("https://x/..")` and a spec name containing `/` give Err at normalize).
+e.g. `pack_root("/h", None)` -> `"/h/.local/share/grofe/pack"`; `pack_root("/h", Some("/d"))` -> `"/d/grofe/pack"`
+**Review Focus:** file: `test_lock_missing_is_empty`; `test_lock_write_is_atomic_and_sorted`; `test_name_rejects_path_traversal` (`normalize_src("https://x/..")` and a name of `..` or containing `/` give Err).
+
+### T12 pack manifest · Complexity 2 · Est. context 20k
+**Owns:** src/pack/manifest.rs
+**Components:** 1
+**LOC owned:** 60
+**Tests:** fast
+**Model:** sonnet
+**Kind:** design
+**Produces:** `pack::manifest::detect(dir: &Path) -> Result<Kind, String>` with `enum Kind { Luau, Tmux }`
+e.g. `detect(dir with grofe-plugin.toml name = "p", api = 2)` -> `Err("p needs grofe plugin API 2, this grofe has 1")`
+e.g. `detect(dir with yank.tmux)` -> `Ok(Kind::Tmux)`; `detect(empty dir)` -> `Err("not a grofe or tmux plugin")`
+**Review Focus:** file: `test_manifest_wins_over_tmux_file`; `test_bad_manifest_toml_names_the_file`.
 
 ### T7 pack git · Complexity 5 · Est. context 32k
 **Owns:** src/pack/git.rs
@@ -294,8 +287,8 @@ e.g. a fresh bare repo spec -> `sync` -> `[Outcome { name: "p", status: Installe
 **Components:** 2
 **LOC owned:** 140
 **Tests:** fast
-**Model:** haiku
-**Kind:** mechanical
+**Model:** sonnet
+**Kind:** design
 **Review Focus:** `test_types_cover_api`: every `grofe.*` name in `src/lua/api.rs` appears in `types/grofe.d.luau` (a test in tests/lua.rs is not owned here; this task adds `tests/docs_lua.rs` listing them).
 
 **Probe entry:** call=grofe::lua::runtime::Runtime::exec · run=grofe pack
@@ -308,4 +301,4 @@ e.g. a fresh bare repo spec -> `sync` -> `[Outcome { name: "p", status: Installe
 
 ## Self-review
 
-Coverage: every API name maps to T2, T3 or T4; loading to T3, T5 and T9; the manager to T6 to T8; the guarantee to T1 and T10. Edges are only where tests run another task's code.
+Coverage: API in T2-T4, loading in T3/T5/T9, manager in T6-T8/T12, guarantee in T1/T10.
