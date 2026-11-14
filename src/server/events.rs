@@ -384,6 +384,7 @@ fn mark_agents_seen(state: &mut State) {
     for pane in panes {
         if dispatch::agent::is_seen(state, pane) {
             changed |= state.agents.mark_seen(pane);
+            changed |= state.notify.seen(pane);
         }
     }
     if changed {
@@ -739,5 +740,51 @@ mod tests {
             Event::AgentChanged { pane: p, uid: u, old: None, new: Some(n), .. }
                 if p == pane && u == uid && n == "idle"
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn seen_marks_read() {
+        use crate::server::{dispatch, test_ctx, test_state};
+        let mut state = test_state();
+        let argv = ["new-session", "-d", "-s", "a", "sleep 600"].map(String::from);
+        dispatch::run(&mut state, &test_ctx(), &argv).expect("new-session");
+        let pane = *state.model.panes.keys().next().expect("pane");
+        state.notify.cfg.delivery = "off".into();
+        let accepted = crate::server::clients::attach(
+            &mut state,
+            crate::server::clients::AttachRequest {
+                ctx: crate::protocol::ClientCtx {
+                    client: None,
+                    ..test_ctx()
+                },
+                size: (80, 24),
+                term: "xterm".into(),
+                caps: Default::default(),
+                pid: None,
+                target: Some("a".into()),
+                detach_others: false,
+                nest: false,
+                tty: None,
+                created: false,
+                extras: Default::default(),
+            },
+        )
+        .expect("attach");
+        state.clients.get_mut(&accepted.id).expect("client").focused = false;
+        let report = crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(
+                crate::server::agents::AgentState::Blocked,
+            ),
+            kind: Some("claude".into()),
+            msg: Some("perm".into()),
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        dispatch::agent::apply(&mut state, pane, report);
+        assert!(!state.notify.items()[0].read);
+        state.clients.get_mut(&accepted.id).expect("client").focused = true;
+        mark_agents_seen(&mut state);
+        assert!(state.notify.items()[0].read);
     }
 }

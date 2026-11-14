@@ -844,11 +844,22 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
         PaneEventKind::Osc(body) => {
             if let Some(msg) = notification_text(&body) {
                 crate::server::dispatch::agent::attention(state, pane, Some(msg));
+                // The desktop notification replaces it (spec §6.4).
+                if desktop_delivery_on(state) && state.agents.get(pane).is_some_and(|a| a.reported)
+                {
+                    return;
+                }
             }
             send(state, clients_on(state, session), &osc(&body));
         }
         _ => {}
     }
+}
+
+/// Whether notifications leave the terminal as desktop notifications.
+fn desktop_delivery_on(state: &State) -> bool {
+    let c = &state.notify.cfg;
+    c.enabled && c.delivery != "off" && !c.desktop.is_empty()
 }
 
 /// Whether `allow-set-title` is off for `pane`.
@@ -2150,5 +2161,73 @@ mod tests {
             expect.push(b'x');
             prop_assert_eq!(out, expect);
         }
+    }
+}
+
+#[cfg(test)]
+mod notify_relay_tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::protocol::ClientCtx;
+    use crate::server::agents::{AgentState, Report, ReportState};
+    use crate::server::clients::{self, AttachRequest};
+    use crate::server::{dispatch, test_ctx, test_state};
+
+    /// A session with one attached client, and what it is sent for an OSC 9
+    /// from the pane after `reported` says whether the pane reported.
+    async fn relayed_after(reported: bool, delivery: &str) -> String {
+        let mut state = test_state();
+        let argv = ["new-session", "-d", "-s", "a", "sleep 600"].map(String::from);
+        dispatch::run(&mut state, &test_ctx(), &argv).expect("new-session");
+        let pane = *state.model.panes.keys().next().expect("pane");
+        state.notify.cfg.delivery = delivery.into();
+        let mut accepted = clients::attach(
+            &mut state,
+            AttachRequest {
+                ctx: ClientCtx {
+                    client: None,
+                    ..test_ctx()
+                },
+                size: (80, 24),
+                term: "xterm".into(),
+                caps: Default::default(),
+                pid: None,
+                target: Some("a".into()),
+                detach_others: false,
+                nest: false,
+                tty: None,
+                created: false,
+                extras: Default::default(),
+            },
+        )
+        .expect("attach");
+        if reported {
+            let report = Report {
+                state: ReportState::Set(AgentState::Working),
+                kind: Some("claude".into()),
+                msg: None,
+                blocked: None,
+                session_id: None,
+                ts: 1,
+            };
+            dispatch::agent::apply(&mut state, pane, report);
+        }
+        clients::tick(&mut state, Instant::now() + Duration::from_secs(1));
+        while accepted.output.try_recv().is_ok() {}
+        on_pane_event(&mut state, pane, PaneEventKind::Osc(b"9;hello".to_vec()));
+        clients::tick(&mut state, Instant::now() + Duration::from_secs(2));
+        let mut out = Vec::new();
+        while let Ok(frame) = accepted.output.try_recv() {
+            out.extend(frame);
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reported_agent_osc9_not_relayed_when_desktop_on() {
+        assert!(!relayed_after(true, "auto").await.contains("\x1b]9;hello"));
+        assert!(relayed_after(true, "off").await.contains("\x1b]9;hello"));
+        assert!(relayed_after(false, "auto").await.contains("\x1b]9;hello"));
     }
 }

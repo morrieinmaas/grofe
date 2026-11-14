@@ -1,11 +1,14 @@
 //! Server-side agent entry point: the one place reports, bells and jumps
 //! reach the agent store (spec §2.2 to §2.6, §5.2).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use crate::cmd::expand;
 use crate::config::Resolved;
 use crate::protocol::ClientCtx;
-use crate::server::agents::{Change, Report, ReportState, kinds};
+use crate::server::agents::{AgentState, Change, Report, ReportState, kinds};
+use crate::server::dispatch::options::{FormatCtx, ServerVars};
+use crate::server::notify::{Raised, desktop};
 use crate::server::resume::Binding;
 use crate::server::{State, clients, events, hooks, resume};
 use crate::types::{ClientId, PaneId};
@@ -55,6 +58,7 @@ pub fn apply(state: &mut State, pane: PaneId, r: Report) {
         state.agents.ensure(pane, &kind, binding, now);
     }
     let seen = is_seen(state, pane);
+    let before = state.agents.get(pane).map(|a| (a.state, a.since));
     let change = state.agents.apply(pane, r, seen, now);
     // A record this report made had no state before it.
     let change = match (change, created) {
@@ -74,7 +78,109 @@ pub fn apply(state: &mut State, pane: PaneId, r: Report) {
         set_resume(state, pane);
     }
     events::emit_agent_changed(state, pane, &change);
+    let worked = match (change.old, before) {
+        (Some(AgentState::Working), Some((AgentState::Working, since))) => {
+            now.saturating_duration_since(since)
+        }
+        _ => Duration::ZERO,
+    };
+    raise(state, pane, &change, worked, now);
     clients::mark_all_dirty(state);
+}
+
+/// Offers a state change to the notification store (spec §6.1) and delivers
+/// what it raises.
+fn raise(state: &mut State, pane: PaneId, change: &Change, worked: Duration, now: Instant) {
+    let Some(uid) = state.model.panes.get(&pane).map(|p| p.uid.clone()) else {
+        return;
+    };
+    let msg = state
+        .agents
+        .get(pane)
+        .and_then(|a| a.msg.clone().or_else(|| a.blocked.clone()));
+    let configured = change
+        .kind
+        .as_deref()
+        .is_some_and(|k| state.agent_kinds.iter().any(|x| x.name == k));
+    let seen = is_seen(state, pane);
+    let raised = state.notify.on_change(
+        pane,
+        &uid,
+        change.kind.as_deref(),
+        change.old.map(AgentState::as_str),
+        change.new.map(AgentState::as_str),
+        msg.as_deref(),
+        worked,
+        seen,
+        configured,
+        now,
+    );
+    if let Some(raised) = raised {
+        deliver(state, raised);
+        clients::mark_all_dirty(state);
+    }
+}
+
+/// Sends a raised notification out of the terminal (spec §6.4): `auto` is
+/// OSC 9 when some client is known unfocused and the command when no client
+/// is attached.
+pub fn deliver(state: &mut State, raised: Raised) {
+    if !raised.desktop {
+        return;
+    }
+    let Some(n) = state.notify.items().iter().find(|n| n.id == raised.id) else {
+        return;
+    };
+    let (pane, state_name) = (n.pane, n.state.clone());
+    let title = format!("grofe: {}", n.kind.as_deref().unwrap_or("agent"));
+    let label = pane_label(state, pane);
+    let message = match &n.msg {
+        Some(m) => format!("{label} {state_name}: {m}"),
+        None => format!("{label} {state_name}"),
+    };
+    let delivery = state.notify.cfg.delivery.as_str();
+    let (terminal, command) = match delivery {
+        "terminal" => (true, false),
+        "command" => (false, true),
+        "auto" => (
+            state.clients.values().any(|c| !c.focused),
+            state.clients.is_empty(),
+        ),
+        _ => (false, false),
+    };
+    if terminal {
+        let bytes = desktop::osc9(&format!("{title}: {message}"));
+        let ids: Vec<ClientId> = state.clients.keys().copied().collect();
+        for id in ids {
+            clients::queue_raw(state, id, &bytes);
+        }
+    }
+    if command {
+        let os = if cfg!(target_os = "macos") {
+            desktop::Os::Mac
+        } else {
+            desktop::Os::Linux
+        };
+        let cfg = &state.notify.cfg;
+        let argv = desktop::argv(
+            os,
+            &title,
+            &message,
+            cfg.sound,
+            cfg.command.as_deref(),
+            &pane.to_string(),
+            false,
+        );
+        state.notify_runner.submit(argv);
+    }
+}
+
+fn pane_label(state: &State, pane: PaneId) -> String {
+    let vars = FormatCtx::new(&state.model, pane);
+    expand(
+        "#{session_name}:#{window_index}.#{pane_index}",
+        &ServerVars::fresh(state, pane, &vars),
+    )
 }
 
 /// A bell or OSC 9/777 on a pane that never reported (spec §3.3).
@@ -118,6 +224,7 @@ pub fn configure(state: &mut State, r: &Resolved) {
         }
     }
     state.agent_kinds = all;
+    super::notify::configure(state, r);
 }
 
 /// Takes the jumping client to `pane` (spec §5.2): the client that ran the
@@ -402,5 +509,124 @@ mod tests {
             Some(vec!["m".to_string()])
         );
         assert!(find("codex").is_some());
+    }
+
+    fn attach_unfocused(state: &mut State) -> crate::server::clients::Accepted {
+        use crate::server::clients::{self, AttachRequest};
+        let accepted = clients::attach(
+            state,
+            AttachRequest {
+                ctx: ClientCtx {
+                    client: None,
+                    ..test_ctx()
+                },
+                size: (80, 24),
+                term: "xterm".into(),
+                caps: Default::default(),
+                pid: None,
+                target: Some("a".into()),
+                detach_others: false,
+                nest: false,
+                tty: None,
+                created: false,
+                extras: Default::default(),
+            },
+        )
+        .expect("attach");
+        if let Some(c) = state.clients.get_mut(&accepted.id) {
+            c.focused = false;
+        }
+        accepted
+    }
+
+    fn blocked(msg: &str, ts: u64) -> Report {
+        let mut r = report(ReportState::Set(AgentState::Blocked), ts);
+        r.msg = Some(msg.into());
+        r
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn change_raises_and_marks_dirty() {
+        let (mut state, pane) = state_with_pane();
+        state.notify.cfg.delivery = "off".into();
+        let _accepted = attach_unfocused(&mut state);
+        let soon = || Instant::now() + std::time::Duration::from_millis(1200);
+        crate::server::clients::tick(
+            &mut state,
+            Instant::now() + std::time::Duration::from_secs(1),
+        );
+        assert!(crate::server::clients::deadline(&state).is_none_or(|d| d > soon()));
+        apply(&mut state, pane, blocked("perm", 1));
+        let items = state.notify.items();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].state, "blocked");
+        assert_eq!(items[0].msg.as_deref(), Some("perm"));
+        assert!(
+            crate::server::clients::deadline(&state).is_some_and(|d| d <= soon()),
+            "clients redraw"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn auto_unfocused_sends_osc9() {
+        let (mut state, pane) = state_with_pane();
+        let mut accepted = attach_unfocused(&mut state);
+        state.notify.cfg.delivery = "auto".into();
+        apply(&mut state, pane, blocked("perm", 1));
+        crate::server::clients::tick(
+            &mut state,
+            Instant::now() + std::time::Duration::from_secs(1),
+        );
+        let mut out = Vec::new();
+        while let Ok(frame) = accepted.output.try_recv() {
+            out.extend(frame);
+        }
+        let out = String::from_utf8_lossy(&out);
+        assert!(
+            out.contains("\x1b]9;grofe: claude: a:1.1 blocked: perm\x1b\\"),
+            "{out:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn auto_no_client_runs_command() {
+        let (mut state, pane) = state_with_pane();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("out");
+        state.notify.cfg.delivery = "auto".into();
+        state.notify.cfg.command = Some(
+            [
+                "sh",
+                "-c",
+                &format!("printf '%s' \"$0\" > {}", file.display()),
+                "{message}",
+            ]
+            .map(String::from)
+            .to_vec(),
+        );
+        apply(&mut state, pane, blocked("perm", 1));
+        for _ in 0..100 {
+            if file.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let text = std::fs::read_to_string(&file).expect("command ran");
+        assert_eq!(text, "a:1.1 blocked: perm");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worked_time_from_working_since() {
+        let (mut state, pane) = state_with_pane();
+        state.notify.cfg.delivery = "off".into();
+        state.notify.cfg.done_min_work = std::time::Duration::from_millis(100);
+        let set = |s, ts| report(ReportState::Set(s), ts);
+        apply(&mut state, pane, set(AgentState::Working, 1));
+        apply(&mut state, pane, set(AgentState::Done, 2));
+        assert!(state.notify.items().is_empty(), "no work, no done");
+        apply(&mut state, pane, set(AgentState::Working, 3));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        apply(&mut state, pane, set(AgentState::Done, 4));
+        assert_eq!(state.notify.items().len(), 1);
     }
 }
