@@ -466,7 +466,9 @@ fn the_program_learns_its_size_once_on_release() {
     );
     ok(&srv, &["split-window", "-v", "-t", "%1", &script]);
     let lines = || fs::read_to_string(&log).unwrap_or_default().lines().count();
-    wait_until(|| lines() == 1, WAIT).expect("the trap is set");
+    // At least one: a resize as the new pane settles can append to `ready`
+    // between two polls. What counts is the change from `before` below.
+    wait_until(|| lines() >= 1, WAIT).expect("the trap is set");
     let mut a = attach(&srv);
     // Whatever the attach itself caused has landed.
     std::thread::sleep(Duration::from_millis(300));
