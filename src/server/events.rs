@@ -400,11 +400,10 @@ pub fn emit_agent_changed(state: &mut State, pane: PaneId, change: &agents::Chan
         .get(&pane)
         .map(|p| p.uid.clone())
         .unwrap_or_default();
-    let kind = state.agents.get(pane).and_then(|a| a.kind.clone());
     state.events.emit(Event::AgentChanged {
         pane,
         uid,
-        kind,
+        kind: change.kind.clone(),
         old: change.old.map(|s| s.as_str().to_string()),
         new: change.new.map(|s| s.as_str().to_string()),
     });
@@ -727,6 +726,7 @@ mod tests {
         let change = Change {
             old: None,
             new: Some(AgentState::Idle),
+            kind: None,
             session_changed: false,
         };
         emit_agent_changed(&mut state, pane, &change);

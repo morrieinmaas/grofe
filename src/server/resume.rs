@@ -318,6 +318,7 @@ fn sweep_agents(state: &mut State) {
         let change = crate::server::agents::Change {
             old: Some(old.state),
             new: None,
+            kind: old.kind,
             session_changed: false,
         };
         crate::server::events::emit_agent_changed(state, pane, &change);
@@ -448,6 +449,24 @@ mod agent_tests {
             .ensure(id, "claude", dead(), std::time::Instant::now());
         assert!(!sweep(&mut state));
         assert!(state.agents.get(id).is_none());
+    }
+
+    #[tokio::test]
+    async fn swept_record_event_keeps_its_kind() {
+        let (mut state, id) = state_with_pane().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let names = vec!["agent-changed".to_string()];
+        state.events.subscribe(names, None, tx).expect("subscribe");
+        state
+            .agents
+            .ensure(id, "claude", dead(), std::time::Instant::now());
+        sweep(&mut state);
+        state.events.flush(&state.model);
+        let event = rx.try_recv().expect("event");
+        assert!(matches!(
+            event,
+            crate::event::Event::AgentChanged { kind: Some(k), new: None, .. } if k == "claude"
+        ));
     }
 
     #[tokio::test]

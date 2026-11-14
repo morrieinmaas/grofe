@@ -99,10 +99,13 @@ impl Agent {
 }
 
 /// What a report changed; `new` is `None` when the record was removed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `kind` is the record's kind at that moment, kept here because a removed
+/// record can no longer be asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub old: Option<AgentState>,
     pub new: Option<AgentState>,
+    pub kind: Option<String>,
     pub session_changed: bool,
 }
 
@@ -125,6 +128,7 @@ impl Agents {
                 return Some(Change {
                     old: Some(a.state),
                     new: None,
+                    kind: a.kind,
                     session_changed: false,
                 });
             }
@@ -178,6 +182,7 @@ impl Agents {
         (state_changed || content_changed || session_changed).then_some(Change {
             old,
             new: Some(state),
+            kind: a.kind.clone(),
             session_changed,
         })
     }
@@ -288,6 +293,7 @@ mod tests {
             Some(Change {
                 old: Some(AgentState::Working),
                 new: Some(AgentState::Done),
+                kind: None,
                 session_changed: false
             })
         );
@@ -330,6 +336,7 @@ mod tests {
             Some(Change {
                 old: Some(AgentState::Working),
                 new: None,
+                kind: None,
                 session_changed: false
             })
         );

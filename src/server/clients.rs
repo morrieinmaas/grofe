@@ -1795,9 +1795,11 @@ fn scan_agents_with(
         crate::server::resume::watch(state);
     }
     for id in created {
+        let kind = state.agents.get(id).and_then(|a| a.kind.clone());
         let change = crate::server::agents::Change {
             old: None,
             new: Some(crate::server::agents::AgentState::Idle),
+            kind,
             session_changed: false,
         };
         crate::server::events::emit_agent_changed(state, id, &change);

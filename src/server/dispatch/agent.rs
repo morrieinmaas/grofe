@@ -62,6 +62,7 @@ pub fn apply(state: &mut State, pane: PaneId, r: Report) {
         (None, true) => state.agents.get(pane).map(|a| Change {
             old: None,
             new: Some(a.state),
+            kind: a.kind.clone(),
             session_changed: false,
         }),
         (c, false) => c,
