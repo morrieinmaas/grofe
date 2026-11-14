@@ -202,6 +202,12 @@ fn search_paths(state: &State, ctx: &ClientCtx, p: &Pane, leader: i32) -> Vec<St
             .map(|(_, v)| v.clone())
             .collect();
     }
+    pane_paths(state, p, Some(leader))
+}
+
+/// The `PATH`s of the pane itself: its foreground process's (when known),
+/// then its spawn environment's.
+fn pane_paths(state: &State, p: &Pane, leader: Option<i32>) -> Vec<String> {
     let root = p.handle.pid().and_then(|pid| i32::try_from(pid).ok());
     let session = state.model.windows.get(&p.window).map(|w| w.session);
     // The spawn environment: what the root process started with, else
@@ -216,10 +222,32 @@ fn search_paths(state: &State, ctx: &ClientCtx, p: &Pane, leader: i32) -> Vec<St
                 .find(|(k, _)| k == "PATH")
                 .map(|(_, v)| v)
         });
-    procinfo::env_var(leader, "PATH")
+    leader
+        .and_then(|l| procinfo::env_var(l, "PATH"))
         .into_iter()
         .chain(spawn)
         .collect()
+}
+
+/// `argv` with a plain `argv[0]` name made absolute against the `PATH` of
+/// `pane`'s foreground process, then its spawn environment (a restore under a
+/// minimal `PATH` can then still run it). Best effort: when the name is not
+/// found, or is not a bare name, `argv` is returned as it was.
+pub fn resolve_for_pane(state: &State, pane: PaneId, mut argv: Vec<String>) -> Vec<String> {
+    let (Some(p), Some(name)) = (state.model.panes.get(&pane), argv.first()) else {
+        return argv;
+    };
+    if name.contains('/') {
+        return argv;
+    }
+    let leader = p.handle.foreground_group();
+    if let Some(found) = pane_paths(state, p, leader)
+        .iter()
+        .find_map(|path| lookup(name, path))
+    {
+        argv[0] = found.display().to_string();
+    }
+    argv
 }
 
 /// A shell word that means the same quoted or not: nothing the shell
@@ -394,6 +422,22 @@ mod agent_tests {
             pid: i32::MAX,
             start_time: 1,
         })
+    }
+
+    #[tokio::test]
+    async fn agent_resume_resolves_against_the_pane_path() {
+        let (state, id) = state_with_pane().await;
+        let argv = |n: &str| vec![n.to_string(), "--resume".into(), "s1".into()];
+        let found = resolve_for_pane(&state, id, argv("sh"));
+        assert!(
+            found[0].starts_with('/') && found[0].ends_with("/sh"),
+            "{found:?}"
+        );
+        assert_eq!(&found[1..], ["--resume", "s1"]);
+        let bare = resolve_for_pane(&state, id, argv("no-such-agent-xyz"));
+        assert_eq!(bare, argv("no-such-agent-xyz"));
+        let slashed = resolve_for_pane(&state, id, argv("./claude"));
+        assert_eq!(slashed, argv("./claude"));
     }
 
     #[tokio::test]

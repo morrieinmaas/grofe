@@ -408,6 +408,7 @@ pub fn emit_agent_changed(state: &mut State, pane: PaneId, change: &agents::Chan
         old: change.old.map(|s| s.as_str().to_string()),
         new: change.new.map(|s| s.as_str().to_string()),
     });
+    crate::server::hooks::agent_changed(state, pane);
 }
 
 #[cfg(test)]

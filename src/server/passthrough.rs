@@ -789,7 +789,8 @@ pub fn on_pane_event(state: &mut State, pane: PaneId, kind: PaneEventKind) {
                     .map_or(0, |d| d.as_micros() as u64);
                 let report = crate::server::agents::Report {
                     state: report_state,
-                    kind: app,
+                    // `app` names the kind only for a record that has none (spec §3.2).
+                    kind: app.filter(|_| state.agents.get(pane).is_none_or(|a| a.kind.is_none())),
                     msg,
                     blocked,
                     session_id: None,

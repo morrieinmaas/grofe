@@ -166,8 +166,9 @@ fn foreground_binding(state: &State, pane: PaneId) -> Option<Binding> {
 }
 
 /// Sets `pane`'s resume from its kind's template and session id (spec
-/// §2.6), bound to the record's process. The argv is not resolved against
-/// `PATH` as `pane-set-resume` does: it stays as the template wrote it.
+/// §2.6), bound to the record's process. `argv[0]` is resolved against the
+/// pane's own `PATH` as `pane-set-resume` does, and stays bare when that
+/// finds nothing.
 fn set_resume(state: &mut State, pane: PaneId) {
     let Some(a) = state.agents.get(pane) else {
         return;
@@ -184,6 +185,7 @@ fn set_resume(state: &mut State, pane: PaneId) {
     else {
         return;
     };
+    let argv = resume::resolve_for_pane(state, pane, argv);
     let binding = a.binding.or_else(|| foreground_binding(state, pane));
     let Some(p) = state
         .model
@@ -257,10 +259,13 @@ mod tests {
         r.session_id = Some("s1".into());
         apply(&mut state, pane, r);
         let resume = state.model.panes[&pane].resume.clone();
-        assert_eq!(
-            resume,
-            Some(vec!["claude".into(), "--resume".into(), "s1".into()])
+        // argv[0] is absolute when the pane's PATH holds `claude`, else bare.
+        let resume = resume.expect("a resume");
+        assert!(
+            resume[0] == "claude" || resume[0].ends_with("/claude"),
+            "{resume:?}"
         );
+        assert_eq!(resume[1..], ["--resume", "s1"]);
         assert!(state.model.panes[&pane].resume_binding.is_some());
     }
 

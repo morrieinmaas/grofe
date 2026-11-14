@@ -224,3 +224,39 @@ fn agent_changed_subscribed() {
     assert!(text.contains("AgentChanged"), "{text}");
     assert!(text.contains("blocked"), "{text}");
 }
+
+#[test]
+fn agent_changed_hook_fires() {
+    let f = Fixture::new();
+    let id = f.pane_id();
+    f.srv
+        .cmd(&["set-hook", "-g", "agent-changed", "set -g -a @ac x"])
+        .expect("set-hook");
+    f.srv
+        .cmd(&["agent", "report", "blocked", "-t", &id, "--ts", "1"])
+        .expect("agent report");
+    f.srv
+        .wait_for(
+            || {
+                f.srv
+                    .cmd(&["show-options", "-gqv", "@ac"])
+                    .is_ok_and(|r| r.trim() == "x")
+            },
+            WAIT,
+        )
+        .unwrap_or_else(|e| panic!("{e}: agent-changed hook never ran"));
+}
+
+#[test]
+fn osc7501_app_does_not_replace_a_known_kind() {
+    let f = Fixture::new();
+    let id = f.pane_id();
+    f.srv
+        .cmd(&[
+            "agent", "report", "idle", "-t", &id, "--kind", "claude", "--ts", "1",
+        ])
+        .expect("agent report");
+    f.wait_list(&format!("{id} claude idle"));
+    f.type_line(r"printf '\033]7501;state=working:app=other\033\\'");
+    f.wait_list(&format!("{id} claude working"));
+}

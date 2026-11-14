@@ -148,6 +148,7 @@ and `event-option-changed-unset` for the null shapes.
 | `alert-activity` | `window`, `session`, `pane` | output in a monitored window |
 | `alert-silence` | `window`, `session`, `pane` | silence in a monitored window |
 | `option-changed` | `scope` (`global`, `$N`, `@N` or `%N`), `name`, `value` (nullable: null once unset) | an option's value changed |
+| `agent-changed` | `pane`, `uid`, `kind` (nullable), `old` (nullable: null for a new record), `new` (nullable: null once the record is gone) | a pane's agent state changed |
 | `events-dropped` | `count` | a notice, not subscribable: the subscriber's queue overflowed; sent before its next delivered event |
 
 The full table (emitters, consumers, exact firing rules) is spec §7.2.

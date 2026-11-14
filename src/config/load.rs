@@ -14,8 +14,8 @@ use super::{
     ConfigCommand, ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer,
     OPTION_NAMES, Provenance, Resolved, Source, Ty, closest, tmux_name, toml_type,
 };
-pub mod plugins;
 pub mod agents;
+pub mod plugins;
 
 use crate::cmd;
 use crate::server::dispatch::options::{Options, Owner};

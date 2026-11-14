@@ -267,12 +267,27 @@ pub fn encode_hello(hello: &Hello) -> Result<String, ProtocolError> {
     let mut value = serde_json::to_value(hello)?;
     if let serde_json::Value::Object(map) = &mut value {
         map.insert("grofe".to_string(), PROTOCOL_VERSION.into());
+        // serde_json keeps insertion order (agent setup needs that for
+        // settings files); the frozen wire form is key-sorted.
     }
+    sort_deep(&mut value);
     let line = value.to_string();
     if line.len() > HELLO_MAX_LEN {
         return Err(ProtocolError::TooLarge { len: line.len() });
     }
     Ok(line)
+}
+
+/// Sorts every object's keys, recursively.
+fn sort_deep(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.sort_keys();
+            map.values_mut().for_each(sort_deep);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(sort_deep),
+        _ => {}
+    }
 }
 
 /// Decodes a hello line, checking the protocol version before the shape so

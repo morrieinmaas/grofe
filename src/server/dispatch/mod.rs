@@ -22,6 +22,8 @@
 //! Shared helpers for handlers that spawn panes live here too:
 //! [`spawn_pane`] and [`resolve_cwd`].
 
+pub(crate) mod agent;
+mod agent_cmd;
 pub mod bindings;
 pub mod buffers;
 pub mod client;
@@ -38,8 +40,6 @@ pub mod session;
 pub mod sorting;
 pub mod structure;
 pub mod window;
-pub(crate) mod agent;
-mod agent_cmd;
 
 use std::path::{Path, PathBuf};
 
