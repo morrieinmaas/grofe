@@ -184,4 +184,115 @@ mod tests {
         .unwrap();
         assert!(t.elapsed() < Duration::from_millis(75), "{:?}", t.elapsed());
     }
+
+    /// Runs `src`, checks it ended fast with an error containing `want`, then that the VM still runs.
+    fn aborts(src: &str, want: &str) {
+        let r = Runtime::new(Limits::default()).unwrap();
+        let t = Instant::now();
+        let e = r.exec("p", src).unwrap_err();
+        assert!(
+            t.elapsed() < Duration::from_millis(150),
+            "{src}: {:?}",
+            t.elapsed()
+        );
+        assert!(e.message.contains(want), "{src}: {e}");
+        r.exec("next", "z = 1").unwrap();
+        assert_eq!(r.lua().globals().get::<i64>("z").unwrap(), 1);
+    }
+    #[test]
+    fn deep_recursion_is_a_lua_error() {
+        aborts(
+            "local function f(n) return 1 + f(n + 1) end f(1)",
+            "stack overflow",
+        );
+    }
+    #[test]
+    fn huge_allocations_are_errors() {
+        aborts("string.rep('x', 2^31)", "too large");
+        aborts("string.rep('x', 1e9)", "memory");
+        aborts("string.format('%999999999d', 1)", "invalid format");
+        aborts("buffer.create(1e9)", "memory");
+    }
+    #[test]
+    fn the_interrupt_fires_inside_the_pattern_matcher() {
+        aborts("string.rep('a', 2e4):match('(.-)(.-)(.-)(.-)x')", "budget");
+        aborts("string.rep('a', 2e7):find('%b()')", "budget");
+        aborts(
+            "string.gsub(string.rep('a', 1e6), 'a', 'bbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+            "budget",
+        );
+    }
+    #[test]
+    fn spins_in_coroutines_sorts_and_metamethods_abort() {
+        aborts(
+            "coroutine.wrap(function() while true do end end)()",
+            "budget",
+        );
+        aborts(
+            "local c = coroutine.wrap(function() while true do coroutine.yield() end end) while true do c() end",
+            "budget",
+        );
+        aborts(
+            "table.sort({3,2,1,5,4}, function(a, b) while true do end end)",
+            "budget",
+        );
+        aborts(
+            "local t = setmetatable({}, {__index = function() while true do end end}) return t.x",
+            "budget",
+        );
+        aborts(
+            "xpcall(function() error('x') end, function() while true do end end)",
+            "budget",
+        );
+    }
+    #[test]
+    fn the_memory_limit_still_applies_after_an_oom() {
+        let r = Runtime::new(Limits {
+            memory: 8 << 20,
+            budget: Duration::from_secs(5),
+        })
+        .unwrap();
+        for _ in 0..2 {
+            let e = r.exec("m", "string.rep('x', 1e9)").unwrap_err();
+            assert!(e.message.contains("memory"), "{e}");
+            r.exec("ok", "local s = string.rep('x', 1e6)").unwrap();
+        }
+    }
+    #[test]
+    fn the_sandbox_is_closed() {
+        let r = rt();
+        for src in [
+            "rawset(_G, 'zz', 1)",
+            "string.zz = 1",
+            "require('/etc/passwd')",
+            "require('../../etc/passwd')",
+            "dofile('/etc/passwd')",
+            "collectgarbage('stop')",
+            "collectgarbage('setpause', 1000000)",
+            "assert(package == nil and io == nil and os.getenv == nil and os.exit == nil and os.remove == nil)",
+        ] {
+            let res = r.exec("s", src);
+            if src.starts_with("assert") {
+                res.unwrap();
+            } else {
+                assert!(res.is_err(), "{src} was allowed");
+            }
+        }
+        // getfenv/setfenv only reach the sandbox env, never the shared read-only globals
+        r.exec("f", "getfenv(1).leak = 1 setfenv(1, {})").unwrap();
+        assert!(r.exec("g", "string.leak = 1").is_err());
+    }
+    // ponytail: one C call (a plain find or upper on a string up to the memory cap) is not
+    // interruptible; its cost is bounded by the 64 MiB memory limit, measured at ~40 ms.
+    #[test]
+    fn a_single_uninterruptible_c_call_is_bounded_by_the_memory_cap() {
+        let r = rt();
+        let t = Instant::now();
+        let _ = r.exec("c", "string.rep('a', 5e7):find('b')");
+        assert!(
+            t.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            t.elapsed()
+        );
+    }
 }
