@@ -13,17 +13,17 @@ use super::{
     ChooseClient, ChooseOpts, ChooseTree, ClearHistory, ClockMode, Command, CommandPrompt,
     Condition, ConfirmBefore, CopyMode, CustomizeMode, DeleteBuffer, DetachClient, DisplayMenu,
     DisplayMessage, DisplayPanes, DisplayPopup, DragPane, FindWindow, FloatPane, HasSession, If,
-    JoinPane, KillPane, KillServer, KillSession, KillWindow, LastPane, LinkWindow, ListBuffers,
-    ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows, LoadBuffer, Lock,
-    LockScope, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset,
-    OptionScope, Pan, PaneSetResume, PaneSetup, ParseError, PasteBuffer, PipePane, PlacePane,
-    PluginRestart, PromptHistory, RebootCheck, RefreshClient, RegisterSource, Reload, Rename,
-    ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer,
-    SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, ServerAccess,
-    SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks,
-    ShowMessages, ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe, SuspendClient,
-    SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, UnfloatPane, UnlinkWindow, WaitFor,
-    WindowMove, WindowStep,
+    JoinPane, KeyMenu, KillPane, KillServer, KillSession, KillWindow, LastPane, LinkWindow,
+    ListBuffers, ListClients, ListKeys, ListPanes, ListPlugins, ListSessions, ListWindows,
+    LoadBuffer, Lock, LockScope, Mark, MenuEntry, MoveWindow, NewPane, NewSession, NewWindow,
+    NextLayout, Offset, OptionScope, Pan, PaneSetResume, PaneSetup, ParseError, PasteBuffer,
+    PipePane, PlacePane, PluginRestart, PromptHistory, RebootCheck, RefreshClient, RegisterSource,
+    Reload, Rename, ResizeAction, ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell,
+    SaveBuffer, SelectLayout, SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix,
+    ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment,
+    ShowHooks, ShowMessages, ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe,
+    SuspendClient, SwapPane, SwapWindow, SwitchClient, Target, UnbindKey, UnfloatPane,
+    UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
 
@@ -1568,6 +1568,7 @@ const BIND_KEY_SHORT: &[(char, FlagKind)] = &[
     ('r', FlagKind::Bool),
     ('T', FlagKind::Value),
     ('N', FlagKind::Value),
+    ('G', FlagKind::Value),
 ];
 
 fn parse_bind_key(argv: &[String]) -> Result<Command, ParseError> {
@@ -1587,6 +1588,7 @@ fn parse_bind_key(argv: &[String]) -> Result<Command, ParseError> {
         table: key_table(&flags),
         repeat: flags.present.contains(&'r'),
         note: flags.values.get(&'N').cloned(),
+        group: flags.values.get(&'G').cloned(),
         key: key.clone(),
         command: command.to_vec(),
     }))
@@ -4147,6 +4149,18 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 opts: choose_opts(rest, &flags, "choose-buffer")?,
             }))
         }
+        "choose-agent" => {
+            let flags = flags_for(rest, &[], "choose-agent")?;
+            no_extra_positionals(&flags, "choose-agent", 0)?;
+            Ok(Command::ChooseAgent)
+        }
+        "key-menu" => {
+            let flags = flags_for(rest, &[('T', FlagKind::Value)], "key-menu")?;
+            no_extra_positionals(&flags, "key-menu", 0)?;
+            Ok(Command::KeyMenu(KeyMenu {
+                table: flags.values.get(&'T').cloned(),
+            }))
+        }
         _ => Err(ParseError::UnknownCommand(name.clone())),
     }
 }
@@ -5825,6 +5839,7 @@ mod tests {
                 table: "prefix".to_string(),
                 repeat: false,
                 note: None,
+                group: None,
                 key: "X".to_string(),
                 command: argv(&["split-window", "-h"]),
             }))
@@ -5842,6 +5857,7 @@ mod tests {
                 table: "root".to_string(),
                 repeat: true,
                 note: Some("a note".to_string()),
+                group: None,
                 key: "M-h".to_string(),
                 command: argv(&["select-pane"]),
             }))
@@ -5856,6 +5872,47 @@ mod tests {
             parse(&argv(&["bind-key"])),
             Err(ParseError::MissingArgument("bind-key".to_string()))
         );
+    }
+
+    #[test]
+    fn choose_agent_no_args() {
+        assert_eq!(parse(&argv(&["choose-agent"])), Ok(Command::ChooseAgent));
+        assert!(parse(&argv(&["choose-agent", "x"])).is_err());
+    }
+
+    #[test]
+    fn key_menu_flags() {
+        assert_eq!(
+            parse(&argv(&["key-menu"])),
+            Ok(Command::KeyMenu(KeyMenu { table: None }))
+        );
+        assert_eq!(
+            parse(&argv(&["key-menu", "-T", "prefix"])),
+            Ok(Command::KeyMenu(KeyMenu {
+                table: Some("prefix".to_string())
+            }))
+        );
+    }
+
+    #[test]
+    fn key_menu_unknown_flag() {
+        assert_eq!(
+            parse(&argv(&["key-menu", "-x"])),
+            Err(ParseError::UnknownFlag("key-menu".to_string(), 'x'))
+        );
+    }
+
+    #[test]
+    fn bind_g_requires_value() {
+        assert!(parse(&argv(&["bind-key", "-G"])).is_err());
+        let Ok(Command::BindKey(c)) =
+            parse(&argv(&["bind-key", "-G", "agents", "u", "agent", "next"]))
+        else {
+            panic!("bind-key -G");
+        };
+        assert_eq!(c.group.as_deref(), Some("agents"));
+        assert_eq!(c.key, "u");
+        assert_eq!(c.command, argv(&["agent", "next"]));
     }
 
     #[test]

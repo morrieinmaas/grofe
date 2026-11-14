@@ -616,11 +616,19 @@ pub struct BindKey {
     pub repeat: bool,
     /// `-N`: the binding's description.
     pub note: Option<String>,
+    /// `-G`: the group `list-keys -N` and the key menu file it under.
+    pub group: Option<String>,
     /// The key name, raw (parsed by the handler, which words the error).
     pub key: String,
     /// Everything after the key. One element is a command string (split
     /// with [`split_command_string`]); several are one command's argv.
     pub command: Vec<String>,
+}
+
+/// `key-menu` (`-T table`): the searchable key menu overlay.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct KeyMenu {
+    pub table: Option<String>,
 }
 
 /// `unbind-key` (`-n -T -a -q`, then a key unless `-a`).
@@ -1742,4 +1750,7 @@ pub enum Command {
     CustomizeMode(CustomizeMode),
     // M5: copy mode (TM.1).
     CopyMode(CopyMode),
+    /// `choose-agent`: the agent picker overlay.
+    ChooseAgent,
+    KeyMenu(KeyMenu),
 }
