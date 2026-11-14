@@ -29,9 +29,12 @@ pub mod imgstore;
 pub mod input;
 pub mod layout;
 pub mod links;
+pub mod lua_async;
+pub mod lua_host;
 pub mod menu;
 pub mod model;
 pub mod mouse;
+pub mod pack_load;
 pub mod pane;
 pub mod passthrough;
 pub mod plugins;
@@ -223,6 +226,9 @@ pub struct State {
     pub sources: sources::Sources,
     /// Supervised plugins (T6.3).
     pub plugins: plugins::Plugins,
+    /// The Luau runtime; taken out for the length of a call, so `None`
+    /// inside one means a nested entry.
+    pub lua: Option<lua_host::LuaHost>,
     /// Event hooks and the server environment (TC.5).
     pub hooks: hooks::Hooks,
     /// Open popups (TC.6).
@@ -615,6 +621,7 @@ async fn serve(
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
         plugins: plugins::Plugins::default(),
+        lua: None,
         hooks: hooks::Hooks::for_server(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
@@ -1337,6 +1344,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
         plugins: plugins::Plugins::default(),
+        lua: None,
         hooks: hooks::Hooks::default(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
