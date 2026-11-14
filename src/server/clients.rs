@@ -539,6 +539,9 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
         Some(tty) if ctx.dialect == crate::protocol::Dialect::Tmux => tty.clone(),
         _ => client_name(id),
     };
+    if req.caps.colours.is_some() {
+        state.model.terminal_colours = req.caps.colours;
+    }
     state.clients.insert(
         id,
         ClientEntry {
@@ -2416,8 +2419,8 @@ fn sync_pane_defaults(model: &Model) {
                 continue;
             };
             let (fg, bg) = pane_defaults(model, id);
-            pane.handle
-                .set_default_colours(colour_rgb(fg), colour_rgb(bg));
+            let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
+            pane.handle.set_default_colours(fg, bg);
         }
     }
 }
@@ -2443,7 +2446,16 @@ pub(crate) fn seed_defaults(
     let chain = [Owner::Window(window), Owner::Session(session)];
     let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
     let (fg, bg) = window_style_colours(&opt, &NoVars, true);
-    handle.set_default_colours(colour_rgb(fg), colour_rgb(bg));
+    let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
+    handle.set_default_colours(fg, bg);
+}
+
+/// A colour `window-style` leaves to the terminal is the attached
+/// terminal's own, when it reported one.
+fn with_terminal(model: &Model, fg: Option<Rgb>, bg: Option<Rgb>) -> (Option<Rgb>, Option<Rgb>) {
+    let rgb = |[r, g, b]: [u8; 3]| Rgb { r, g, b };
+    let term = model.terminal_colours;
+    (fg.or(term.map(|t| rgb(t.0))), bg.or(term.map(|t| rgb(t.1))))
 }
 
 /// The colours the default-colour cells of `pane` show (`window-style`,

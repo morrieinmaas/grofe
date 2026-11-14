@@ -141,6 +141,11 @@ pub struct Caps {
     /// (image tools need it).
     #[serde(default)]
     pub cell_px: Option<(u16, u16)>,
+    /// The terminal's default `(foreground, background)` from OSC 10 and
+    /// 11; `None` when it did not say. Panes answer their programs' colour
+    /// queries with it where `window-style` sets no colour.
+    #[serde(default)]
+    pub colours: Option<([u8; 3], [u8; 3])>,
 }
 
 /// The JSON hello a client sends first (spec §4.6), choosing the mode for
@@ -641,6 +646,7 @@ mod tests {
                 kitty_graphics: true,
                 sixel: true,
                 cell_px: Some((10, 20)),
+                colours: Some(([0x3c, 0x38, 0x36], [0xfb, 0xf1, 0xc7])),
             },
             target: Some("main:2".to_string()),
             detach_others: true,

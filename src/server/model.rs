@@ -418,6 +418,11 @@ pub struct Model {
     /// -l`). Switching a client records it; removing a session drops
     /// entries naming it.
     pub client_last_session: BTreeMap<ClientId, SessionId>,
+    /// The `(foreground, background)` the most recently attached terminal
+    /// reported (OSC 10 and 11). A pane's program asking for its colours
+    /// gets these where `window-style` sets none, so it sees whether the
+    /// terminal is light or dark.
+    pub terminal_colours: Option<([u8; 3], [u8; 3])>,
     /// Who the server says it is (spec D12), fixed at start by
     /// `compat::server_started` (TC.1); grofe until then.
     pub identity: crate::compat::Identity,
