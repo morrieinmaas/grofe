@@ -110,6 +110,8 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ("pane-frames", "off"),
     ("pane-gap", "0"),
     ("pane-border-lines", "single"),
+    // tmux's full-width message bar.
+    ("message-pill", "off"),
 ];
 
 /// grofe's own options that tmux's CLI does not know (spec
@@ -122,6 +124,8 @@ const GROFE_ONLY: &[&str] = &[
     "pane-frame-title",
     "pane-frame-tab-ends",
     "scratchpad-history",
+    "message-pill",
+    "prompt-position",
 ];
 
 /// `pane-border-format`'s default, tmux 3.7b's: its `[z]` and `[x]`
@@ -412,6 +416,23 @@ const BUILTINS: &[Builtin] = &[
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "bg=yellow,fg=black,fill=yellow",
+    },
+    // A message as a pill in the status line, coloured by its level, and
+    // the prompt in the same style (grofe identity); `off` is tmux's
+    // full-width bar in `message-style` (TMUX_DEFAULTS).
+    Builtin {
+        name: "message-pill",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    // Where the command prompt opens: on the status line, as tmux's, or as
+    // a box in the middle of the window.
+    Builtin {
+        name: "prompt-position",
+        kind: Kind::Choice(&["status", "centre", "center"]),
+        scope: OptionScope::Session,
+        default: "status",
     },
     Builtin {
         name: "display-time",
@@ -2823,7 +2844,12 @@ fn list_notes(
         notes.truncate(1);
         if let (Some((key, note)), Some(id)) = (notes.first(), clients::current_client(state, ctx))
         {
-            clients::show_message(state, id, &format!("{key} {note}"));
+            clients::show_message_as(
+                state,
+                id,
+                &format!("{key} {note}"),
+                crate::server::render::Level::Info,
+            );
             return Ok(String::new());
         }
     }
@@ -2991,7 +3017,7 @@ fn list_keys_tmux(
         .collect();
     if lines.len() == 1 || c.first {
         if let (Some(line), Some(id)) = (lines.first(), clients::current_client(state, ctx)) {
-            clients::show_message(state, id, line);
+            clients::show_message_as(state, id, line, crate::server::render::Level::Info);
         }
         return Ok(String::new());
     }
@@ -3908,7 +3934,14 @@ fn display_message(
         return Ok(format!("{trace}{out}\n"));
     }
     if let Some(id) = current {
-        clients::display_message(state, id, &out, delay, c.ignore_keys);
+        clients::display_message(
+            state,
+            id,
+            &out,
+            delay,
+            c.ignore_keys,
+            crate::server::render::Level::Info,
+        );
     }
     Ok(trace)
 }
