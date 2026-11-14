@@ -849,6 +849,31 @@ fn the_frame_tab_zooms_floats_and_closes() {
     assert_eq!(var(&srv, "%0", "#{window_panes}"), "2");
 }
 
+/// A narrow pane whose title is too long for its frame, as a sidebar's is:
+/// the title is cut and the controls still answer where they are drawn.
+#[test]
+fn the_tab_of_a_narrow_pane_with_a_long_title_still_zooms() {
+    let srv = framed();
+    ok(
+        &srv,
+        &[
+            "select-pane",
+            "-t",
+            "%0",
+            "-T",
+            "opensessions-sidebar-with-a-long-title",
+        ],
+    );
+    ok(&srv, &["resize-pane", "-t", "%0", "-x", "30"]);
+    let mut a = attach(&srv);
+    let row = rect(&srv, "%0").1 - 1;
+    let at = tab_at(&mut a, row, "z f x");
+    let shown = a.text();
+    click(&mut a, (at, row));
+    let zoomed = wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "1", WAIT);
+    assert!(zoomed.is_ok(), "clicked {:?} on:\n{shown}", (at, row));
+}
+
 /// `pane-frame-tab-ends` names the tab's two end glyphs; empty draws the
 /// tab with plain ends.
 #[test]

@@ -222,7 +222,7 @@ pub fn write_atomic(path: &Path, snap: &Snapshot) -> io::Result<()> {
 }
 
 /// `t` as RFC 3339, UTC, whole seconds.
-fn rfc3339(t: SystemTime) -> String {
+pub(crate) fn rfc3339(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Howard Hinnant's civil_from_days.
@@ -264,9 +264,13 @@ fn persisted(model: &Model, owner: Owner) -> Vec<OptionSnap> {
 /// `cwds` holds each pane's last sampled cwd; a pane not sampled yet has
 /// the cwd it was spawned in.
 pub fn build(model: &Model, cwds: &HashMap<PaneId, PathBuf>) -> Snapshot {
-    let sessions = model
-        .sessions
-        .values()
+    // Least recently used first: the restore makes them in this order, each
+    // more recent than the one before, so the session used last is the one
+    // a bare `grofe` attaches to again.
+    let mut by_use: Vec<_> = model.sessions.values().collect();
+    by_use.sort_by_key(|s| s.activity);
+    let sessions = by_use
+        .into_iter()
         .map(|s| SessionSnap {
             name: s.name.clone(),
             cwd: s.cwd.clone(),
