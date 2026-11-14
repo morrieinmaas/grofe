@@ -1781,6 +1781,19 @@ pub fn default_bindings() -> KeyTables {
             "Float or unfloat the active pane",
         );
     }
+    bind("a", &["new-scratchpad"], false, "Open a scratchpad");
+    bind(
+        "S",
+        &["toggle-scratchpad"],
+        false,
+        "Hide or show a scratchpad",
+    );
+    bind(
+        "A",
+        &["choose-scratchpad"],
+        false,
+        "Choose a scratchpad from a list",
+    );
     bind(
         "{",
         &["swap-pane", "-U"],
@@ -4791,6 +4804,52 @@ mod tests {
         assert!(t.exact(PREFIX_TABLE, &k("F")).is_none());
         let f = t.exact(PREFIX_TABLE, &k("f")).expect("tmux's f");
         assert!(words(f)[1].contains("find-window"), "{:?}", words(f));
+    }
+
+    /// grofe identity binds `prefix a`, `S` and `A` to the scratchpad
+    /// commands; they are grofe's own, so tmux identity drops them.
+    #[test]
+    fn grofe_binds_scratchpad_keys() {
+        let t = default_bindings();
+        for (key, cmd, note) in [
+            ("a", "new-scratchpad", "Open a scratchpad"),
+            ("S", "toggle-scratchpad", "Hide or show a scratchpad"),
+            ("A", "choose-scratchpad", "Choose a scratchpad from a list"),
+        ] {
+            let b = t.exact(PREFIX_TABLE, &k(key)).expect(key);
+            assert_eq!(words(b), [cmd], "{key}");
+            assert_eq!(b.desc.as_deref(), Some(note), "{key}");
+            assert_eq!(b.dialect, Dialect::Grofe, "{key}");
+        }
+    }
+
+    /// The bound argv must parse as the scratchpad commands, so a press runs
+    /// the handlers and not an unknown-command error.
+    #[test]
+    fn scratchpad_keys_parse_as_their_commands() {
+        use crate::cmd::{Command, parse};
+        let t = default_bindings();
+        for (key, want) in [("a", "new"), ("S", "toggle"), ("A", "choose")] {
+            let b = t.exact(PREFIX_TABLE, &k(key)).expect(key);
+            let argv: Vec<String> = b.cmds[0].clone();
+            let got = parse(&argv).unwrap_or_else(|e| panic!("{key}: {e}"));
+            let ok = matches!(
+                (want, &got),
+                ("new", Command::NewScratchpad(_))
+                    | ("toggle", Command::ToggleScratchpad(_))
+                    | ("choose", Command::ChooseScratchpad)
+            );
+            assert!(ok, "{key} parsed as {got:?}");
+        }
+    }
+
+    #[test]
+    fn tmux_identity_drops_scratchpad_keys() {
+        let mut t = default_bindings();
+        t.use_tmux_stock();
+        for key in ["a", "S", "A"] {
+            assert!(t.exact(PREFIX_TABLE, &k(key)).is_none(), "{key}");
+        }
     }
 
     /// grofe identity binds `prefix Q` to stop the server after asking

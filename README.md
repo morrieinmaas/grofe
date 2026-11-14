@@ -238,6 +238,24 @@ same actions are `float-pane` and `unfloat-pane`, Float and Unfloat in the
 right-click menu, and Ctrl-dragging a floating pane onto a tile docks it. See
 `docs/floating-pane-mouse.md` for the details.
 
+## Scratchpads
+
+A scratchpad is a floating pane for a quick command that you want out of the
+way. `prefix S` hides it; press it again and the newest hidden scratchpad comes
+back, or the first one opens if none is hidden. `prefix a` opens another,
+centred over the tiles. `prefix A` lists the hidden scratchpads, newest first,
+each keyed `0` to `9`. The keys can be rebound in the TOML `[keys]` table like
+any other.
+
+Hidden scratchpads are kept for the whole server, so you can show one in any
+window. Unfloat a scratchpad with `prefix f` and it becomes a normal pane.
+The commands are `new-scratchpad`, `toggle-scratchpad`,
+`show-scratchpad <pane-id>`, `list-scratchpads` and `choose-scratchpad`.
+
+```toml
+scratchpad-history = 10     # hidden scratchpads kept; the oldest closes past this, 0 closes on hide
+```
+
 ## Switching from tmux
 
 > **Know the gaps first.** The tmux compatibility layer answers what the
