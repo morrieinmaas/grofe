@@ -5227,6 +5227,84 @@ mod tests {
         (state, id, session)
     }
 
+    /// Agents spec §3.1 and §5.1: with agent records (one blocked and
+    /// unseen), a read notification whose toast has expired and the sidebar
+    /// shown, but no picker, grid, live toast or timed mute, nothing arms a
+    /// timer, so a static status line keeps the server asleep.
+    #[tokio::test]
+    async fn agents_with_no_timed_surface_never_wake() {
+        use crate::server::agents::{AgentState, Report, ReportState};
+        let (mut state, id, _) = sidebar_state((160, 50));
+        let pane = *state.model.panes.keys().next().expect("pane");
+        let report = Report {
+            state: ReportState::Set(AgentState::Blocked),
+            kind: Some("claude".into()),
+            msg: Some("perm".into()),
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        state.agents.apply(pane, report, false, Instant::now());
+        let long_ago = Instant::now() - Duration::from_secs(60);
+        state.notify.on_change(
+            pane,
+            "u1",
+            Some("claude"),
+            Some("working"),
+            Some("blocked"),
+            Some("perm"),
+            Duration::from_secs(60),
+            false,
+            true,
+            long_ago,
+        );
+        show_sidebar(&mut state, id);
+        set_session_option(&mut state, "status-interval", "1");
+        set_session_option(&mut state, "status-right", "#{agents_badge}");
+        // The one `automatic-rename` check making the panes armed (not an
+        // agent timer) runs first.
+        idle_wakes(&mut state, NAME_INTERVAL * 2);
+        assert!(crate::server::sidebar::reserved(&state, id, 160) > 0);
+        assert_eq!(crate::server::picker::deadline(&state), None);
+        assert_eq!(crate::server::grid::deadline(&state), None);
+        assert_eq!(crate::server::toast::deadline(&state, id), None);
+        assert_eq!(state.notify.mute_deadline(), None);
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
+    }
+
+    /// The scan throttle is kept per pane: one pane's scan does not hold
+    /// back another's.
+    #[tokio::test]
+    async fn scan_throttle_is_per_pane() {
+        let (mut state, a) = pane_with_agents();
+        crate::server::dispatch::run(
+            &mut state,
+            &crate::server::test_ctx(),
+            &["new-window".into(), "-t".into(), "m".into()],
+        )
+        .expect("new-window");
+        let b = *state.model.panes.keys().find(|p| **p != a).expect("pane b");
+        let reads = std::cell::RefCell::new(Vec::new());
+        let mut read = |p: &crate::server::model::Pane| {
+            reads.borrow_mut().push(p.id);
+            None
+        };
+        // Spawning scanned both; start from no scan.
+        state.registry.forget_scan(a);
+        state.registry.forget_scan(b);
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        scan_agents_with(&mut state, &BTreeSet::from([a]), t0, &mut read);
+        scan_agents_with(&mut state, &BTreeSet::from([b]), t0 + ms(500), &mut read);
+        scan_agents_with(
+            &mut state,
+            &BTreeSet::from([a, b]),
+            t0 + ms(1100),
+            &mut read,
+        );
+        assert_eq!(*reads.borrow(), [a, b, a]);
+    }
+
     #[tokio::test]
     async fn window_shrinks_by_reserved() {
         let (mut state, id, session) = sidebar_state((160, 50));

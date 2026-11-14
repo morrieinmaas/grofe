@@ -521,6 +521,75 @@ mod tests {
         assert_eq!(state.model.panes.len(), before + 1);
     }
 
+    /// Every file named `X` under `dir`.
+    fn find_x(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.file_name().is_some_and(|n| n == "X") {
+                found.push(path.clone());
+            }
+            if entry
+                .file_type()
+                .is_ok_and(|t| t.is_dir() && !t.is_symlink())
+            {
+                found.extend(find_x(&path));
+            }
+        }
+        found
+    }
+
+    /// No shell reads `-n`, `-c` or `-b`: shell syntax in them stays
+    /// literal text, and a branch with whitespace is refused before any
+    /// command runs.
+    #[tokio::test]
+    async fn shell_metacharacters_stay_literal() {
+        let (mut state, mut rx, ctx) = setup();
+        let (tmp, root) = repo();
+        let base = tmp.path().canonicalize().expect("canon");
+        let odd = base.join("$(touch X)");
+        std::fs::create_dir(&odd).expect("mkdir");
+
+        let before: Vec<_> = state.model.panes.keys().copied().collect();
+        let mut c = new("demo");
+        c.cwd = Some(odd.display().to_string());
+        c.name = Some("$(touch X)`touch X`;touch X".into());
+        assert_eq!(run(&mut state, &ctx, c), Ok(String::new()));
+        let pane = newest(&state, &before);
+        assert_eq!(state.model.panes[&pane].cwd, odd);
+        let win = state.model.panes[&pane].window;
+        assert_eq!(
+            state.model.windows[&win].name,
+            "$(touch X)`touch X`;touch X"
+        );
+
+        let mut c = new("demo");
+        c.cwd = Some(root.display().to_string());
+        c.worktree = Some(true);
+        c.branch = Some("a;touch X".into());
+        assert_eq!(
+            run(&mut state, &ctx, c),
+            Err("invalid branch name: a;touch X".to_string())
+        );
+
+        let before: Vec<_> = state.model.panes.keys().copied().collect();
+        let mut c = new("demo");
+        c.cwd = Some(root.display().to_string());
+        c.worktree = Some(true);
+        c.branch = Some("b$(touch${IFS}X)".into());
+        assert_eq!(run(&mut state, &ctx, c), Ok(String::new()));
+        let job = rx.recv().await.expect("job");
+        job(&mut state);
+        let pane = newest(&state, &before);
+        let want = base.join("worktrees").join("b$(touch${IFS}X)");
+        assert!(want.is_dir(), "the worktree took the branch literally");
+        assert_eq!(state.model.panes[&pane].cwd, want);
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(find_x(&base), Vec::<PathBuf>::new());
+        assert!(!Path::new("X").exists());
+    }
+
     /// The kind's own `worktree` wins over `[agents.new] worktree`.
     #[tokio::test]
     async fn kind_worktree_beats_config() {

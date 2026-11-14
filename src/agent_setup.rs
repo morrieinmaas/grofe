@@ -960,6 +960,94 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), first);
     }
 
+    /// Spec §8 for every kind: a dotfile-managed (symlinked) file stays a
+    /// symlink while the real file takes the edit, the backup holds the
+    /// first content and is never rewritten, and foreign keys and hooks
+    /// survive install, re-install from a moved binary, and remove.
+    #[test]
+    fn every_kind_edits_through_a_symlink_backs_up_once_keeps_foreign_keys() {
+        let original = r#"{"zeta":1,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]},"alpha":{"b":1,"a":2}}"#;
+        let keys = |p: &Path| -> Vec<String> {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+            v.as_object().unwrap().keys().cloned().collect()
+        };
+        for kind in [&CLAUDE, &CODEX, &GEMINI] {
+            let dir = tempfile::tempdir().unwrap();
+            let dots = dir.path().join("dotfiles");
+            std::fs::create_dir(&dots).unwrap();
+            let real = dots.join("settings.json");
+            let link = dir.path().join("settings.json");
+            std::fs::write(&real, original).unwrap();
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let bak = dots.join("settings.json.grofe-bak");
+            let is_link = || {
+                std::fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            };
+
+            go_kind(kind, &link, &yes());
+            assert!(is_link(), "{}: link replaced", kind.name);
+            let text = std::fs::read_to_string(&real).unwrap();
+            assert!(text.contains(&format!("--hook {}", kind.hook)), "{text}");
+            assert!(
+                text.contains("echo mine"),
+                "{}: foreign hook lost",
+                kind.name
+            );
+            assert_eq!(keys(&real), ["zeta", "hooks", "alpha"], "{}", kind.name);
+            assert_eq!(std::fs::read_to_string(&bak).unwrap(), original);
+
+            let mut out = Vec::new();
+            setup_json(
+                kind,
+                &link,
+                "/moved/grofe",
+                &yes(),
+                &mut std::io::empty(),
+                &mut out,
+            )
+            .unwrap();
+            assert!(
+                std::fs::read_to_string(&real)
+                    .unwrap()
+                    .contains("/moved/grofe")
+            );
+            assert_eq!(
+                std::fs::read_to_string(&bak).unwrap(),
+                original,
+                "backup once"
+            );
+
+            go_kind(kind, &link, &rm());
+            assert!(is_link(), "{}: link replaced on remove", kind.name);
+            let left: Value =
+                serde_json::from_str(&std::fs::read_to_string(&real).unwrap()).unwrap();
+            assert_eq!(left, serde_json::from_str::<Value>(original).unwrap());
+            assert_eq!(keys(&real), ["zeta", "hooks", "alpha"], "{}", kind.name);
+            assert_eq!(std::fs::read_to_string(&bak).unwrap(), original);
+        }
+
+        // opencode's plugin is a file of its own: through a link the real
+        // file is written and the link stays.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("grofe.js");
+        let link = dir.path().join("plugins").join("grofe.js");
+        std::fs::create_dir(dir.path().join("plugins")).unwrap();
+        std::fs::write(&real, format!("{PLUGIN_MARKER}\n// old\n")).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut out = Vec::new();
+        setup_opencode(&link, G, &yes(), &mut std::io::empty(), &mut out).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), plugin_source(G));
+    }
+
     #[test]
     fn foreign_shapes_and_unreadable_plugin_are_not_clobbered() {
         let dir = tempfile::tempdir().unwrap();
