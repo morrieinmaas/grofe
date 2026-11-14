@@ -2682,6 +2682,7 @@ pub fn bind_key(state: &mut State, ctx: &ClientCtx, c: BindKey) -> Result<String
     }
     let mut b = Binding::new(cmds, c.repeat, BindingSource::Runtime);
     b.desc = c.note;
+    b.group = c.group;
     b.dialect = ctx.dialect;
     state.registry.key_tables.insert(&c.table, key, b);
     Ok(String::new())
@@ -2804,13 +2805,17 @@ fn list_notes(
             if only.is_some_and(|k| !k.matches(&key)) {
                 continue;
             }
-            let Some(note) = tables.exact(table, &key).and_then(|b| b.desc.as_deref()) else {
+            let Some(b) = tables.exact(table, &key) else {
                 continue;
             };
-            if note.is_empty() {
+            let Some(note) = b.desc.as_deref().filter(|n| !n.is_empty()) else {
                 continue;
-            }
-            notes.push((format!("{start}{key}"), note.to_string()));
+            };
+            let group = b
+                .group
+                .as_deref()
+                .map_or(String::new(), |g| format!(" [{g}]"));
+            notes.push((format!("{start}{key}{group}"), note.to_string()));
         }
     }
     if c.first {
@@ -6264,6 +6269,7 @@ mod tests {
             note: None,
             key: key.to_string(),
             command: vec!["list-sessions".to_string()],
+            group: None,
         };
         let grofe_ctx = crate::server::test_ctx;
         let grofe = grofe_ctx();
@@ -6286,6 +6292,90 @@ mod tests {
         assert_eq!(b.dialect, Dialect::Tmux);
         let err = bind_key(&mut state, &grofe_ctx(), ls("F7")).unwrap_err();
         assert_eq!(err, "unknown command: ls");
+    }
+
+    fn grouped_bind(key: &str, group: Option<&str>) -> BindKey {
+        BindKey {
+            table: "prefix".to_string(),
+            repeat: false,
+            note: Some("A note".to_string()),
+            key: key.to_string(),
+            command: vec!["list-sessions".to_string()],
+            group: group.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn bind_g_stored() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        bind_key(&mut state, &ctx, grouped_bind("F5", Some("agents"))).expect("bind");
+        let k = parse_key("F5").expect("key");
+        let b = state
+            .registry
+            .key_tables
+            .exact("prefix", &k)
+            .expect("bound");
+        assert_eq!(b.group.as_deref(), Some("agents"));
+    }
+
+    #[test]
+    fn list_keys_n_shows_group() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let argv: Vec<String> = ["unbind-key", "-a", "-T", "prefix"]
+            .map(String::from)
+            .to_vec();
+        crate::server::dispatch::run(&mut state, &ctx, &argv).expect("unbind");
+        bind_key(&mut state, &ctx, grouped_bind("F5", Some("agents"))).expect("bind");
+        let got = list_keys(
+            &mut state,
+            &ctx,
+            ListKeys {
+                table: Some("prefix".to_string()),
+                first: false,
+                notes: true,
+                key: None,
+                all: false,
+                format: None,
+                prefix: None,
+                sort: Default::default(),
+            },
+        )
+        .expect("list");
+        assert_eq!(got, "F5 [agents] A note\n");
+    }
+
+    #[test]
+    fn tmux_dialect_list_keys_unchanged() {
+        let mut state = crate::server::test_state();
+        let grofe = crate::server::test_ctx();
+        let tmux = ClientCtx {
+            dialect: Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        let list = |state: &mut State| {
+            list_keys(
+                state,
+                &tmux,
+                ListKeys {
+                    table: Some("prefix".to_string()),
+                    first: false,
+                    notes: true,
+                    key: Some("F5".to_string()),
+                    all: false,
+                    format: None,
+                    prefix: Some("C-b".to_string()),
+                    sort: Default::default(),
+                },
+            )
+            .expect("list")
+        };
+        bind_key(&mut state, &grofe, grouped_bind("F5", None)).expect("bind");
+        let plain = list(&mut state);
+        bind_key(&mut state, &grofe, grouped_bind("F5", Some("agents"))).expect("bind");
+        assert_eq!(list(&mut state), plain);
+        assert!(!plain.contains("agents"), "{plain}");
     }
 
     /// TP.12: `#{start_time}` is when the server started, in Unix seconds,
