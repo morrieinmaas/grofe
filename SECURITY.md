@@ -6,7 +6,7 @@ problems matter.
 ## Reporting a vulnerability
 
 Please report it privately through GitHub's security advisories:
-[report a vulnerability](https://github.com/morrieinmaas/grofe/security/advisories/new).
+[report a vulnerability](https://github.com/termage/grofe/security/advisories/new).
 Do not open a public issue for it.
 
 Include the grofe version (`grofe -V`), your OS, and the steps or a proof of

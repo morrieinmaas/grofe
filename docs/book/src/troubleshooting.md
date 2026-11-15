@@ -51,6 +51,6 @@ just reports    # list panic reports and recent compat misses
 
 ## Reporting a bug
 
-Open an issue on [GitHub](https://github.com/morrieinmaas/grofe/issues) with
+Open an issue on [GitHub](https://github.com/termage/grofe/issues) with
 `grofe -V`, your OS and terminal, and whether it also happens under the
 `tmux` name.

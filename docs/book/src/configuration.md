@@ -78,10 +78,10 @@ whatever knows the value, so redraws stay instant.
 The screenshots use this config: a pill status bar on top in the Gruvbox
 palette, with the agents badge, and frames whose number and controls get the
 same rounded caps. It ships as
-[`examples/pills.toml`](https://github.com/morrieinmaas/grofe/blob/main/examples/pills.toml);
+[`examples/pills.toml`](https://github.com/termage/grofe/blob/main/examples/pills.toml);
 copy it into `~/.config/grofe/conf.d/` (it needs a Nerd font), and on a dark
 terminal add
-[`examples/pills-dark.toml`](https://github.com/morrieinmaas/grofe/blob/main/examples/pills-dark.toml)
+[`examples/pills-dark.toml`](https://github.com/termage/grofe/blob/main/examples/pills-dark.toml)
 after it. The colours are user options, so changing one repaints the bar.
 
 ```toml

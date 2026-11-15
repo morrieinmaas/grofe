@@ -9,8 +9,8 @@ create-missing = false
 
 [output.html]
 site-url = "/grofe/docs/"
-git-repository-url = "https://github.com/morrieinmaas/grofe"
-edit-url-template = "https://github.com/morrieinmaas/grofe/edit/main/docs/book/{path}"
+git-repository-url = "https://github.com/termage/grofe"
+edit-url-template = "https://github.com/termage/grofe/edit/main/docs/book/{path}"
 default-theme = "light"
 preferred-dark-theme = "coal"
 additional-css = ["theme/gruvbox.css"]

@@ -1,16 +1,16 @@
 # grofe
 
-[![CI](https://img.shields.io/github/actions/workflow/status/morrieinmaas/grofe/ci.yml?branch=main&label=CI)](https://github.com/morrieinmaas/grofe/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/morrieinmaas/grofe)](https://github.com/morrieinmaas/grofe/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/termage/grofe/ci.yml?branch=main&label=CI)](https://github.com/termage/grofe/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/termage/grofe)](https://github.com/termage/grofe/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/morrieinmaas/grofe?style=social)](https://github.com/morrieinmaas/grofe)
+[![GitHub stars](https://img.shields.io/github/stars/termage/grofe?style=social)](https://github.com/termage/grofe)
 
 An agent-native terminal multiplexer: run many coding-agent sessions side by
 side and let grofe keep track of them.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://morrieinmaas.github.io/grofe/img/grofe-dark.png">
-  <img alt="grofe with framed panes running coding agents, the agent sidebar and the status line" src="https://morrieinmaas.github.io/grofe/img/grofe-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="https://termage.github.io/grofe/img/grofe-dark.png">
+  <img alt="grofe with framed panes running coding agents, the agent sidebar and the status line" src="https://termage.github.io/grofe/img/grofe-light.png">
 </picture>
 
 - **Knows your coding agents.** grofe sees which panes run an agent (Claude
@@ -32,13 +32,13 @@ side and let grofe keep track of them.
 > compatibility suite, but expect rough edges and keep real tmux installed
 > while you try it.
 
-**[Read the docs](https://morrieinmaas.github.io/grofe/docs/)** for the full
-guide and the [options reference](https://morrieinmaas.github.io/grofe/docs/reference/options.html).
+**[Read the docs](https://termage.github.io/grofe/docs/)** for the full
+guide and the [options reference](https://termage.github.io/grofe/docs/reference/options.html).
 
 ## Install
 
 grofe runs on macOS and Linux. Prebuilt binaries are on the
-[releases page](https://github.com/morrieinmaas/grofe/releases). Or build it
+[releases page](https://github.com/termage/grofe/releases). Or build it
 with Rust 1.88 or newer from a checkout:
 
 <!-- readme-test: begin -->
@@ -108,7 +108,7 @@ loading. The first grofe server then takes its sessions from your running
 tmux. Scripts and tools that talk to tmux (`fzf --tmux`,
 vim-tmux-navigator) keep working, and grofe can run under the name `tmux`.
 See
-[Switching from tmux](https://morrieinmaas.github.io/grofe/docs/switching-from-tmux.html)
+[Switching from tmux](https://termage.github.io/grofe/docs/switching-from-tmux.html)
 for the gaps.
 
 ## Scripting and plugins
@@ -123,7 +123,7 @@ alike:
 grofe.bind("prefix", "g", function() grofe.cmd("split-window -h") end, { desc = "Split" })
 ```
 
-See [Lua scripting and packs](https://morrieinmaas.github.io/grofe/docs/lua.html)
+See [Lua scripting and packs](https://termage.github.io/grofe/docs/lua.html)
 for the API, the pack manager and editor types.
 
 ## Contributing
@@ -135,7 +135,7 @@ docs. When you report a bug, include `grofe -V`, your OS and terminal, and
 whether it also happens under the `tmux` name. Security problems go through
 [SECURITY.md](SECURITY.md).
 
-If grofe is useful to you, [star it on GitHub](https://github.com/morrieinmaas/grofe);
+If grofe is useful to you, [star it on GitHub](https://github.com/termage/grofe);
 it helps others find it.
 
 ## License

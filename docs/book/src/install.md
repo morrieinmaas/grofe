@@ -5,7 +5,7 @@ grofe runs on macOS and Linux.
 ## Prebuilt binaries
 
 Each tagged release has binaries for x86_64 and arm64 (static on Linux) on
-the [releases page](https://github.com/morrieinmaas/grofe/releases). Unpack
+the [releases page](https://github.com/termage/grofe/releases). Unpack
 one and put `grofe` on your `PATH`.
 
 ## From source

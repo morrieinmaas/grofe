@@ -51,8 +51,8 @@ printf '{"id":1,"argv":["subscribe"]}\n' | grofe control
 ```
 
 The full protocol is in
-[`docs/protocol-v1.md`](https://github.com/morrieinmaas/grofe/blob/main/docs/protocol-v1.md).
-[`plugins/event-log`](https://github.com/morrieinmaas/grofe/tree/main/plugins/event-log)
+[`docs/protocol-v1.md`](https://github.com/termage/grofe/blob/main/docs/protocol-v1.md).
+[`plugins/event-log`](https://github.com/termage/grofe/tree/main/plugins/event-log)
 is a working example in POSIX sh: it subscribes to every event and appends
 each as a JSON line to `<state>/events.log`. Copy it next to your config and
 use the snippet above.
