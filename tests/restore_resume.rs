@@ -15,7 +15,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{PROMPT, TestServer, wait_until};
+use common::{PROMPT, TestServer, try_wait_until};
 use grofe::server::START_MARKER;
 use grofe::server::layout::{GeometryCell, LayoutGeometry};
 use grofe::server::restore::stagger_delay;
@@ -243,7 +243,7 @@ fn write_snapshot(srv: &TestServer, snap: &Snapshot) {
 
 fn kill(srv: &TestServer) {
     ok(srv, &["kill-server"]);
-    wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
+    try_wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
 }
 
 /// Kills whatever runs, writes `snap` and restores it.

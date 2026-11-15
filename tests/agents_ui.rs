@@ -8,7 +8,7 @@ mod harness;
 
 use std::time::Duration;
 
-use common::{PROMPT, TestServer, wait_until};
+use common::{PROMPT, TestServer, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -79,7 +79,7 @@ fn agent_count(srv: &TestServer) -> usize {
 }
 
 fn wait_agents(srv: &TestServer, n: usize) {
-    wait_until(|| agent_count(srv) == n, WAIT).unwrap_or_else(|e| panic!("{e}: want {n} agents"));
+    try_wait_until(|| agent_count(srv) == n, WAIT).unwrap_or_else(|e| panic!("{e}: want {n} agents"));
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn prefix_space_opens_key_menu_and_runs_c() {
     a.send(" ");
     a.wait_for("key-menu prefix");
     a.send("c");
-    wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
+    try_wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
     a.wait_until("menu closed", WAIT, |t| !t.contains("key-menu prefix"));
 }
 
@@ -111,7 +111,7 @@ fn prefix_u_upper_opens_picker_enter_jumps() {
     a.wait_for("choose-agent");
     a.wait_for("zebrafish");
     a.send("\r");
-    wait_until(|| display(&srv, "#{window_id}") == first, WAIT)
+    try_wait_until(|| display(&srv, "#{window_id}") == first, WAIT)
         .unwrap_or_else(|e| panic!("{e}: jumped to window 0"));
     a.wait_until("picker closed", WAIT, |t| !t.contains("choose-agent"));
 }
@@ -150,6 +150,6 @@ fn key_menu_c_f_filter() {
         t.contains("Create a new window") && !t.contains("Break pane")
     });
     a.send("\r");
-    wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
+    try_wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
     a.wait_until("menu closed", WAIT, |t| !t.contains("key-menu prefix"));
 }

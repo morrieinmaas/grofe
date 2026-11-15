@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 use harness::Harness;
 
 const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
@@ -76,7 +76,7 @@ fn start_in(files: &[(&str, &str)], cwd: &Path) -> Live {
         child: Some(child),
         srv,
     };
-    if wait_until(|| live.is_running(), CMD_TIMEOUT).is_err() {
+    if try_wait_until(|| live.is_running(), CMD_TIMEOUT).is_err() {
         panic!("server did not start; log:\n{}", live.log());
     }
     live.cmd(&[

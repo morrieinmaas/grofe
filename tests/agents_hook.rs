@@ -175,7 +175,7 @@ fn hook_and_cli_text_reach_the_server_sanitised() {
         srv.cmd(&["agent", "list", "-F", "#{agent_kind}|#{agent_msg}"])
             .unwrap_or_default()
     };
-    common::wait_until(|| list().contains("PWN"), Duration::from_secs(10))
+    common::try_wait_until(|| list().contains("PWN"), Duration::from_secs(10))
         .unwrap_or_else(|e| panic!("{e}: {:?}", list()));
     assert_eq!(list().trim_end(), format!("|{want}"));
     let resume = srv

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -93,7 +93,7 @@ fn prefix_colon_runs_a_command_typed_in_the_prompt() {
     a.send("split-window -h");
     wait_last_row(&mut a, ":split-window -h");
     a.send("\r");
-    wait_until(|| pane_origins(&srv).len() == 2, WAIT).unwrap_or_else(|e| panic!("no split: {e}"));
+    try_wait_until(|| pane_origins(&srv).len() == 2, WAIT).unwrap_or_else(|e| panic!("no split: {e}"));
     let origins = pane_origins(&srv);
     assert_eq!(origins[0], (0, 0), "{origins:?}");
     assert!(
@@ -115,7 +115,7 @@ fn a_prompt_leaves_other_clients_alone() {
     a.send("\x02:");
     wait_last_row(&mut a, ":");
     b.send("typed-in-b\r");
-    wait_until(|| srv.capture("main").contains("typed-in-b"), WAIT)
+    try_wait_until(|| srv.capture("main").contains("typed-in-b"), WAIT)
         .unwrap_or_else(|e| panic!("b's keys: {e}\n{}", srv.capture("main")));
     assert!(last_row(&b.text()).starts_with("[main]"), "{}", b.text());
     // a's prompt is still open and empty.
@@ -147,7 +147,7 @@ fn line_editing_and_history() {
     a.send("\x1b[D".repeat(9) + "-");
     wait_last_row(&mut a, ":split-window -h");
     a.send("\r");
-    wait_until(|| pane_origins(&srv).len() == 2, WAIT).unwrap_or_else(|e| panic!("no split: {e}"));
+    try_wait_until(|| pane_origins(&srv).len() == 2, WAIT).unwrap_or_else(|e| panic!("no split: {e}"));
     let origins = pane_origins(&srv);
     assert!(origins[1].0 > 0 && origins[1].1 == 0, "{origins:?}");
 
@@ -199,7 +199,7 @@ fn escape_cancels_the_prompt() {
     // Escape was eaten, and nothing ran.
     assert_eq!(windows(&srv), 1);
     a.send("zz\r");
-    wait_until(|| srv.capture("main").contains("zz"), WAIT)
+    try_wait_until(|| srv.capture("main").contains("zz"), WAIT)
         .unwrap_or_else(|e| panic!("keys after cancel: {e}"));
     assert_eq!(windows(&srv), 1);
 }
@@ -228,7 +228,7 @@ fn a_binding_runs_a_shell_command() {
         .expect("bind-key");
     let mut a = attach(&srv);
     a.send("\x02X");
-    wait_until(|| file.exists(), Duration::from_secs(2)).unwrap_or_else(|e| panic!("C-b X: {e}"));
+    try_wait_until(|| file.exists(), Duration::from_secs(2)).unwrap_or_else(|e| panic!("C-b X: {e}"));
 }
 
 #[test]
@@ -274,7 +274,7 @@ fn run_shell_does_not_block_other_commands() {
         .stderr(Stdio::null());
     let mut slow = slow.spawn().expect("spawn run-shell");
     // The slow command is running before the second CLI asks.
-    wait_until(|| marker.exists(), WAIT).unwrap_or_else(|e| panic!("run-shell started: {e}"));
+    try_wait_until(|| marker.exists(), WAIT).unwrap_or_else(|e| panic!("run-shell started: {e}"));
     let started = Instant::now();
     let out = srv.run(&["list-sessions"]);
     let took = started.elapsed();
@@ -306,7 +306,7 @@ fn command_prompt_template_and_initial_text() {
     let status = common::wait_child(cli, WAIT).expect("command-prompt exits");
     assert!(waited, "command-prompt answered before the prompt closed");
     assert!(status.success(), "{status:?}");
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["display-message", "-p", "-t", "main", "#{window_name}"])
                 .is_ok_and(|n| n == "old\n")
@@ -362,7 +362,7 @@ fn stock_rename_bindings_prompt_with_the_current_name() {
     a.send("\x02,");
     wait_last_row(&mut a, &format!("(rename-window) {}", name.trim_end()));
     a.send("\x15win\r");
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["display-message", "-p", "-t", "main", "#{window_name}"])
                 .is_ok_and(|n| n == "win\n")
@@ -373,7 +373,7 @@ fn stock_rename_bindings_prompt_with_the_current_name() {
     a.send("\x02$");
     wait_last_row(&mut a, "(rename-session) main");
     a.send("\x15ses\r");
-    wait_until(|| srv.cmd(&["has-session", "-t", "ses"]).is_ok(), WAIT)
+    try_wait_until(|| srv.cmd(&["has-session", "-t", "ses"]).is_ok(), WAIT)
         .unwrap_or_else(|e| panic!("rename-session: {e}"));
 }
 
@@ -411,7 +411,7 @@ fn run_shell_cwd_follows_the_caller() {
         .expect("bind-key");
     let mut a = attach(&srv);
     a.send("\x02Y");
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(&file).is_ok_and(|s| s.ends_with('\n')),
         WAIT,
     )

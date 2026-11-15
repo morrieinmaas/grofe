@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use common::{TestServer, wait_child, wait_until};
+use common::{TestServer, wait_child, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -75,7 +75,7 @@ fn rows(text: &str) -> Vec<String> {
 
 /// A file a popup's command writes, once it holds a whole line.
 fn read(path: &Path) -> String {
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(path).is_ok_and(|s| s.ends_with('\n')),
         WAIT,
     )
@@ -148,7 +148,7 @@ fn a_rounded_popup_with_a_title_runs_in_its_directory() {
     want.push(format!("     ╰{}╯", "─".repeat(46)));
     assert_eq!(screen[..11], want[..], "screen:\n{}", screen.join("\n"));
     // "hi" can be drawn a frame before the newline moves the cursor.
-    let _ = wait_until(|| a.cursor() == (6, 4), WAIT);
+    let _ = try_wait_until(|| a.cursor() == (6, 4), WAIT);
     assert_eq!(a.cursor(), (6, 4), "the popup's cursor, after its output");
     assert_eq!(read(&pwd).trim_end(), dir.to_str().expect("utf-8"));
 
@@ -397,7 +397,7 @@ fn closing_a_popup_ends_its_process_group_without_zombies() {
         None => true,
         Some((parent, state)) => state.starts_with('Z') && parent != server,
     };
-    wait_until(|| !exists(shell) && gone(job), WAIT).unwrap_or_else(|e| {
+    try_wait_until(|| !exists(shell) && gone(job), WAIT).unwrap_or_else(|e| {
         panic!(
             "popup processes still there: {e}: {:?} {:?}",
             parent_and_state(shell),
@@ -578,7 +578,7 @@ fn an_fzf_shaped_new_pane_is_a_floating_pane() {
         format!("{target} 0 0 60 14 0 0 2\n{id} 5 3 30 8 1 1 2\n")
     );
     a.send("picked\r");
-    wait_until(|| done.exists(), WAIT).expect("the command finished");
+    try_wait_until(|| done.exists(), WAIT).expect("the command finished");
     a.wait_until("the floating pane to close", WAIT, |t| !t.contains("in-np"));
     assert!(read(&out).contains("got picked"));
     let panes = srv
@@ -632,7 +632,7 @@ fn a_floating_pane_is_the_windows_on_every_client() {
     a.wait_for("│typed");
     b.wait_for("│typed");
     a.send("\x02c");
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-windows", "-t", "main"])
                 .is_ok_and(|w| w.lines().count() == 2)
@@ -798,7 +798,7 @@ fn kill_server_ends_a_popup_that_ignores_the_hangup() {
     let pid = read(&pids).trim_end().to_string();
     assert!(exists(&pid));
     srv.cmd(&["kill-server"]).expect("kill-server");
-    wait_until(|| !exists(&pid), WAIT)
+    try_wait_until(|| !exists(&pid), WAIT)
         .unwrap_or_else(|e| panic!("popup command {pid} outlived the server: {e}"));
     let _ = wait_child(child, WAIT);
     drop(a);

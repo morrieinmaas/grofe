@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use crate::harness::{Harness, require_tool};
-use crate::plugin_rig::{PREFIX, Rig, WAIT, read_golden, recording_tmux, wait_until, write_golden};
+use crate::plugin_rig::{PREFIX, Rig, WAIT, read_golden, recording_tmux, try_wait_until, write_golden};
 
 const TASK: &str = "tp7";
 const GOLDEN: &str = "tp_7";
@@ -59,7 +59,7 @@ fn end_state(rig: &Rig) -> String {
 }
 
 fn wait_state(rig: &Rig, what: &str, done: impl Fn(&str) -> bool) {
-    let got = wait_until(|| done(&end_state(rig)), WAIT);
+    let got = try_wait_until(|| done(&end_state(rig)), WAIT);
     assert!(got.is_ok(), "{what}; state:\n{}", end_state(rig));
 }
 

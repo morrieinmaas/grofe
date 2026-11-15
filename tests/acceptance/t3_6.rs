@@ -38,7 +38,7 @@ use alacritty_terminal::term::Config;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, Processor, Rgb};
-use common::{CMD_TIMEOUT, TestServer, wait_child, wait_until};
+use common::{CMD_TIMEOUT, TestServer, wait_child, try_wait_until};
 use grofe::paths::{self, Env};
 use grofe::server::TEST_PANIC_ENV;
 
@@ -182,7 +182,7 @@ fn a_forced_server_panic_writes_a_report_to_the_state_dir() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = cmd.spawn().expect("spawn server");
-    wait_until(|| srv.is_running(), WAIT).expect("server up");
+    try_wait_until(|| srv.is_running(), WAIT).expect("server up");
     let out = srv.run(&["new-session", "-d", "-s", "main"]);
     assert!(!out.status.success(), "{out:?}");
     let status = wait_child(child, WAIT).expect("server exits");
@@ -311,7 +311,7 @@ fn neovim_gets_focus_events() {
     a.wait_for("~");
     // nvim turns focus reporting on once its UI is up; keep reporting until
     // it has (a report before that is dropped, as the pane never asked).
-    wait_until(
+    try_wait_until(
         || {
             a.send("\x1b[O\x1b[I");
             std::thread::sleep(Duration::from_millis(100));
@@ -580,7 +580,7 @@ fn start_configured(config: &str, cmd: &str) -> Configured {
         child: Some(child),
         srv,
     };
-    wait_until(|| c.srv.is_running(), WAIT).expect("server up");
+    try_wait_until(|| c.srv.is_running(), WAIT).expect("server up");
     new_session(&c.srv, cmd);
     c
 }

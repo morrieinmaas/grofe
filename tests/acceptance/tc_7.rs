@@ -15,7 +15,7 @@ use std::fs;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -66,7 +66,7 @@ fn window_name(srv: &TestServer) -> String {
 }
 
 fn wait_window_name(srv: &TestServer, want: &str) {
-    wait_until(|| window_name(srv) == want, WAIT)
+    try_wait_until(|| window_name(srv) == want, WAIT)
         .unwrap_or_else(|e| panic!("window name {want:?}: {e}, got {:?}", window_name(srv)));
 }
 
@@ -153,7 +153,7 @@ fn a_nested_menu_opens_from_an_item_and_escape_closes_both() {
     assert_eq!(window_name(&srv), name);
     // The keys reach the pane again.
     a.send("after\r");
-    wait_until(|| srv.capture("main").contains("after"), WAIT)
+    try_wait_until(|| srv.capture("main").contains("after"), WAIT)
         .unwrap_or_else(|e| panic!("keys after the menu: {e}"));
 }
 
@@ -203,7 +203,7 @@ fn display_panes_then_a_digit_selects_that_pane() {
     // Each pane's size shows at its top right while the overlay is up.
     a.wait_for("40x23");
     a.send("2");
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["display-message", "-p", "-t", "main", "#{pane_index}"])
                 .is_ok_and(|i| i == "2\n")
@@ -260,7 +260,7 @@ fn confirm_before_runs_its_command_only_on_y() {
     a.send("\x02x");
     wait_last_row(&mut a, "kill?");
     a.send("y");
-    wait_until(|| panes(&srv) == 1, WAIT).unwrap_or_else(|e| panic!("kill-pane: {e}"));
+    try_wait_until(|| panes(&srv) == 1, WAIT).unwrap_or_else(|e| panic!("kill-pane: {e}"));
 
     // Without -p the prompt names the command, as tmux words it.
     bind(&srv, &["X", "confirm-before", "set -g @x 1"]);
@@ -395,7 +395,7 @@ fn a_menu_opened_by_one_client_is_invisible_to_another() {
     a.send("\x02m");
     a.wait_for("┌─Mine");
     b.send("typed-in-b\r");
-    wait_until(|| srv.capture("main").contains("typed-in-b"), WAIT)
+    try_wait_until(|| srv.capture("main").contains("typed-in-b"), WAIT)
         .unwrap_or_else(|e| panic!("b's keys: {e}"));
     b.wait_for("typed-in-b");
     assert!(!b.text().contains("Mine"), "{}", b.text());
@@ -454,7 +454,7 @@ fn a_sequence_alias_runs_both_commands_everywhere() {
         srv.cmd(&["set", "-g", "@b", "none"]).expect("set");
     };
     let both = || {
-        wait_until(
+        try_wait_until(
             || {
                 srv.cmd(&[
                     "display-message",

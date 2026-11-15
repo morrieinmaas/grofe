@@ -9,7 +9,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{TestServer, run_bounded, wait_until};
+use common::{TestServer, run_bounded, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -108,7 +108,7 @@ fn rect(srv: &TestServer, pane: &str) -> (u16, u16, u16, u16) {
 }
 
 fn wait_rect(srv: &TestServer, pane: &str, want: (u16, u16, u16, u16)) {
-    let got = wait_until(|| rect(srv, pane) == want, WAIT);
+    let got = try_wait_until(|| rect(srv, pane) == want, WAIT);
     assert!(got.is_ok(), "want {want:?}, got {:?}", rect(srv, pane));
 }
 
@@ -195,7 +195,7 @@ fn a_drag_resize_reaches_the_pty_at_its_final_size() {
     std::thread::sleep(Duration::from_millis(400));
     srv.cmd(&["send-keys", "-t", &float, "stty size", "Enter"])
         .expect("keys");
-    let seen = wait_until(|| srv.capture(&float).contains("4 30"), WAIT);
+    let seen = try_wait_until(|| srv.capture(&float).contains("4 30"), WAIT);
     assert!(seen.is_ok(), "{}", srv.capture(&float));
 }
 
@@ -303,7 +303,7 @@ fn a_press_after_a_lost_release_ends_the_drag() {
     drag(&mut a, (19, 7));
     wait_rect(&srv, &float, (14, 8, 20, 4));
     press(&mut a, (50, 15));
-    let ended = wait_until(
+    let ended = try_wait_until(
         || user_option(&srv, "@end").as_deref() == Some("pane"),
         WAIT,
     );
@@ -332,7 +332,7 @@ fn the_release_of_a_floating_drag_fires_its_drag_end_key() {
     drag(&mut a, (19, 7));
     wait_rect(&srv, &float, (14, 8, 20, 4));
     release(&mut a, (19, 7));
-    let ended = wait_until(
+    let ended = try_wait_until(
         || user_option(&srv, "@end").as_deref() == Some("border"),
         WAIT,
     );
@@ -364,7 +364,7 @@ fn a_plain_click_on_the_border_clears_the_mark_and_raises() {
     let mut a = attach(&srv);
     press(&mut a, (15, 4));
     release(&mut a, (15, 4));
-    let raised = wait_until(
+    let raised = try_wait_until(
         || {
             var(&srv, &low, "#{pane_z} #{pane_active}") == "0 1"
                 && var(&srv, &high, "#{pane_z}") == "1"
@@ -413,7 +413,7 @@ fn unbinding_the_stock_rows_leaves_a_floating_border_to_bindings() {
     std::thread::sleep(CLICK_GAP);
     press(&mut a, (15, 4));
     release(&mut a, (15, 4));
-    let ran = wait_until(
+    let ran = try_wait_until(
         || user_option(&srv, "@down").as_deref() == Some(float.as_str()),
         WAIT,
     );
@@ -519,7 +519,7 @@ fn a_root_binding_for_the_border_wins() {
     press(&mut a, (15, 4));
     drag(&mut a, (25, 10));
     release(&mut a, (25, 10));
-    let ran = wait_until(
+    let ran = try_wait_until(
         || user_option(&srv, "@dragged").as_deref() == Some(float.as_str()),
         WAIT,
     );
@@ -549,7 +549,7 @@ fn float_pane_lifts_a_tiled_pane_and_place_pane_moves_it() {
         .to_string();
     srv.cmd(&["send-keys", "-t", &tiled, "kept", "Enter"])
         .expect("keys");
-    let seen = wait_until(|| srv.capture(&tiled).contains("kept"), WAIT);
+    let seen = try_wait_until(|| srv.capture(&tiled).contains("kept"), WAIT);
     assert!(seen.is_ok());
     let pid = var(&srv, &tiled, "#{pane_pid}");
     srv.cmd(&[

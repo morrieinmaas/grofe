@@ -15,7 +15,7 @@ use std::process::Stdio;
 use std::thread::sleep;
 use std::time::Duration;
 
-use common::{TestServer, wait_child, wait_until};
+use common::{TestServer, wait_child, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -78,7 +78,7 @@ fn clients(srv: &TestServer) -> Vec<String> {
 }
 
 fn wait_clients(srv: &TestServer, want: &[&str]) {
-    wait_until(|| clients(srv) == want, WAIT)
+    try_wait_until(|| clients(srv) == want, WAIT)
         .unwrap_or_else(|e| panic!("clients {want:?}: {e}, got {:?}", clients(srv)));
 }
 
@@ -204,17 +204,17 @@ fn switch_client_t_is_for_the_next_key_only() {
     let mut a = attach(&srv, "main");
     srv.cmd(&["switch-client", "-T", "mytable"])
         .expect("switch-client -T");
-    wait_until(
+    try_wait_until(
         || display(&srv, "main", "#{client_key_table}") == "mytable",
         WAIT,
     )
     .expect("the client in mytable");
     a.send("x");
-    wait_until(|| display(&srv, "main", "#{window_name}") == "viaT", WAIT)
+    try_wait_until(|| display(&srv, "main", "#{window_name}") == "viaT", WAIT)
         .expect("the mytable binding ran");
     assert_eq!(display(&srv, "main", "#{client_key_table}"), "root");
     a.send("x");
-    wait_until(|| srv.capture("main").contains('x'), WAIT).expect("the next x reached the pane");
+    try_wait_until(|| srv.capture("main").contains('x'), WAIT).expect("the next x reached the pane");
 }
 
 /// Case 5: `display-message` without `-p` shows on the status line and is
@@ -600,13 +600,13 @@ fn killed_waiters_close_their_connections() {
             cmd.spawn().expect("spawn wait-for")
         })
         .collect();
-    wait_until(|| open_fds(pid) >= baseline + 50, WAIT)
+    try_wait_until(|| open_fds(pid) >= baseline + 50, WAIT)
         .unwrap_or_else(|_| panic!("{} fds, baseline {baseline}", open_fds(pid)));
     for mut w in waiters {
         w.kill().expect("kill waiter");
         w.wait().expect("reap waiter");
     }
-    wait_until(|| open_fds(pid) <= baseline, WAIT)
+    try_wait_until(|| open_fds(pid) <= baseline, WAIT)
         .unwrap_or_else(|_| panic!("{} fds, baseline {baseline}", open_fds(pid)));
 
     let mut cmd = srv.command();
@@ -615,7 +615,7 @@ fn killed_waiters_close_their_connections() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let waiter = cmd.spawn().expect("spawn wait-for");
-    wait_until(|| open_fds(pid) > baseline, WAIT).expect("the waiter connects");
+    try_wait_until(|| open_fds(pid) > baseline, WAIT).expect("the waiter connects");
     srv.cmd(&["wait-for", "-S", "chan0"]).expect("wait-for -S");
     let status = wait_child(waiter, WAIT).expect("the waiter exits");
     assert!(status.success(), "{status:?}");

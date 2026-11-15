@@ -1033,9 +1033,9 @@ fn a_stalled_client_gets_its_placements_again() {
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(0)
     };
-    let stalled = common::wait_until(|| discarded() > 0, WAIT);
+    let stalled = common::try_wait_until(|| discarded() > 0, WAIT);
     touch(&stop);
-    let ended = common::wait_until(|| srv.capture("main").contains("END"), WAIT);
+    let ended = common::try_wait_until(|| srv.capture("main").contains("END"), WAIT);
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).expect("SIGCONT");
     stalled.expect("a frame was dropped for the stopped client");
     ended.expect("the pane finished");

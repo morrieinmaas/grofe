@@ -20,7 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -130,7 +130,7 @@ fn bind_line(srv: &TestServer, event: &str, fmt: &str, log: &Path) {
 /// Waits until `log` has `want` more lines than `seen`, then makes sure
 /// no more come, and returns the new ones.
 fn new_lines(log: &Path, seen: &mut usize, want: usize) -> Vec<String> {
-    let _ = wait_until(|| log_lines(log).len() >= *seen + want, WAIT);
+    let _ = try_wait_until(|| log_lines(log).len() >= *seen + want, WAIT);
     std::thread::sleep(QUIET);
     let lines = log_lines(log);
     let new = lines[(*seen).min(lines.len())..].to_vec();
@@ -367,7 +367,7 @@ fn new_pane_env_in(srv: &TestServer, session: &str, name: &str) -> Vec<String> {
     let out = srv.home.join(format!("{name}.env"));
     let script = format!("env > {}.tmp; mv {0}.tmp {0}; sleep 30", out.display());
     ok(srv, &["new-window", "-d", "-t", session, &script]);
-    wait_until(|| out.exists(), WAIT).expect("the pane wrote its env");
+    try_wait_until(|| out.exists(), WAIT).expect("the pane wrote its env");
     fs::read_to_string(&out)
         .expect("read env")
         .lines()
@@ -535,7 +535,7 @@ fn spawn_server(text: &str, env: &[(&str, &str)]) -> Live {
         child: Some(cmd.spawn().expect("spawn server")),
         srv,
     };
-    if wait_until(|| live.srv.is_running(), WAIT).is_err() {
+    if try_wait_until(|| live.srv.is_running(), WAIT).is_err() {
         panic!("server did not start; log:\n{}", live.srv.log());
     }
     ok(
@@ -713,7 +713,7 @@ fn attach_and_switch_refresh_the_session_environment() {
         80,
         24,
     );
-    wait_until(
+    try_wait_until(
         || ok(&srv, &["show-environment", "-t", "a", "DISPLAY"]) == "DISPLAY=:3\n",
         WAIT,
     )
@@ -986,7 +986,7 @@ fn a_hook_from_a_binding_sees_its_client() {
     );
     ok(&srv, &["set-hook", "-g", "pane-focused", &cmd]);
     let mut client = Harness::spawn_attach_with_env(srv.command(), "a", &[], 80, 24);
-    wait_until(|| !ok(&srv, &["list-clients"]).is_empty(), WAIT).expect("attached");
+    try_wait_until(|| !ok(&srv, &["list-clients"]).is_empty(), WAIT).expect("attached");
     let name = ok(&srv, &["list-clients", "-F", "#{client_name}"])
         .trim_end()
         .to_string();

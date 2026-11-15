@@ -181,7 +181,7 @@ impl TestServer {
             .server
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner) = Some(child);
-        if wait_until(|| self.is_running(), CMD_TIMEOUT).is_err() {
+        if try_wait_until(|| self.is_running(), CMD_TIMEOUT).is_err() {
             panic!("test server failed to start; server log:\n{}", self.log());
         }
     }
@@ -221,7 +221,7 @@ impl TestServer {
             .extend(descendants(child.id()));
         let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
         let _ = child.kill();
-        if wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT).is_err() {
+        if try_wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT).is_err() {
             panic!("kill_hard: the server did not die");
         }
     }
@@ -260,7 +260,7 @@ impl TestServer {
             .take()
         {
             let reaped = |child: &mut Child| !matches!(child.try_wait(), Ok(None));
-            if self.is_running() || wait_until(|| reaped(&mut child), TEARDOWN_WAIT).is_err() {
+            if self.is_running() || try_wait_until(|| reaped(&mut child), TEARDOWN_WAIT).is_err() {
                 stop_server(&mut child, &self.socket, &ctx);
             }
         }
@@ -341,7 +341,7 @@ impl TestServer {
 
     /// Polls `cond` until it holds or `timeout` passes.
     pub fn wait_for(&self, cond: impl FnMut() -> bool, timeout: Duration) -> Result<(), String> {
-        wait_until(cond, timeout)
+        try_wait_until(cond, timeout)
     }
 
     /// Whether a server accepts connections on the socket right now.
@@ -356,7 +356,7 @@ impl TestServer {
     pub fn wait_listening(&self, timeout: Duration) -> Result<(), String> {
         // The line `grofe::server::serve` logs once bind and listen are done.
         let line = format!("grofe server listening on {}", self.socket.display());
-        wait_until(|| self.log().contains(&line), timeout)
+        try_wait_until(|| self.log().contains(&line), timeout)
     }
 
     /// The path-derivation env the server sees, for `grofe::paths`.
@@ -536,7 +536,7 @@ impl Drop for TestServer {
         // path is to have the harness spawn those as children too.
         for socket in self.sockets() {
             if kill_server_over(&socket, &self.ctx()) {
-                let _ = wait_until(|| UnixStream::connect(&socket).is_err(), TEARDOWN_WAIT);
+                let _ = try_wait_until(|| UnixStream::connect(&socket).is_err(), TEARDOWN_WAIT);
             }
         }
         let _ = fs::remove_file(&self.socket);
@@ -569,10 +569,10 @@ pub fn stop_server(child: &mut Child, socket: &Path, ctx: &ClientCtx) {
     let below = descendants(child.id());
     let reaped = |child: &mut Child| !matches!(child.try_wait(), Ok(None));
     if kill_server_over(socket, ctx) {
-        let _ = wait_until(|| reaped(child), TEARDOWN_WAIT);
+        let _ = try_wait_until(|| reaped(child), TEARDOWN_WAIT);
     }
     let _ = child.kill();
-    let _ = wait_until(|| reaped(child), TEARDOWN_WAIT);
+    let _ = try_wait_until(|| reaped(child), TEARDOWN_WAIT);
     kill_leftovers(&below);
 }
 
@@ -622,7 +622,7 @@ fn kill_leftovers(procs: &[(i32, String)]) {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
     let alive = |pid: i32| kill(Pid::from_raw(pid), None).is_ok();
-    if wait_until(|| procs.iter().all(|(pid, _)| !alive(*pid)), LEFTOVER_GRACE).is_ok() {
+    if try_wait_until(|| procs.iter().all(|(pid, _)| !alive(*pid)), LEFTOVER_GRACE).is_ok() {
         return;
     }
     for (pid, _, start) in processes() {
@@ -725,8 +725,19 @@ fn is_zombie(_pid: nix::unistd::Pid) -> bool {
     false
 }
 
+/// Polls `f` every 10 ms until it holds; panics with `what` and the elapsed
+/// time when `timeout` passes. Use [`CMD_TIMEOUT`] for the timeout, so a slow
+/// runner waits longer instead of failing.
+#[track_caller]
+pub fn wait_until(what: &str, timeout: Duration, f: impl FnMut() -> bool) {
+    let start = Instant::now();
+    if try_wait_until(f, timeout).is_err() {
+        panic!("timed out waiting for {what} after {:?}", start.elapsed());
+    }
+}
+
 /// Polls `cond` every 10 ms until it holds or `timeout` passes.
-pub fn wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> Result<(), String> {
+pub fn try_wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     loop {
         if cond() {
@@ -794,7 +805,7 @@ pub fn wait_child(mut child: Child, timeout: Duration) -> Result<ExitStatus, Str
                 // Reaped if it goes within the teardown bound; a process
                 // stuck in its exit (a tty that never drains) is left.
                 let _ = child.kill();
-                let _ = wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT);
+                let _ = try_wait_until(|| !matches!(child.try_wait(), Ok(None)), TEARDOWN_WAIT);
                 return Err(format!("process did not exit within {timeout:?}"));
             }
             Err(e) => return Err(e.to_string()),

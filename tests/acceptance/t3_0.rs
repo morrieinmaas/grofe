@@ -12,7 +12,7 @@ mod common;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{TestServer, wait_child, wait_until};
+use common::{TestServer, wait_child, try_wait_until};
 use grofe::server::TEST_PANIC_ENV;
 
 use crate::harness::{Harness, require_tool};
@@ -123,10 +123,10 @@ fn minimal_bind_key_binds_commands_and_sequences() {
     let mut a = attach(&srv);
     a.wait_for_output(MOUSE_ON, 0);
     a.send("\x02X");
-    wait_until(|| windows(&srv) == 2, Duration::from_secs(10))
+    try_wait_until(|| windows(&srv) == 2, Duration::from_secs(10))
         .unwrap_or_else(|e| panic!("C-b X: {e}; {} windows", windows(&srv)));
     a.send("\x02Y");
-    wait_until(|| windows(&srv) == 4, Duration::from_secs(10))
+    try_wait_until(|| windows(&srv) == 4, Duration::from_secs(10))
         .unwrap_or_else(|e| panic!("C-b Y: {e}; {} windows", windows(&srv)));
 }
 
@@ -176,7 +176,7 @@ fn the_test_trigger_panics_the_server_on_its_first_command() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = cmd.spawn().expect("spawn server");
-    wait_until(|| srv.is_running(), Duration::from_secs(10)).expect("server up");
+    try_wait_until(|| srv.is_running(), Duration::from_secs(10)).expect("server up");
     let out = srv.run(&["list-sessions"]);
     assert!(!out.status.success(), "{out:?}");
     let status = wait_child(child, Duration::from_secs(10)).expect("server exits");
@@ -202,7 +202,7 @@ fn panes_get_a_pixel_size_from_the_client_cell_size() {
     let pane_text = |target: &str| srv.capture(target);
     srv.cmd(&["send-keys", "-t", "main", "Enter"])
         .expect("keys");
-    wait_until(
+    try_wait_until(
         || pane_text("main").contains("ws 80 23 0 0"),
         Duration::from_secs(10),
     )
@@ -218,7 +218,7 @@ fn panes_get_a_pixel_size_from_the_client_cell_size() {
     a.wait_for_output(MOUSE_ON, 0);
     srv.cmd(&["send-keys", "-t", "main", "Enter"])
         .expect("keys");
-    wait_until(
+    try_wait_until(
         || pane_text("main").contains("ws 80 23 800 460"),
         Duration::from_secs(10),
     )
@@ -238,6 +238,6 @@ fn panes_get_a_pixel_size_from_the_client_cell_size() {
         .parse()
         .expect("a number");
     let want = format!("ws {width} 23 {} 460", width * 10);
-    wait_until(|| pane_text(id).contains(&want), Duration::from_secs(10))
+    try_wait_until(|| pane_text(id).contains(&want), Duration::from_secs(10))
         .unwrap_or_else(|e| panic!("split pane, {want}: {e}\n{}", pane_text(id)));
 }

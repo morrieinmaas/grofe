@@ -36,7 +36,7 @@ use std::path::Path;
 use base64::Engine as _;
 
 use crate::harness::Harness;
-use crate::plugin_rig::{PREFIX, Rig, WAIT, read_golden, recording_tmux, wait_until, write_golden};
+use crate::plugin_rig::{PREFIX, Rig, WAIT, read_golden, recording_tmux, try_wait_until, write_golden};
 
 const TASK: &str = "tp11";
 const GOLDEN: &str = "tp_11";
@@ -95,7 +95,7 @@ fn ready(rig: &Rig) -> Harness {
     rig.t(&["set-option", "-g", "mode-keys", "vi"]);
     rig.t(&["set-option", "-g", "mouse", "on"]);
     rig.t(&["new-window", "-t", "main", "-n", "text", TEXT]);
-    let shown = wait_until(
+    let shown = try_wait_until(
         || {
             rig.t(&["capture-pane", "-p", "-t", "main:text"])
                 .contains("bravo two")
@@ -116,7 +116,7 @@ fn in_mode(rig: &Rig) -> String {
 }
 
 fn wait_mode(rig: &Rig, want: &str) {
-    let got = wait_until(|| in_mode(rig) == want, WAIT);
+    let got = try_wait_until(|| in_mode(rig) == want, WAIT);
     assert!(got.is_ok(), "pane_in_mode never became {want}");
 }
 
@@ -254,7 +254,7 @@ fn paste_window(rig: &Rig, show: &str) {
         rig.path("pasted").display()
     );
     rig.t(&["new-window", "-d", "-t", "main", "-n", "paste", &cmd]);
-    let ready = wait_until(|| rig.path("asked").exists(), WAIT);
+    let ready = try_wait_until(|| rig.path("asked").exists(), WAIT);
     assert!(
         ready.is_ok(),
         "the paste pane never asked for bracketed paste"
@@ -264,7 +264,7 @@ fn paste_window(rig: &Rig, show: &str) {
 /// What `paste` read, once a bracketed paste has ended.
 fn pasted(rig: &Rig) -> String {
     let read = || fs::read(rig.path("pasted")).unwrap_or_default();
-    let done = wait_until(|| read().ends_with(b"\x1b[201~"), WAIT);
+    let done = try_wait_until(|| read().ends_with(b"\x1b[201~"), WAIT);
     assert!(
         done.is_ok(),
         "the paste never ended: {:?}",
@@ -315,7 +315,7 @@ fn case_detect(real: Option<&Path>, stubs: &[&str]) -> String {
     // With no command it binds `y`, `Y` and `M-y` in both tables, beside the
     // stock vi `MouseDragEnd1Pane` row.
     let rows = if stubs.is_empty() { 7 } else { 12 };
-    let all = wait_until(|| bindings(&rig).lines().count() == rows, WAIT);
+    let all = try_wait_until(|| bindings(&rig).lines().count() == rows, WAIT);
     assert!(all.is_ok(), "not every row bound:\n{}", bindings(&rig));
     bindings(&rig)
 }

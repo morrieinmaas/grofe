@@ -16,7 +16,7 @@ use std::os::unix::fs::symlink;
 use std::process::Command;
 use std::time::Duration;
 
-use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, wait_until};
+use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -66,7 +66,7 @@ fn three_panes() -> TestServer {
         .expect("split");
     srv.cmd(&["send-keys", "-t", "%2", "kept", "Enter"])
         .expect("keys");
-    wait_until(|| srv.capture("%2").contains("kept"), WAIT).expect("kept shown");
+    try_wait_until(|| srv.capture("%2").contains("kept"), WAIT).expect("kept shown");
     float(&srv, "2", "3");
     srv
 }
@@ -212,9 +212,9 @@ fn prefix_f_floats_and_unfloats_the_active_pane() {
         move || var(srv, "%1", "#{pane_floating_flag}") == want
     };
     client.send("\x02F");
-    wait_until(floating("1"), WAIT).expect("prefix F floats %1");
+    try_wait_until(floating("1"), WAIT).expect("prefix F floats %1");
     client.send("\x02F");
-    wait_until(floating("0"), WAIT).expect("prefix F unfloats %1");
+    try_wait_until(floating("0"), WAIT).expect("prefix F unfloats %1");
     assert_eq!(var(&srv, "%1", "#{window_panes}"), "2");
     assert_eq!(var(&srv, "%1", "#{pane_active}"), "1");
 }
@@ -316,7 +316,7 @@ fn the_pane_menu_floats_and_unfloats_the_pane_clicked() {
     client.wait_until("the tiled pane's menu", WAIT, |t| t.contains("Float"));
     assert!(!client.text().contains("Unfloat"), "{}", client.text());
     client.send("f");
-    wait_until(floating("1"), WAIT).expect("the menu floats %0");
+    try_wait_until(floating("1"), WAIT).expect("the menu floats %0");
     client.send("\x1b[<2;11;6m");
     // The floating pane is its tiled place moved to (2, 1): cell (10, 4)
     // is over it.
@@ -326,7 +326,7 @@ fn the_pane_menu_floats_and_unfloats_the_pane_clicked() {
     client.send(right_press(11, 5));
     client.wait_until("the floating pane's menu", WAIT, |t| t.contains("Unfloat"));
     client.send("f");
-    wait_until(floating("0"), WAIT).expect("the menu unfloats %0");
+    try_wait_until(floating("0"), WAIT).expect("the menu unfloats %0");
     assert_eq!(var(&srv, "%0", "#{window_panes}"), "2");
 }
 
@@ -355,7 +355,7 @@ fn the_pane_menu_leaves_a_click_to_a_pane_that_asked_for_the_mouse() {
     );
     srv.cmd(&["split-window", "-h", "-t", "%0", &app])
         .expect("split");
-    wait_until(|| var(&srv, "%1", "#{mouse_any_flag}") == "1", WAIT).expect("%1 asks");
+    try_wait_until(|| var(&srv, "%1", "#{mouse_any_flag}") == "1", WAIT).expect("%1 asks");
     srv.cmd(&["select-pane", "-t", "%0"]).expect("select");
     let mut client = Harness::spawn_attach_with_env(srv.command(), "main", &[], 80, 24);
     client.wait_for_output(MOUSE_ON, 0);
@@ -364,7 +364,7 @@ fn the_pane_menu_leaves_a_click_to_a_pane_that_asked_for_the_mouse() {
     std::thread::sleep(Duration::from_millis(400));
     client.send(right_press(51, 6));
     client.send("\x1b[<2;51;6m");
-    let got = wait_until(
+    let got = try_wait_until(
         || {
             fs::read(&log)
                 .unwrap_or_default()

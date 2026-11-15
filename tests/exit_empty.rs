@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 #[test]
 fn exit_empty_off_keeps_the_server_after_the_last_session() {
@@ -20,5 +20,5 @@ fn exit_empty_off_keeps_the_server_after_the_last_session() {
     srv.cmd(&["set-option", "-g", "exit-empty", "on"])
         .expect("set-option");
     srv.cmd(&["kill-session", "-t", "b"]).expect("kill-session");
-    wait_until(|| !srv.is_running(), CMD_TIMEOUT).expect("the server exits");
+    try_wait_until(|| !srv.is_running(), CMD_TIMEOUT).expect("the server exits");
 }

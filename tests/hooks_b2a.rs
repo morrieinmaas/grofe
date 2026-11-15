@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 const WAIT: Duration = Duration::from_secs(5);
 const QUIET: Duration = Duration::from_millis(400);
@@ -48,9 +48,9 @@ fn a_window_hook_runs_for_its_own_window_and_hides_the_global_one() {
     );
 
     ok(&srv, &["rename-window", "-t", "a:2", "other"]);
-    assert!(wait_until(|| log_lines(&log).len() == 1, WAIT).is_ok());
+    assert!(try_wait_until(|| log_lines(&log).len() == 1, WAIT).is_ok());
     ok(&srv, &["rename-window", "-t", "a:1", "mine"]);
-    assert!(wait_until(|| log_lines(&log).len() == 2, WAIT).is_ok());
+    assert!(try_wait_until(|| log_lines(&log).len() == 2, WAIT).is_ok());
     std::thread::sleep(QUIET);
     assert_eq!(log_lines(&log), ["global other", "local mine"]);
 
@@ -60,7 +60,7 @@ fn a_window_hook_runs_for_its_own_window_and_hides_the_global_one() {
         &["set-hook", "-u", "-w", "-t", "a:1", "window-renamed"],
     );
     ok(&srv, &["rename-window", "-t", "a:1", "again"]);
-    assert!(wait_until(|| log_lines(&log).len() == 3, WAIT).is_ok());
+    assert!(try_wait_until(|| log_lines(&log).len() == 3, WAIT).is_ok());
     assert_eq!(log_lines(&log)[2], "global again");
 }
 
@@ -75,7 +75,7 @@ fn a_session_hook_stays_with_its_session() {
     ok(&srv, &["set-hook", "-t", "a", "session-renamed", &cmd]);
     ok(&srv, &["rename-session", "-t", "b", "bb"]);
     ok(&srv, &["rename-session", "-t", "a", "aa"]);
-    assert!(wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
+    assert!(try_wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
     std::thread::sleep(QUIET);
     assert_eq!(log_lines(&log), ["renamed aa"]);
     assert_eq!(
@@ -106,7 +106,7 @@ fn pane_set_clipboard_runs_when_a_pane_stores_to_the_clipboard() {
             "sh -c \"printf '\\033]52;c;aGk=\\007'; sleep 30\"",
         ],
     );
-    assert!(wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
+    assert!(try_wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
     assert_eq!(log_lines(&log), ["pane-set-clipboard %1"]);
 }
 
@@ -122,7 +122,7 @@ fn command_error_runs_for_a_failed_command() {
     );
     ok(&srv, &["list-sessions"]);
     assert!(srv.cmd(&["rename-window", "-t", "nope", "x"]).is_err());
-    assert!(wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
+    assert!(try_wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
     std::thread::sleep(QUIET);
     assert_eq!(log_lines(&log), ["command-error"]);
 }

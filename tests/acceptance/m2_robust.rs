@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 use grofe::protocol::{
     Caps, ClientCtx, Dialect, Frame, FrameCodec, Hello, Reply, Request, encode_hello,
 };
@@ -361,7 +361,7 @@ fn a_very_large_client_gets_its_full_frame_without_a_disconnect() {
          printf END-MARK; exec sleep 600",
     ])
     .expect("new-session");
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&[
                 "display-message",
@@ -406,7 +406,7 @@ fn a_resize_storm_is_coalesced() {
         "seq 1 50000; exec sleep 600",
     ])
     .expect("new-session");
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["capture-pane", "-p", "-t", "main"])
                 .is_ok_and(|c| c.contains("50000"))
@@ -416,7 +416,7 @@ fn a_resize_storm_is_coalesced() {
     .expect("history filled");
     let mut control = Control::connect(&srv);
     let mut client = raw_attach(&srv, (80, 24));
-    wait_until(
+    try_wait_until(
         || client_size(&mut control) == "80x24\n",
         Duration::from_secs(10),
     )
@@ -442,7 +442,7 @@ fn a_resize_storm_is_coalesced() {
         during < bound,
         "list-sessions took {during:?} after the burst, {base:?} before"
     );
-    wait_until(
+    try_wait_until(
         || client_size(&mut control) == "90x25\n",
         Duration::from_secs(10),
     )
@@ -483,7 +483,7 @@ fn panes_never_shrink_below_one_cell() {
     }
     let mut control = Control::connect(&srv);
     let _client = raw_attach(&srv, (1, 1));
-    wait_until(
+    try_wait_until(
         || client_size(&mut control) == "1x1\n",
         Duration::from_secs(10),
     )

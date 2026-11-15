@@ -19,7 +19,7 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 use grofe::protocol::{
     Caps, ClientCtx, Dialect, Frame, FrameCodec, Hello, Reply, Request, encode_hello,
 };
@@ -71,7 +71,7 @@ fn pane_size(srv: &TestServer) -> String {
 }
 
 fn wait_pane_size(srv: &TestServer, want: &str) {
-    if let Err(e) = wait_until(|| pane_size(srv) == want, Duration::from_secs(10)) {
+    if let Err(e) = try_wait_until(|| pane_size(srv) == want, Duration::from_secs(10)) {
         panic!("pane never became {want} (is {}): {e}", pane_size(srv));
     }
 }
@@ -492,7 +492,7 @@ fn input_sent_with_the_hello_reaches_the_pane_without_more_input() {
         .encode(Frame::Input(b"early\r".to_vec()), &mut input)
         .expect("encode input");
     let _stream = raw_attach(&srv, (80, 24), None, &input);
-    let arrived = wait_until(
+    let arrived = try_wait_until(
         || srv.capture("main").contains("got-early"),
         Duration::from_secs(5),
     );

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{CmdOutput, TestServer, wait_until};
+use common::{CmdOutput, TestServer, try_wait_until};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -193,7 +193,7 @@ cmd = "{third}"
     up_ok(&srv, "env");
     let read = |n: &str| {
         let f = out_dir.join(n);
-        wait_until(|| f.exists(), WAIT).unwrap_or_else(|e| panic!("{n}: {e}"));
+        try_wait_until(|| f.exists(), WAIT).unwrap_or_else(|e| panic!("{n}: {e}"));
         fs::read_to_string(f).unwrap()
     };
     let l = format!("$(touch {})", out_dir.join("pwned").display());
@@ -224,14 +224,14 @@ exec = true
     let p = panes(&srv, "run:");
     assert_eq!(p.len(), 2);
     let screen = |id: &str| srv.capture(id);
-    wait_until(|| screen(&p[0][0]).contains("typed-marker"), WAIT).unwrap();
+    try_wait_until(|| screen(&p[0][0]).contains("typed-marker"), WAIT).unwrap();
     // The dead pane's `remain-on-exit-format` line scrolls the screen up one
     // row, as tmux's does, so the marker may already be in the history.
     let history = |id: &str| {
         srv.cmd(&["capture-pane", "-p", "-S", "-", "-t", id])
             .unwrap_or_default()
     };
-    wait_until(|| history(&p[1][0]).contains("exec-marker"), WAIT).unwrap();
+    try_wait_until(|| history(&p[1][0]).contains("exec-marker"), WAIT).unwrap();
     // The typed command was entered at a shell, which stays (the prompt is
     // `$` or, as root in CI, `#`); the exec pane ended with its command
     // (the harness keeps it dead).
@@ -244,7 +244,7 @@ exec = true
         "{typed}"
     );
     assert_eq!(p[0][4], "0", "typed pane alive: {p:?}");
-    wait_until(|| panes(&srv, "run:")[1][4] == "1", WAIT).expect("exec pane ended");
+    try_wait_until(|| panes(&srv, "run:")[1][4] == "1", WAIT).expect("exec pane ended");
 }
 
 #[test]
@@ -343,7 +343,7 @@ cmd = "test -e {d}/regex-ok && touch {d}/path-ok || touch {d}/path-bad"
         d.join("regex-ok").exists(),
         "the second pane started after the regex matched"
     );
-    wait_until(
+    try_wait_until(
         || d.join("path-ok").exists() || d.join("path-bad").exists(),
         WAIT,
     )
@@ -608,7 +608,7 @@ cmd = "echo pane >> log"
     );
     assert_eq!(fs::read_to_string(d.join("who")).unwrap(), "h\n");
     srv.cmd(&["kill-session", "-t", "h"]).unwrap();
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(d.join("log")).is_ok_and(|l| l.contains("stop")),
         WAIT,
     )
@@ -938,7 +938,7 @@ exec = true
         ),
     );
     up_ok(&srv, "once");
-    wait_until(|| count.exists(), WAIT).unwrap();
+    try_wait_until(|| count.exists(), WAIT).unwrap();
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(fs::read_to_string(&count).unwrap(), "sw\n", "started once");
     let w = windows(&srv, "once");
@@ -985,12 +985,12 @@ fn on_stop_runs_once_when_the_server_goes_and_no_watcher_outlives_it() {
     up_ok(&srv, "st");
     // Running already: no second watcher.
     up_ok(&srv, "st");
-    wait_until(|| watchers(&srv).len() == 1, WAIT).unwrap_or_else(|e| {
+    try_wait_until(|| watchers(&srv).len() == 1, WAIT).unwrap_or_else(|e| {
         panic!("{e}: {:?}", watchers(&srv));
     });
     srv.cmd(&["kill-server"]).unwrap();
-    wait_until(|| d.join("log").exists(), WAIT).expect("on_stop ran");
-    wait_until(|| watchers(&srv).is_empty(), WAIT)
+    try_wait_until(|| d.join("log").exists(), WAIT).expect("on_stop ran");
+    try_wait_until(|| watchers(&srv).is_empty(), WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", watchers(&srv)));
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(fs::read_to_string(d.join("log")).unwrap(), "stop\n");
@@ -1010,7 +1010,7 @@ fn a_failed_build_still_runs_on_stop_for_the_session_it_removed() {
     );
     let out = run(&srv, &["layout", "up", "bad", "-d"]);
     assert!(!out.status.success());
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(d.join("log")).is_ok_and(|l| l.contains("stop")),
         WAIT,
     )

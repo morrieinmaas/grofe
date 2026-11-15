@@ -16,7 +16,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -52,7 +52,7 @@ fn display(srv: &TestServer, format: &str) -> String {
 }
 
 fn wait_display(srv: &TestServer, format: &str, want: &str) {
-    if let Err(e) = wait_until(|| display(srv, format) == want, WAIT) {
+    if let Err(e) = try_wait_until(|| display(srv, format) == want, WAIT) {
         panic!("{e}: {format} is {:?}, want {want:?}", display(srv, format));
     }
 }
@@ -75,7 +75,7 @@ fn select_first_line(srv: &TestServer) {
 }
 
 fn wait_text(srv: &TestServer, text: &str) {
-    if let Err(e) = wait_until(|| srv.capture("main").contains(text), WAIT) {
+    if let Err(e) = try_wait_until(|| srv.capture("main").contains(text), WAIT) {
         panic!("{e}: {text:?} never showed:\n{}", srv.capture("main"));
     }
 }
@@ -83,7 +83,7 @@ fn wait_text(srv: &TestServer, text: &str) {
 /// Waits for `path` to hold exactly `want`.
 fn wait_file(path: &Path, want: &str) {
     let read = || fs::read_to_string(path).unwrap_or_default();
-    if let Err(e) = wait_until(|| read() == want, WAIT) {
+    if let Err(e) = try_wait_until(|| read() == want, WAIT) {
         panic!("{e}: {} holds {:?}, want {want:?}", path.display(), read());
     }
 }
@@ -354,7 +354,7 @@ fn a_panes_osc52_makes_a_buffer_only_under_on() {
     srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     store(&srv, "app-on");
     a.wait_for_output(format!("\x1b]52;c;{}\x07", b64("app-on")).as_bytes(), 0);
-    wait_until(|| buffers(&srv) == ["app-on"], WAIT).expect("a buffer under on");
+    try_wait_until(|| buffers(&srv) == ["app-on"], WAIT).expect("a buffer under on");
 
     for mode in ["external", "off"] {
         srv.cmd(&["set", "-g", "set-clipboard", mode]).unwrap();
@@ -363,7 +363,7 @@ fn a_panes_osc52_makes_a_buffer_only_under_on() {
     srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     store(&srv, "app-last");
     // Pane events are handled in order.
-    wait_until(|| buffers(&srv).len() == 2, WAIT).expect("the last store");
+    try_wait_until(|| buffers(&srv).len() == 2, WAIT).expect("the last store");
     assert_eq!(buffers(&srv), ["app-last", "app-on"]);
     let out = a.output().to_vec();
     for gone in ["app-external", "app-off"] {

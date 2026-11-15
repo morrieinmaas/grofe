@@ -48,7 +48,7 @@ fn active(srv: &TestServer, target: &str) -> String {
 }
 
 fn wait_for_file(path: &Path) -> String {
-    common::wait_until(
+    common::try_wait_until(
         || fs::read_to_string(path).is_ok_and(|s| s.ends_with('\n')),
         WAIT,
     )
