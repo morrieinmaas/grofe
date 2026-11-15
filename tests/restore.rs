@@ -343,6 +343,20 @@ fn restore_into_a_server_with_a_session_errors() {
     );
 }
 
+/// The restore request travels as `--restore`, not an environment variable:
+/// a `GROFE_RESTORE=1` in the CLI's environment restores nothing.
+#[test]
+fn the_restore_request_is_not_read_from_the_environment() {
+    let srv = TestServer::start();
+    kill(&srv);
+    write_snapshot(&srv, &sample(&home(&srv)));
+    let mut cmd = srv.command();
+    cmd.arg("start-server").env("GROFE_RESTORE", "1");
+    let out = common::run_bounded(cmd, Duration::from_secs(30));
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(ok(&srv, &["list-sessions", "-F", "#{session_name}"]), "");
+}
+
 /// `start-server --restore` with no snapshot says so and still starts an
 /// empty server.
 #[test]
