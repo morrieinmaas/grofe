@@ -2182,7 +2182,7 @@ impl Importer {
                 argv.iter()
                     .map(|w| match raw.get(w.as_str()) {
                         Some(r) => r.to_string(),
-                        None => cmd::parse::escape_arg(w),
+                        None => crate::util::quote::tmux_arg(w),
                     })
                     .collect::<Vec<_>>()
                     .join(" ")
