@@ -1,0 +1,9 @@
+# The screenshot server's config: grofe's defaults, a plain prompt, no
+# restore between renders, and a status line without the clock or host so
+# the image does not date.
+default-command = "PS1='$ ' exec bash --norc --noprofile"
+restore-on-start = false
+pane-frame-tab-ends = "\ue0b7\ue0b5"
+
+[status]
+right = "#{session_name} "

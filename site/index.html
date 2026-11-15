@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grofe: a terminal multiplexer</title>
+<meta name="description" content="A tmux-compatible terminal multiplexer: sessions that survive a reboot, a TOML config you can debug, and a status line that never forks.">
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --line: #d8dee4;
+    --code-bg: #f0eee9;
+    --accent: #2f7d32;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171c;
+      --fg: #e6e8eb;
+      --muted: #9aa4af;
+      --line: #2e333b;
+      --code-bg: #1f232a;
+      --accent: #7cc47f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 2.6rem; margin: 0; letter-spacing: -0.02em; }
+  .pitch { font-size: 1.25rem; color: var(--muted); margin: 8px 0 24px; max-width: 40em; }
+  nav a {
+    display: inline-block;
+    margin: 0 12px 12px 0;
+    padding: 8px 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--fg);
+    text-decoration: none;
+  }
+  nav a.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  figure { margin: 32px 0; }
+  figure img { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); display: block; }
+  h2 { font-size: 1.3rem; margin: 40px 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 32px; }
+  .grid h3 { font-size: 1rem; margin: 0 0 4px; }
+  .grid p { margin: 0; color: var(--muted); }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  a { color: var(--accent); }
+  footer { margin-top: 48px; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>grofe</h1>
+  <p class="pitch">A terminal multiplexer for people who like tmux and are tired of working around it.</p>
+  <nav>
+    <a class="primary" href="docs/">Read the docs</a>
+    <a href="docs/install.html">Install</a>
+    <a href="https://github.com/morrieinmaas/grofe">GitHub</a>
+  </nav>
+
+  <figure>
+    <picture>
+      <source srcset="img/grofe-dark.png" media="(prefers-color-scheme: dark)">
+      <img src="img/grofe-light.png" alt="grofe with three framed panes: a git log, a file listing and a Cargo.toml, with the status line below" width="1280" height="720">
+    </picture>
+  </figure>
+
+  <div class="grid">
+    <div>
+      <h3>Survives a reboot</h3>
+      <p>Panes come back in the same layout and folders, and programs that know how to resume come back running.</p>
+    </div>
+    <div>
+      <h3>A config you can debug</h3>
+      <p>TOML with a schema. A typo names the file and line, and <code>show-config --explain</code> says where a value came from.</p>
+    </div>
+    <div>
+      <h3>Speaks tmux</h3>
+      <p>tmux's keys, commands and formats. Your tmux plugins and scripts keep working, and grofe can run as <code>tmux</code>.</p>
+    </div>
+    <div>
+      <h3>Framed, movable panes</h3>
+      <p>Drag a pane by its title to swap or dock it, or float it above the others.</p>
+    </div>
+    <div>
+      <h3>Coding agents built in</h3>
+      <p>See which agent is working, which is waiting on you, and jump straight to it.</p>
+    </div>
+    <div>
+      <h3>A status line that never forks</h3>
+      <p><code>#()</code> commands run on a timer and are cached, so redraws stay instant.</p>
+    </div>
+  </div>
+
+  <h2>Install</h2>
+  <p>Prebuilt binaries for macOS and Linux are on the <a href="https://github.com/morrieinmaas/grofe/releases">releases page</a>. Or build from a checkout with Rust 1.88 or newer:</p>
+  <pre>cargo install --locked --path .
+grofe</pre>
+  <p>Coming from tmux? Convert your config with <code>grofe import-tmux</code>; see <a href="docs/switching-from-tmux.html">Switching from tmux</a>.</p>
+
+  <footer>grofe is open source under the Apache License 2.0.</footer>
+</main>
+</body>
+</html>
