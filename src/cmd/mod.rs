@@ -16,8 +16,8 @@ mod table;
 pub mod target;
 
 pub use format::{
-    FormatVars, Inner, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, all_variables, expand,
-    expand_time, expand_traced,
+    FormatVars, Inner, LoopItem, LoopKind, LoopSort, NameKind, NoVars, SortOrder, all_variables,
+    expand, expand_time, expand_traced,
 };
 pub use keys::{is_key_name, key_bytes};
 pub use parse::{

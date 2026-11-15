@@ -11,6 +11,8 @@
 //! `-F`, `display-message -p` and `-c` expand against that pane, its
 //! window and its session.
 
+use crate::cmd::NoVars;
+use crate::util::quote;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -2132,15 +2134,6 @@ fn is_text(name: &str) -> bool {
     name.starts_with('@') || builtin(name).is_some_and(|b| b.kind == Kind::String)
 }
 
-/// No format variables: `-F` with no pane to expand against.
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
-    }
-}
-
 /// `option-changed`, emitted only for a real change (spec §4.2).
 fn option_changed(model: &mut Model, events: &mut Events, owner: Owner, name: &str) {
     if name == "graphics" {
@@ -2239,7 +2232,7 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
             let shown = if colour {
                 value.to_string()
             } else {
-                quote(value)
+                quote::tmux_arg(value)
             };
             let star = if inherited { "*" } else { "" };
             format!("{name}{star} {shown}\n")
@@ -2369,7 +2362,7 @@ fn line_raw(name: &str, value: &str, value_only: bool) -> String {
     if value_only {
         format!("{value}\n")
     } else {
-        format!("{name} {}\n", quote(value))
+        format!("{name} {}\n", quote::tmux_arg(value))
     }
 }
 
@@ -2439,7 +2432,7 @@ fn tmux_inherited_listing(model: &Model, owner: Owner, value_only: bool) -> Stri
     let parents = &owner_chain(model, owner)[1..];
     let star = |name: &str, text: &str| match value_only {
         true => format!("{text}\n"),
-        false => format!("{name}* {}\n", quote(text)),
+        false => format!("{name}* {}\n", quote::tmux_arg(text)),
     };
     let mut out = String::new();
     for (name, e) in o.at(owner) {
@@ -2529,63 +2522,6 @@ fn tmux_listing(model: &Model, owner: Owner, value_only: bool) -> String {
         }
     }
     out
-}
-
-/// A value as `show-options` prints it, as tmux 3.7b's `args_escape` does:
-/// `''` when empty; double quotes when it holds any of `` #';${}%`` (with
-/// `"`, `$` and `\` escaped inside); else single quotes when it holds `"`;
-/// a lone special character or `~` backslash-escaped; a leading `~`
-/// escaped; control characters C-style or octal.
-pub(crate) fn quote(value: &str) -> String {
-    const DOUBLE: &str = " #';${}%";
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    let quotes = if value.contains(|c| DOUBLE.contains(c)) {
-        Some('"')
-    } else if value.contains('"') {
-        Some('\'')
-    } else {
-        None
-    };
-    let mut chars = value.chars();
-    if let (Some(c), None) = (chars.next(), chars.next())
-        && c != ' '
-        && (quotes.is_some() || c == '~')
-    {
-        return format!("\\{c}");
-    }
-    let mut escaped = String::new();
-    let mut it = value.chars().peekable();
-    while let Some(c) = it.next() {
-        match c {
-            // As tmux's `utf8_stravis`: `$` only before a name (the
-            // `word-separators` default holds `$%`).
-            '$' if quotes == Some('"')
-                && !it
-                    .peek()
-                    .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{') =>
-            {
-                escaped.push('$');
-            }
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\t' => escaped.push_str("\\t"),
-            '\r' => escaped.push_str("\\r"),
-            '"' | '$' if quotes == Some('"') => {
-                escaped.push('\\');
-                escaped.push(c);
-            }
-            c if c.is_ascii_control() => escaped.push_str(&format!("\\{:03o}", c as u32)),
-            c => escaped.push(c),
-        }
-    }
-    let tilde = if escaped.starts_with('~') { "\\" } else { "" };
-    match quotes {
-        Some('"') => format!("\"{tilde}{escaped}\""),
-        Some(_) => format!("'{escaped}'"),
-        None => format!("{tilde}{escaped}"),
-    }
 }
 
 /// Where the server reads its config: the process environment (R5). Unit
@@ -3324,14 +3260,13 @@ pub(crate) fn tmux_command_line(cmds: &[Vec<String>]) -> String {
 }
 
 fn tmux_command(argv: &[String]) -> String {
-    use crate::cmd::parse::escape_arg;
     let Some((name, args)) = argv.split_first() else {
         return String::new();
     };
     let Ok(spec) = crate::compat::tmux::resolve(name) else {
         // A native-only verb: as it is.
         let mut out = vec![name.clone()];
-        out.extend(args.iter().map(|a| escape_arg(a)));
+        out.extend(args.iter().map(|a| quote::tmux_arg(a)));
         return out.join(" ");
     };
     // Flags taking a value: `[-c word]` in the usage (and `select-pane
@@ -3386,12 +3321,12 @@ fn tmux_command(argv: &[String]) -> String {
     }
     for (flag, vals) in &values {
         for v in vals {
-            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+            out.push_str(&format!(" -{flag} {}", quote::tmux_arg(v)));
         }
     }
     for a in &args[i.min(args.len())..] {
         out.push(' ');
-        out.push_str(&escape_arg(a));
+        out.push_str(&quote::tmux_arg(a));
     }
     out
 }
@@ -3401,7 +3336,12 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     let cmds: Vec<String> = b
         .cmds
         .iter()
-        .map(|argv| argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "))
+        .map(|argv| {
+            argv.iter()
+                .map(|a| quote::tmux_arg(a))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
         .collect();
     let source = match &b.source {
         BindingSource::Default => "default".to_string(),
@@ -3411,7 +3351,7 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     };
     let mut line = format!(
         "bind-key {repeat}-T {table} {} {}  # {source}",
-        quote(&key.to_string()),
+        quote::tmux_arg(&key.to_string()),
         cmds.join(" \\; ")
     );
     if let Some(desc) = &b.desc {
@@ -5189,7 +5129,7 @@ impl FormatVars for FormatCtx<'_> {
                 .as_deref()
                 .map(|argv| {
                     argv.iter()
-                        .map(|a| escape_arg(a))
+                        .map(|a| quote::tmux_arg(a))
                         .collect::<Vec<_>>()
                         .join(" ")
                 })
@@ -5206,7 +5146,7 @@ impl FormatVars for FormatCtx<'_> {
                 .as_deref()
                 .map(|argv| {
                     argv.iter()
-                        .map(|a| escape_arg(a))
+                        .map(|a| quote::tmux_arg(a))
                         .collect::<Vec<_>>()
                         .join(" ")
                 })
@@ -5477,8 +5417,6 @@ fn window_flags(
     .collect();
     format!("{activity}{rest}")
 }
-
-pub(crate) use crate::cmd::format::escape_arg;
 
 /// A pane's top-left cell in its window: the layout's, or the window's
 /// origin for a zoomed window's active pane.
@@ -6089,7 +6027,7 @@ fn list_lines(name: &str, l: &ListEntry, value_only: bool) -> String {
             if value_only {
                 format!("{v}\n")
             } else {
-                format!("{name}[{i}] {}\n", quote(v))
+                format!("{name}[{i}] {}\n", quote::tmux_arg(v))
             }
         })
         .collect()
@@ -6119,7 +6057,7 @@ fn show_list(
         if c.value_only {
             format!("{value}\n")
         } else {
-            format!("{full} {}\n", quote(value))
+            format!("{full} {}\n", quote::tmux_arg(value))
         }
     };
     if list_builtin(base).is_none() {
@@ -6979,13 +6917,6 @@ mod tests {
         assert!(list_names().all(|n| builtin(n).is_none()));
     }
 
-    #[test]
-    fn show_quotes_values_with_spaces() {
-        assert_eq!(quote("a"), "a");
-        assert_eq!(quote("a b"), "\"a b\"");
-        assert_eq!(quote(""), "''");
-    }
-
     /// Each case recorded from tmux 3.7b (`set -g @t <value>; show -g @t`)
     /// on a private socket.
     /// Recorded on tmux 3.7b (`set -g prefix X; show -gv prefix`).
@@ -7005,39 +6936,6 @@ mod tests {
             assert_eq!(validate("prefix", given), Ok(stored.to_string()), "{given}");
         }
         assert_eq!(validate("prefix", "foo"), Err("bad key: foo".to_string()));
-    }
-
-    #[test]
-    fn show_quotes_like_tmux() {
-        for (value, shown) in [
-            ("a#b", "\"a#b\""),
-            ("a{b", "\"a{b\""),
-            ("#{x}", "\"#{x}\""),
-            ("a}b", "\"a}b\""),
-            ("ab", "ab"),
-            ("a\"b", "'a\"b'"),
-            ("a'b", "\"a'b\""),
-            ("a$b", "\"a\\$b\""),
-            ("a;b", "\"a;b\""),
-            ("a\\b", "a\\\\b"),
-            ("~a", "\\~a"),
-            ("a~", "a~"),
-            ("#", "\\#"),
-            ("~", "\\~"),
-            (" ", "\" \""),
-            ("~a b", "\"\\~a b\""),
-            ("a \"b", "\"a \\\"b\""),
-            ("a `b", "\"a `b\""),
-            ("a\tb", "a\\tb"),
-            ("a\nb", "a\\nb"),
-            ("a\u{1}b", "a\\001b"),
-            ("a \\b", "\"a \\\\b\""),
-            ("a,b", "a,b"),
-            ("[a]", "[a]"),
-            ("a%b", "\"a%b\""),
-        ] {
-            assert_eq!(quote(value), shown, "{value:?}");
-        }
     }
 
     #[test]

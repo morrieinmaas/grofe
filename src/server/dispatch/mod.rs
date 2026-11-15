@@ -43,6 +43,7 @@ pub mod sorting;
 pub mod structure;
 pub mod window;
 
+use crate::cmd::NoVars;
 use std::path::{Path, PathBuf};
 
 use tokio::sync::oneshot;
@@ -516,14 +517,6 @@ pub(crate) fn pane_env(
     all.extend(compat::pane_env(state, session, pane));
     compat::with_tmux_link(&mut all);
     all
-}
-
-struct NoVars;
-
-impl cmd::FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
-    }
 }
 
 /// Spawns a pane for `window` (which may not be in the model yet) with

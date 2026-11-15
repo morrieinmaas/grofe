@@ -29,6 +29,7 @@ use tokio::task::JoinHandle;
 
 use super::io::InputQueue;
 use super::lock;
+use crate::server::spawn;
 
 /// Reads the pane's output may wait for the command.
 const QUEUE_READS: usize = 1024;
@@ -158,23 +159,16 @@ impl Pipe {
         input: bool,
         output: bool,
     ) -> stdio::Result<()> {
-        let child = {
-            let _lock = super::spawn_lock();
-            tokio::process::Command::new("/bin/sh")
-                .arg0("sh")
-                .arg("-c")
-                .arg(command)
+        let mut child = spawn::spawn(
+            spawn::sh(command, None)
                 .stdin(if output {
                     Stdio::piped()
                 } else {
                     Stdio::null()
                 })
                 .stdout(if input { Stdio::piped() } else { Stdio::null() })
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()?
-        };
-        let mut child = child;
+                .process_group(0),
+        )?;
         let id = PIPES.fetch_add(1, Ordering::Relaxed);
         let pid = child.id().unwrap_or(0);
         let (mut writer, mut reader, mut out) = (None, None, None);

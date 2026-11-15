@@ -321,6 +321,17 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
     }
 }
 
+/// An option value (tmux form) as the TOML literal a config would write.
+pub(crate) fn literal(toml: &str, value: &str) -> String {
+    match (toml_type(toml), toml, value) {
+        (Ty::Bool, _, v) => (v == "on").to_string(),
+        (Ty::Int, "status.lines", "off") => "0".to_string(),
+        (Ty::Int, "status.lines", "on") => "1".to_string(),
+        (Ty::Int, _, v) => v.to_string(),
+        (Ty::Str, _, v) => crate::util::quote::toml_str(v),
+    }
+}
+
 /// The TOML type of an option, for the config reference.
 pub fn toml_type_name(toml_key: &str) -> &'static str {
     match toml_type(toml_key) {

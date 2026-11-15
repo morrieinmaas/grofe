@@ -29,6 +29,9 @@
 //!   (mouse modes, passthrough, graphics) ahead of the client's next frame,
 //!   in the same `Output` frame.
 
+use crate::cmd::NoVars;
+use crate::cmd::format::fnmatch;
+use crate::util::quote;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -918,10 +921,7 @@ pub(crate) fn plan_command_log(
             crate::protocol::Dialect::Grofe => None,
         };
         let printed = printed.unwrap_or_else(|| {
-            let words: Vec<String> = cmd
-                .iter()
-                .map(|w| crate::server::dispatch::options::escape_arg(w))
-                .collect();
+            let words: Vec<String> = cmd.iter().map(|w| quote::tmux_arg(w)).collect();
             words.join(" ")
         });
         plan.push_back((count, Some(format!("{who} command: {printed}"))));
@@ -939,10 +939,7 @@ fn print_for_log(dialect: crate::protocol::Dialect, cmd: &[String]) -> String {
         crate::protocol::Dialect::Grofe => None,
     };
     printed.unwrap_or_else(|| {
-        let words: Vec<String> = cmd
-            .iter()
-            .map(|w| crate::server::dispatch::options::escape_arg(w))
-            .collect();
+        let words: Vec<String> = cmd.iter().map(|w| quote::tmux_arg(w)).collect();
         words.join(" ")
     })
 }
@@ -996,7 +993,6 @@ pub(crate) fn log_error(state: &mut State, who: &str, err: &str) {
 /// sorted, then the arguments, each quoted as `args_escape` quotes it.
 /// `None` for a verb tmux does not have.
 fn tmux_print(argv: &[String]) -> Option<String> {
-    use crate::server::dispatch::options::escape_arg;
     let (name, args) = argv.split_first()?;
     let spec = crate::compat::tmux::resolve(name).ok()?;
     // `[-c working-directory]` takes a value, `[-dErx]` does not.
@@ -1044,12 +1040,12 @@ fn tmux_print(argv: &[String]) -> Option<String> {
     }
     for (flag, values) in valued {
         for v in values {
-            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+            out.push_str(&format!(" -{flag} {}", quote::tmux_arg(v)));
         }
     }
     for word in args.get(i..).unwrap_or_default() {
         out.push(' ');
-        out.push_str(&escape_arg(word));
+        out.push_str(&quote::tmux_arg(word));
     }
     Some(out)
 }
@@ -1057,53 +1053,6 @@ fn tmux_print(argv: &[String]) -> Option<String> {
 /// The message log (TC.9's `show-messages`), oldest first.
 pub(crate) fn messages(state: &State) -> impl DoubleEndedIterator<Item = &(SystemTime, String)> {
     state.registry.messages.iter()
-}
-
-/// tmux's `format_pretty_time` without seconds (`#{t/p:...}`): `HH:MM`
-/// within a day, `%a%d` within the month or 28 days, `%d%b` within the
-/// year, else `%b%y`.
-pub(crate) fn pretty_time(t: SystemTime) -> String {
-    let secs = |t: SystemTime| {
-        t.duration_since(UNIX_EPOCH)
-            .map_or(0, |d| libc::time_t::try_from(d.as_secs()).unwrap_or(0))
-    };
-    let then = secs(t);
-    let now = secs(SystemTime::now()).max(then);
-    let age = now - then;
-    let (tm, now_tm) = (local_tm(then), local_tm(now));
-    let format = if age < 24 * 3600 {
-        "%H:%M"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon == now_tm.tm_mon) || age < 28 * 24 * 3600 {
-        "%a%d"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon < now_tm.tm_mon)
-        || (tm.tm_year == now_tm.tm_year - 1 && tm.tm_mon > now_tm.tm_mon)
-    {
-        "%d%b"
-    } else {
-        "%b%y"
-    };
-    strftime(format, &tm)
-}
-
-fn local_tm(t: libc::time_t) -> libc::tm {
-    // SAFETY: `localtime_r` writes into the zeroed `tm` we own (all-zero
-    // is a valid `tm`).
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        tm
-    }
-}
-
-fn strftime(format: &str, tm: &libc::tm) -> String {
-    let Ok(format) = std::ffi::CString::new(format) else {
-        return String::new();
-    };
-    let mut buf = [0u8; 64];
-    // SAFETY: `buf` is writable for its length and `strftime` writes at
-    // most that many bytes, returning how many (0 on overflow).
-    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), buf.len(), format.as_ptr(), tm) };
-    String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
 /// Client `id` redraws (`refresh-client`): only its status line with
@@ -2239,25 +2188,14 @@ fn terminal_features(model: &Model, term: &str, mut caps: Caps) -> Caps {
     let features = model.options.lookup_list("terminal-features", &[]);
     for entry in features.into_iter().flat_map(|f| f.values()) {
         let mut parts = entry.split(':');
-        let matches = parts.next().is_some_and(|pattern| glob(pattern, term));
+        let matches = parts
+            .next()
+            .is_some_and(|pattern| fnmatch(pattern.as_bytes(), term.as_bytes()));
         if matches && parts.any(|feature| feature == "sixel") {
             caps.sixel = true;
         }
     }
     caps
-}
-
-/// `fnmatch` with `*` and `?` only.
-fn glob(pattern: &str, text: &str) -> bool {
-    fn go(p: &[u8], t: &[u8]) -> bool {
-        match p.split_first() {
-            None => t.is_empty(),
-            Some((b'*', rest)) => (0..=t.len()).any(|i| go(rest, &t[i..])),
-            Some((b'?', rest)) => !t.is_empty() && go(rest, &t[1..]),
-            Some((c, rest)) => t.first() == Some(c) && go(rest, &t[1..]),
-        }
-    }
-    go(pattern.as_bytes(), text.as_bytes())
 }
 
 /// Client `c`'s current window, and whether it fits the client (then
@@ -2642,14 +2580,6 @@ fn sync_pane_defaults(model: &Model) {
             let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
             pane.handle.set_default_colours(fg, bg);
         }
-    }
-}
-
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 
@@ -4884,21 +4814,6 @@ mod tests {
         );
     }
 
-    /// tmux's `format_pretty_time`: the time of day within a day, else a
-    /// day and date, a date and month, or a month and year.
-    #[test]
-    fn pretty_times_follow_tmux() {
-        let now = SystemTime::now();
-        let t = pretty_time(now);
-        assert!(t.len() == 5 && t.as_bytes()[2] == b':', "{t}");
-        let year_ago = now - Duration::from_secs(400 * 24 * 3600);
-        let t = pretty_time(year_ago);
-        assert_eq!(t.len(), 5, "{t}");
-        assert!(t[3..].chars().all(|c| c.is_ascii_digit()), "{t}");
-        let week_ago = pretty_time(now - Duration::from_secs(7 * 24 * 3600));
-        assert!(week_ago.len() == 5 && week_ago[3..].chars().all(|c| c.is_ascii_digit()));
-    }
-
     fn held_inputs(state: &State, id: ClientId) -> Vec<Input> {
         let held = &state.clients[&id].held;
         held.iter()
@@ -5487,17 +5402,6 @@ mod tests {
         let mut s = Screen::new(4, 2);
         s.cells[0].c = c;
         s
-    }
-
-    #[test]
-    fn terminal_feature_patterns_are_globs() {
-        assert!(glob("xterm*", "xterm-256color"));
-        assert!(glob("*", "anything"));
-        assert!(glob("screen?256color", "screen-256color"));
-        assert!(glob("foot", "foot"));
-        assert!(!glob("foot", "foot-extra"));
-        assert!(!glob("xterm*", "screen"));
-        assert!(!glob("a?", "a"));
     }
 
     #[test]

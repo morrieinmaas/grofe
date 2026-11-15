@@ -45,6 +45,7 @@
 //! (`Session.env`); here are its hidden ones and the names it marks
 //! removed.
 
+use crate::cmd::NoVars;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -944,10 +945,7 @@ fn tmux_commands(cmds: &[Vec<String>]) -> String {
         if let Some((verb, args)) = argv.split_first() {
             let verb = crate::compat::tmux::resolve(verb).map_or(verb.as_str(), |s| s.name);
             words.push(verb.to_string());
-            words.extend(
-                args.iter()
-                    .map(|a| crate::server::dispatch::options::quote(a)),
-            );
+            words.extend(args.iter().map(|a| crate::util::quote::tmux_arg(a)));
         }
         words.join(" ")
     };
@@ -1986,14 +1984,6 @@ impl HookFormats {
             "hook_window_name" => text(self.hook_window_name.clone()),
             _ => None,
         }
-    }
-}
-
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 

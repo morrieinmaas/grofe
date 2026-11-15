@@ -21,6 +21,7 @@
 //! event, so `mouse_status_range` and a bare `=` target (M36-R3) work in
 //! it, a shell-form branch too.
 
+use crate::cmd::NoVars;
 use crate::cmd::{
     self, Condition, FormatVars, If, Inner, LoopItem, LoopKind, LoopSort, NameKind, Resolve, Target,
 };
@@ -237,14 +238,6 @@ impl FormatVars for MouseVars<'_> {
 
     fn reexpand(&self, text: &str) -> String {
         self.inner.vars().reexpand(text)
-    }
-}
-
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 
