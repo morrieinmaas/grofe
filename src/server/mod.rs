@@ -283,6 +283,10 @@ pub struct State {
     pub exit: bool,
     /// The resume binding sampling timer, while one runs (`resume::watch`).
     /// The snapshot writer, started by the first [`snapshot::track`].
+    /// How many tmux files `source-file` has open, one inside another, and
+    /// whether `-v` is on for the one running (`with_source_depth`).
+    pub(crate) source_depth: u32,
+    pub(crate) source_verbose: bool,
     /// `send-keys -K` nesting: how deep it runs inside the bindings of the
     /// keys it typed, and whether that hit its limit.
     pub(crate) typing: (u32, bool),
@@ -688,6 +692,8 @@ async fn serve(
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        source_depth: 0,
+        source_verbose: false,
         typing: (0, false),
         snapshot_writer: None,
         resume_timer: None,
@@ -1425,6 +1431,8 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
+        source_depth: 0,
+        source_verbose: false,
         typing: (0, false),
         snapshot_writer: None,
         resume_timer: None,

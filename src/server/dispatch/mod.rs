@@ -223,8 +223,8 @@ fn run_commands_logged(
                     ctx: ctx.clone(),
                     cmds: rest,
                     keep_going: false,
-                    depth: options::source_depth(),
-                    verbose: options::source_verbose(),
+                    depth: state.source_depth,
+                    verbose: state.source_verbose,
                 });
             }
             break;

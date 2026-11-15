@@ -114,8 +114,8 @@ pub fn source_file(state: &mut State, ctx: &ClientCtx, c: SourceFile) -> Result<
                             ctx: ctx.clone(),
                             cmds: vec![Command::SourceFile(rest)],
                             keep_going: true,
-                            depth: source_depth(),
-                            verbose: source_verbose(),
+                            depth: state.source_depth,
+                            verbose: state.source_verbose,
                         });
                     }
                 }
@@ -243,12 +243,12 @@ pub(super) fn load_one(
     let tmux =
         ctx.dialect == Dialect::Tmux || state.model.identity == crate::compat::Identity::Tmux;
     if path == Path::new("-") || tmux && path.extension().is_none_or(|e| e != "toml") {
-        let depth = source_depth();
+        let depth = state.source_depth;
         if depth >= MAX_SOURCE_DEPTH {
             return Err("too many nested files".to_string());
         }
-        let verbose = c.verbose || source_verbose();
-        let parsed = with_source_depth(depth + 1, verbose, || {
+        let verbose = c.verbose || state.source_verbose;
+        let parsed = with_source_depth(state, depth + 1, verbose, |state| {
             parse_tmux_file(state, ctx, run, path, c.parse_only, verbose)
         })?;
         return Ok(Loaded::Tmux(Parsed {
@@ -293,32 +293,24 @@ pub(super) fn apply_toml(state: &mut State, path: &Path) -> Result<String, Strin
 /// nested files`, exit 1, the server up).
 pub(super) const MAX_SOURCE_DEPTH: u32 = 50;
 
-thread_local! {
-    /// The tmux files being sourced now, one inside another (the actor's
-    /// stack). A held file's later lines run outside it, so a
-    /// [`super::super::client::HeldFrame`] carries the depth it was held at and
-    /// runs under it again ([`with_source_depth`]).
-    static SOURCE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// How many tmux files are being sourced, one inside another, right now.
-pub(crate) fn source_depth() -> u32 {
-    SOURCE_DEPTH.get()
-}
-
-/// Runs `f` at source-file depth `depth`, then puts the old depth back.
-pub(crate) fn with_source_depth<T>(depth: u32, verbose: bool, f: impl FnOnce() -> T) -> T {
-    let old = SOURCE_DEPTH.replace(depth);
-    let was = SOURCE_VERBOSE.replace(verbose);
-    let out = f();
-    SOURCE_DEPTH.set(old);
-    SOURCE_VERBOSE.set(was);
+/// Runs `f` at source-file depth `depth` (`State::source_depth`: how many
+/// tmux files are being sourced, one inside another, right now) with
+/// `source-file -v` as `verbose`, then puts the old ones back. A held
+/// file's later lines run outside it, so a
+/// [`super::super::client::HeldFrame`] carries the depth it was held at and
+/// runs under it again.
+pub(crate) fn with_source_depth<T>(
+    state: &mut State,
+    depth: u32,
+    verbose: bool,
+    f: impl FnOnce(&mut State) -> T,
+) -> T {
+    let old = std::mem::replace(&mut state.source_depth, depth);
+    let was = std::mem::replace(&mut state.source_verbose, verbose);
+    let out = f(state);
+    state.source_depth = old;
+    state.source_verbose = was;
     out
-}
-
-/// Whether `source-file -v` is on for the file being sourced now.
-pub(crate) fn source_verbose() -> bool {
-    SOURCE_VERBOSE.get()
 }
 
 /// Reads a config file for [`source_tmux_file`]: `%if` conditions are
@@ -349,11 +341,6 @@ impl crate::cmd::ConfigHost for FileHost<'_> {
             crate::server::hooks::set_global(self.state, name, Some(value.to_string()), hidden);
         }
     }
-}
-
-thread_local! {
-    /// `source-file -v` is on for the files it sources in turn.
-    static SOURCE_VERBOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A command as `source-file -v` prints it (tmux's `cmd_print`, recorded):
@@ -486,7 +473,7 @@ pub(super) fn run_parsed(state: &mut State, parsed: Parsed) -> Result<String, St
         verbose,
         ..
     } = parsed;
-    with_source_depth(depth, verbose, || {
+    with_source_depth(state, depth, verbose, |state| {
         let mut out = String::new();
         let mut errors = Vec::new();
         let mut groups = groups.into_iter();
