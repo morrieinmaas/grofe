@@ -320,6 +320,15 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
     }
 }
 
+/// The TOML type of an option, for the config reference.
+pub fn toml_type_name(toml_key: &str) -> &'static str {
+    match toml_type(toml_key) {
+        Ty::Bool => "boolean",
+        Ty::Int => "integer",
+        Ty::Str => "string",
+    }
+}
+
 /// The tmux option name for a TOML key.
 pub fn tmux_name(toml_key: &str) -> Option<&'static str> {
     OPTION_NAMES
