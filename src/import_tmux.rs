@@ -2303,7 +2303,7 @@ impl Importer {
                     tilde(&entry.file, self.home.as_deref()),
                     entry.line,
                     local_key(toml_key),
-                    literal(toml_key, &entry.value)
+                    config::literal(toml_key, &entry.value)
                 ),
             ));
         }
@@ -2334,7 +2334,7 @@ impl Importer {
                     "# {}:{}\n{},\n",
                     tilde(&c.file, self.home.as_deref()),
                     c.line,
-                    quote(&c.text)
+                    quote::toml_str(&c.text)
                 ));
             }
             text.push_str("]\n");
@@ -2388,7 +2388,7 @@ impl Importer {
                 "\n[status.sources.{name}]\n# {}:{}\ncmd = {}\n",
                 tilde(&s.file, self.home.as_deref()),
                 s.line,
-                quote(&s.cmd)
+                quote::toml_str(&s.cmd)
             ));
         }
 
@@ -2410,7 +2410,7 @@ impl Importer {
                     tilde(&e.file, self.home.as_deref()),
                     e.line,
                     key_toml(name),
-                    quote(&e.value)
+                    quote::toml_str(&e.value)
                 ));
             }
         }
@@ -2423,7 +2423,7 @@ impl Importer {
                     tilde(&h.file, self.home.as_deref()),
                     h.line,
                     h.event,
-                    quote(&h.command)
+                    quote::toml_str(&h.command)
                 ));
             }
         }
@@ -2451,7 +2451,7 @@ impl Importer {
                 out.push_str(&format!(
                     "{} = {}\n",
                     key_toml(&b.key.to_string()),
-                    binding_value(b)
+                    quote::toml_binding(&b.command, &[("desc", b.desc.as_deref())], b.repeat)
                 ));
             }
         }
@@ -2743,55 +2743,17 @@ fn local_key(toml_key: &str) -> &str {
     toml_key.rsplit_once('.').map_or(toml_key, |(_, k)| k)
 }
 
-/// A value in its config literal form, the way `show-config`'s private
-/// `literal()` in `config/cli.rs` renders it (the same few lines, copied
-/// here rather than exposed: `cli.rs` stays untouched).
-fn literal(toml: &str, value: &str) -> String {
-    match (toml_type(toml), toml, value) {
-        (Ty::Bool, _, v) => (v == "on").to_string(),
-        (Ty::Int, "status.lines", "off") => "0".to_string(),
-        (Ty::Int, "status.lines", "on") => "1".to_string(),
-        (Ty::Int, _, v) => v.to_string(),
-        (Ty::Str, _, v) => quote(v),
-    }
-}
-
-fn quote(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
-}
-
-fn bare_or_quoted(s: &str) -> String {
-    let bare = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if bare { s.to_string() } else { quote(s) }
-}
-
-/// A binding's key, as a TOML key: [`bare_or_quoted`], except a lone `-`
+/// A binding's key, as a TOML key: [`quote::toml_key`], except a lone `-`
 /// is always quoted too. The brief lists it alongside `|`, `(` and `"` as
-/// needing quotes; `bare_or_quoted` alone (copied from `config/cli.rs`,
-/// which never renders a lone `-` key) would leave it bare, since a
+/// needing quotes; `toml_key` alone (which `show-config` uses, and which
+/// never renders a lone `-` key) would leave it bare, since a
 /// single dash is technically a legal bare TOML key.
 fn key_toml(s: &str) -> String {
     if s == "-" {
-        quote(s)
+        quote::toml_str(s)
     } else {
-        bare_or_quoted(s)
+        quote::toml_key(s)
     }
-}
-
-fn binding_value(b: &BindingEntry) -> String {
-    if b.desc.is_none() && !b.repeat {
-        return quote(&b.command);
-    }
-    let mut fields = vec![format!("cmd = {}", quote(&b.command))];
-    if let Some(d) = &b.desc {
-        fields.push(format!("desc = {}", quote(d)));
-    }
-    if b.repeat {
-        fields.push("repeat = true".to_string());
-    }
-    format!("{{ {} }}", fields.join(", "))
 }
 
 #[cfg(test)]
