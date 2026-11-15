@@ -14,6 +14,7 @@
 - [Messages and the prompt](messages.md)
 - [Plugins](plugins.md)
 - [Troubleshooting](troubleshooting.md)
+- [Contributing](contributing.md)
 
 # Reference
 

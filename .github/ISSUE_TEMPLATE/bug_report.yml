@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in grofe does not work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The commands, keys or config that make it happen.
+      placeholder: |
+        1. grofe new-session -d -s demo
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: grofe version
+      description: The output of `grofe -V`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15, Ubuntu 24.04, ...
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      placeholder: Ghostty 1.2, WezTerm, ...
+    validations:
+      required: true
+  - type: dropdown
+    id: tmux-name
+    attributes:
+      label: Does it also happen when grofe runs under the `tmux` name?
+      options:
+        - "Yes"
+        - "No"
+        - Not tried
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Config snippets, the server log (`just log`), screenshots.

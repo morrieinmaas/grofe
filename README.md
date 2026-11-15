@@ -1,5 +1,10 @@
 # grofe
 
+[![CI](https://img.shields.io/github/actions/workflow/status/morrieinmaas/grofe/ci.yml?branch=main&label=CI)](https://github.com/morrieinmaas/grofe/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/morrieinmaas/grofe)](https://github.com/morrieinmaas/grofe/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/morrieinmaas/grofe?style=social)](https://github.com/morrieinmaas/grofe)
+
 A terminal multiplexer for people who like tmux and are tired of working
 around it.
 
@@ -118,17 +123,14 @@ See [Plugins](https://morrieinmaas.github.io/grofe/docs/plugins.html) and
 
 ## Contributing
 
-Issues and ideas are welcome; the
-[design document](docs/specs/2026-09-23-grofe-design.md) is the best place to
-start. When you report a bug, include `grofe -V`, your OS and terminal, and
-whether it also happens under the `tmux` name.
+Issues and ideas are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the
+build, the checks a change must pass (`just check`), tests, commits and the
+docs. When you report a bug, include `grofe -V`, your OS and terminal, and
+whether it also happens under the `tmux` name. Security problems go through
+[SECURITY.md](SECURITY.md).
 
-A change must pass `just check` (`cargo fmt --check`, clippy with
-`-D warnings`, `cargo test` and `bats tests/cli.bats`). Integration tests
-start their own servers on private sockets, so they never touch a grofe or
-tmux you have running. `just docs` regenerates the options reference and
-builds the book; `just site-serve` builds the whole site and serves it on
-localhost.
+If grofe is useful to you, [star it on GitHub](https://github.com/morrieinmaas/grofe);
+it helps others find it.
 
 ## License
 
