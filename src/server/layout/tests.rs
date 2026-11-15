@@ -2566,9 +2566,9 @@ fn find_adjacent_in_a_framed_window() {
     assert_eq!(find(&tree, B, Edge::Down), Some(C));
 }
 
-/// A trimmed framed window (its top gap given back) finds the same
-/// neighbours: from the top right of a 2x2, left is the top left even
-/// when the bottom left was active more recently, and down is below.
+/// A framed 2x2 finds its neighbours, wrapping at the window's edges,
+/// whatever the trim (none, top, bottom, both) and whichever pane was
+/// active last: each move has exactly one pane across the edge.
 #[test]
 fn find_adjacent_in_a_trimmed_framed_window() {
     let area = rect(80, 24);
@@ -2580,14 +2580,40 @@ fn find_adjacent_in_a_trimmed_framed_window() {
     tree.split(area, B, Dir::Vertical, D, SplitSize::Half)
         .unwrap();
     tree.set_pad(2);
-    tree.set_trim(1, 1);
-    let recent = |p| if p == C { 9 } else { 0 };
-    let find = |p, e| find_adjacent(&tree.compute(area), area, PaneStatus::Off, p, e, recent);
-    assert_eq!(find(B, Edge::Left), Some(A));
-    assert_eq!(find(B, Edge::Down), Some(D));
-    assert_eq!(find(A, Edge::Down), Some(C));
-    assert_eq!(find(D, Edge::Up), Some(B));
-    assert_eq!(find(D, Edge::Left), Some(C));
+    // A B
+    // C D
+    let moves = [
+        (A, Edge::Left, B),
+        (A, Edge::Right, B),
+        (A, Edge::Up, C),
+        (A, Edge::Down, C),
+        (B, Edge::Left, A),
+        (B, Edge::Right, A),
+        (B, Edge::Up, D),
+        (B, Edge::Down, D),
+        (C, Edge::Left, D),
+        (C, Edge::Right, D),
+        (C, Edge::Up, A),
+        (C, Edge::Down, A),
+        (D, Edge::Left, C),
+        (D, Edge::Right, C),
+        (D, Edge::Up, B),
+        (D, Edge::Down, B),
+    ];
+    for trim in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        tree.set_trim(trim.0, trim.1);
+        let rects = tree.compute(area);
+        for last in [A, B, C, D] {
+            let recent = |p| u64::from(p == last);
+            for (from, edge, to) in moves {
+                assert_eq!(
+                    find_adjacent(&rects, area, PaneStatus::Off, from, edge, recent),
+                    Some(to),
+                    "trim {trim:?}, last {last:?}: {from:?} {edge:?}"
+                );
+            }
+        }
+    }
 }
 
 /// Every framed content rect has a cell, sits `pad` in from the
