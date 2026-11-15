@@ -14,6 +14,7 @@ pub mod lua;
 pub mod pack;
 pub mod paths;
 pub mod protocol;
+pub mod remote;
 pub mod server;
 pub mod term;
 pub mod types;
