@@ -303,6 +303,9 @@ pub struct State {
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
+    /// Restored panes whose process runs their saved resume, by pane and
+    /// spawn generation (`restore`).
+    pub(crate) from_resume: Vec<(crate::types::PaneId, u64)>,
     /// Started implicitly by a session-creating command (`__server
     /// --exit-when-empty`): exits once it has no sessions and no client
     /// connections, even if it never had a session. `start-server` leaves
@@ -704,6 +707,7 @@ async fn serve(
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        from_resume: Vec::new(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -1442,6 +1446,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        from_resume: Vec::new(),
         exit: false,
         exit_when_empty: false,
         connections: 0,

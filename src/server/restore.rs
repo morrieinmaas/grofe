@@ -26,7 +26,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::paths::{self, Env};
@@ -211,14 +210,6 @@ impl Clock {
 /// that spawn's generation: their exit respawns a shell
 /// ([`on_pane_exited`]); a later process in the pane (another generation)
 /// does not count.
-// ponytail: one server per process, so one set per process; `State` has
-// no field for it (rule 4).
-static FROM_RESUME: Mutex<Vec<(PaneId, u64)>> = Mutex::new(Vec::new());
-
-fn from_resume() -> std::sync::MutexGuard<'static, Vec<(PaneId, u64)>> {
-    FROM_RESUME.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// Recreates everything in `snap` (T4.3, T4.4), only into a server with
 /// no session. A session, window or pane the snapshot repeats is skipped
 /// with a log line; a window whose layout does not hold its panes gets
@@ -503,7 +494,7 @@ fn restore_pane(
         // Saved again as it was: the spawn argv and the resume (which
         // `spawn_pane` took from what it ran).
         live.argv = p.argv.clone();
-        from_resume().push((pane, live.handle.generation()));
+        state.from_resume.push((pane, live.handle.generation()));
     }
     if !delay.is_zero() {
         when_started(state, pane, clock);
@@ -557,7 +548,7 @@ fn log_started(state: &State, pane: PaneId, at: u128) {
     if p.handle.pid().is_none() {
         return;
     }
-    let resumed = from_resume().contains(&(pane, p.handle.generation()));
+    let resumed = state.from_resume.contains(&(pane, p.handle.generation()));
     match (&p.resume, resumed) {
         (Some(argv), true) => eprintln!(
             "grofe server: restore: pane {}: resume started at +{at} ms: {}",
@@ -653,7 +644,7 @@ pub fn on_pane_exited(state: &mut State, pane: PaneId) -> bool {
     };
     let key = (pane, p.handle.generation());
     {
-        let mut set = from_resume();
+        let set = &mut state.from_resume;
         let Some(at) = set.iter().position(|k| *k == key) else {
             return false;
         };
