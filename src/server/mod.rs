@@ -278,8 +278,6 @@ pub struct State {
     /// What a request printed before the command that failed it: the
     /// reply carries it next to the error, as tmux prints both (FE.2).
     pub(crate) failed_out: String,
-    /// The key whose binding is running its commands (`show-messages`).
-    pub(crate) event_key: Option<String>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
@@ -690,7 +688,6 @@ async fn serve(
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        event_key: None,
         typing: (0, false),
         snapshot_writer: None,
         resume_timer: None,
@@ -1428,7 +1425,6 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        event_key: None,
         typing: (0, false),
         snapshot_writer: None,
         resume_timer: None,

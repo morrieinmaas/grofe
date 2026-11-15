@@ -1847,7 +1847,7 @@ pub fn command_prompt(
     }
     // An incremental prompt never holds its caller, and starts by running
     // its template with a bare `=`.
-    open(state, id, prompt, !c.background && !incremental);
+    open(state, ctx, id, prompt, !c.background && !incremental);
     if incremental {
         run_incremental(state, id, '=', "");
     }
@@ -1925,6 +1925,7 @@ pub fn ask(
     initial: &str,
     kind: &str,
     single: bool,
+    key: Option<String>,
     then: PromptFn,
 ) {
     let kind = PROMPT_TYPES.iter().position(|k| *k == kind).unwrap_or(0);
@@ -1935,7 +1936,7 @@ pub fn ask(
         ..Prompt::new(label.to_string(), initial, String::new())
     };
     let mut prompt = prompt;
-    prompt.key = state.event_key.clone();
+    prompt.key = key;
     state.prompts.open.insert(id, prompt);
     clients::mark_dirty(state, id);
 }
@@ -1996,7 +1997,7 @@ pub fn confirm(
         default_yes: c.default_yes,
         ..Prompt::new(label, "", command)
     };
-    open(state, id, prompt, !c.background);
+    open(state, ctx, id, prompt, !c.background);
     Ok(String::new())
 }
 
@@ -2035,9 +2036,9 @@ fn expand_for(state: &State, id: ClientId, text: &str) -> String {
 /// to close: a CLI request's reply, and a binding's later commands and its
 /// client's input, as tmux 3.7b's command queue waits (recorded,
 /// `tm_6/waits`).
-fn open(state: &mut State, id: ClientId, prompt: Prompt, wait: bool) {
+fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, prompt: Prompt, wait: bool) {
     let mut prompt = prompt;
-    prompt.key = state.event_key.clone();
+    prompt.key = ctx.request.event_key.clone();
     state.prompts.open.insert(id, prompt);
     if wait {
         let reply = dispatch::defer_reply(state);

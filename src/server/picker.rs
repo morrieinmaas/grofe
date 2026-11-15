@@ -295,6 +295,7 @@ fn ctrl(state: &mut State, client: ClientId, pane: Option<PaneId>, c: char) -> R
                 "",
                 "command",
                 true,
+                None,
                 Box::new(move |_state, _client, text| {
                     if text.eq_ignore_ascii_case("y") {
                         let argv = ["kill-pane", "-t", &pane.to_string()].map(String::from);

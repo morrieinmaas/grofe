@@ -711,7 +711,7 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
         ctx: ctx.clone(),
         look: menu.look,
         no_mouse,
-        key: state.event_key.clone(),
+        key: ctx.request.event_key.clone(),
         event,
     };
     if no_mouse {

@@ -888,7 +888,7 @@ pub(super) fn print_for_log(dialect: crate::protocol::Dialect, cmd: &[String]) -
 /// Logs `cmd`, a command a key's binding runs in a branch of its own
 /// (`if-shell`), as run by that key.
 pub(crate) fn log_key_command(state: &mut State, ctx: &ClientCtx, cmd: &[String]) {
-    let Some(key) = state.event_key.clone() else {
+    let Some(key) = ctx.request.event_key.clone() else {
         return;
     };
     let Some(who) = ctx

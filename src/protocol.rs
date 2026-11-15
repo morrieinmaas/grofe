@@ -87,6 +87,8 @@ pub struct RequestCtx {
     /// A CLI request's stdin, umask and process (TM.7); `None` for a
     /// request that is not one.
     pub cli_io: Option<std::sync::Arc<CliIo>>,
+    /// The key whose binding is running the command (`show-messages`).
+    pub event_key: Option<String>,
 }
 
 /// What a CLI request brings besides its argv (TM.7).

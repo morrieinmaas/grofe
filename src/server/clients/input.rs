@@ -611,6 +611,10 @@ pub(super) fn run_from(state: &mut State, mut run: BindingRun) {
         let ctx = ClientCtx {
             pane,
             dialect: run.dialect,
+            request: crate::protocol::RequestCtx {
+                event_key: run.key.clone(),
+                ..crate::protocol::RequestCtx::default()
+            },
             ..c.ctx.clone()
         };
         let bound = run.bound;
@@ -631,12 +635,10 @@ pub(super) fn run_from(state: &mut State, mut run: BindingRun) {
                 format!("{} key {key}: {printed}", who.unwrap_or_default()),
             );
         }
-        let saved = std::mem::replace(&mut state.event_key, run.key.clone());
         let result = match &run.mouse {
             Some(target) => MouseState::with_current(state, Some(target.clone()), one),
             None => one(state),
         };
-        state.event_key = saved;
         let wait = binding_wait(state, id);
         // What a command prints shows in the view mode of the client's
         // pane (`server_client_print`), the error on its status line.

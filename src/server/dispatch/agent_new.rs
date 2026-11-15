@@ -137,6 +137,7 @@ impl Launch {
             "",
             "command",
             false,
+            self.ctx.request.event_key.clone(),
             Box::new(move |state, client, text| {
                 let text = text.trim().to_string();
                 let result = if text.is_empty() {
