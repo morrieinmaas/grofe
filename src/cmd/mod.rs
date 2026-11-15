@@ -10,6 +10,8 @@
 pub mod format;
 pub mod keys;
 pub mod parse;
+#[cfg(test)]
+mod parse_pin;
 pub mod target;
 
 pub use format::{
