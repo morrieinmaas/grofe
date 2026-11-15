@@ -1347,6 +1347,32 @@ impl PaneHandle {
                 };
                 Some(u8::from(mouse_mode(mode) == want).to_string())
             }
+            // DECSCUSR as tmux reports it. `default` is the style nothing
+            // has set; alacritty cannot tell it from a steady block.
+            // ponytail: an explicit steady block (DECSCUSR 2) reads
+            // `default`; `cursor_colour` (OSC 12) is not tracked, `none`.
+            "cursor_shape" => {
+                let style = emu.term.cursor_style();
+                Some(
+                    match style.shape {
+                        VteCursorShape::Underline => "underline",
+                        VteCursorShape::Beam => "bar",
+                        _ if style.blinking => "block",
+                        _ => "default",
+                    }
+                    .to_string(),
+                )
+            }
+            "cursor_blinking" => Some(u8::from(emu.term.cursor_style().blinking).to_string()),
+            "cursor_colour" => Some("none".to_string()),
+            "cursor_very_visible" => Some("0".to_string()),
+            // The cursor the main screen saved on entering the alternate
+            // one; tmux's unset value (-1 as unsigned) outside it.
+            // ponytail: alacritty keeps the saved cursor private, so inside
+            // the alternate screen there is no answer.
+            "alternate_saved_x" | "alternate_saved_y" if !mode.contains(TermMode::ALT_SCREEN) => {
+                Some(u32::MAX.to_string())
+            }
             "mouse_utf8_flag" => flag(TermMode::UTF8_MOUSE),
             "mouse_sgr_flag" => flag(TermMode::SGR_MOUSE),
             _ => None,
