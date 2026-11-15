@@ -387,6 +387,7 @@ fn raw_attach(
             env: Vec::new(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         },
         cols,
         rows,

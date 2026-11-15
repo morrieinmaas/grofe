@@ -91,6 +91,7 @@ mod tests {
             env: Vec::new(),
             client: None,
             dialect: Dialect::Tmux,
+            request: Default::default(),
         };
         let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
         dispatch_command(&argv, &ctx).map_err(|e| e.0)

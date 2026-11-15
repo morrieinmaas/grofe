@@ -274,6 +274,7 @@ fn state_with_client() -> (State, ClientId) {
                 env: Vec::new(),
                 client: Some(id),
                 dialect: crate::protocol::Dialect::Grofe,
+                request: Default::default(),
             },
             size: (80, 24),
             pending_size: None,
@@ -950,6 +951,7 @@ async fn graphics_ok_follows_the_attached_clients() {
         env: Vec::new(),
         client: None,
         dialect: crate::protocol::Dialect::Grofe,
+        request: Default::default(),
     };
     let run = |state: &mut State, words: &[&str]| {
         let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();

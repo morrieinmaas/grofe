@@ -1700,6 +1700,7 @@ fn hook_ctx(state: &State, q: &Queued) -> ClientCtx {
         env: Vec::new(),
         client: q.fired.client.filter(|c| state.clients.contains_key(c)),
         dialect: q.dialect,
+        request: Default::default(),
     }
 }
 
@@ -1923,6 +1924,7 @@ fn context_pane(state: &State, pane: Option<PaneId>) -> Option<PaneId> {
             env: Vec::new(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         };
         model.resolve_pane(&Target::Current, &ctx).ok()
     })

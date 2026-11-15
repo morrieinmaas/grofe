@@ -96,27 +96,16 @@ use pane::{PaneEvent, PaneEventKind};
 /// these lines to prove one server per socket.
 pub const START_MARKER: &str = "grofe server starting";
 
-/// What a CLI request brings besides its argv (TM.7).
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CliIo {
-    /// Its stdin, decoded; `None` when it sent none.
-    pub stdin: Option<Vec<u8>>,
-    pub umask: Option<u32>,
-    /// The requesting process (the socket peer), when the OS says.
-    pub pid: Option<i32>,
-}
-
-impl CliIo {
-    fn of(req: &Request, pid: Option<i32>) -> CliIo {
-        use base64::Engine as _;
-        CliIo {
-            stdin: req
-                .stdin
-                .as_deref()
-                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
-            umask: req.umask,
-            pid,
-        }
+/// What a CLI request brings besides its argv (TM.7), for its context.
+fn cli_io_of(req: &Request, pid: Option<i32>) -> protocol::CliIo {
+    use base64::Engine as _;
+    protocol::CliIo {
+        stdin: req
+            .stdin
+            .as_deref()
+            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
+        umask: req.umask,
+        pid,
     }
 }
 
@@ -289,9 +278,6 @@ pub struct State {
     /// What a request printed before the command that failed it: the
     /// reply carries it next to the error, as tmux prints both (FE.2).
     pub(crate) failed_out: String,
-    /// The running CLI request's stdin and umask, for `load-buffer -` and
-    /// the files `save-buffer` creates (TM.7); `None` outside one.
-    pub(crate) cli_io: Option<CliIo>,
     /// The key whose binding is running its commands (`show-messages`).
     pub(crate) event_key: Option<String>,
     /// Set by a command (`kill-server`, the last session closing): the
@@ -704,7 +690,6 @@ async fn serve(
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        cli_io: None,
         event_key: None,
         typing: (0, false),
         snapshot_writer: None,
@@ -955,8 +940,8 @@ fn handle(state: &mut State, msg: ServerMsg) {
             }
             // Parsed once: classified, then run.
             state.failed_out.clear();
-            state.cli_io = Some(CliIo::of(&req, pid));
-            let ctx = crate::compat::forget_stale_pane(state, ctx);
+            let mut ctx = crate::compat::forget_stale_pane(state, ctx);
+            ctx.request.cli_io = Some(std::sync::Arc::new(cli_io_of(&req, pid)));
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors
@@ -969,7 +954,6 @@ fn handle(state: &mut State, msg: ServerMsg) {
                 _ => Default::default(),
             };
             let result = dispatch::run_parsed(state, &ctx, parsed, &mut log);
-            state.cli_io = None;
             if let Err(e) = &result {
                 clients::log_error(state, &who, e);
             }
@@ -1385,6 +1369,7 @@ pub(crate) fn test_ctx() -> ClientCtx {
         env: Vec::new(),
         client: None,
         dialect: protocol::Dialect::Grofe,
+        request: Default::default(),
     }
 }
 
@@ -1443,7 +1428,6 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        cli_io: None,
         event_key: None,
         typing: (0, false),
         snapshot_writer: None,

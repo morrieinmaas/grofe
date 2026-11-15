@@ -404,8 +404,8 @@ pub(super) fn parse_tmux_file(
 ) -> Result<Parsed, String> {
     let text = if path == Path::new("-") {
         // The CLI client's stdin; an attached client has none (tmux's EBADF).
-        match &state.cli_io {
-            Some(crate::server::CliIo {
+        match ctx.request.cli_io.as_deref() {
+            Some(crate::protocol::CliIo {
                 stdin: Some(data), ..
             }) => String::from_utf8_lossy(data).into_owned(),
             _ => return Err("Bad file descriptor: -".to_string()),

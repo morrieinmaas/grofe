@@ -116,7 +116,7 @@ pub fn set(state: &mut State, ctx: &ClientCtx, pane: PaneId, what: Set) -> Resul
         .panes
         .get(&pane)
         .ok_or_else(|| format!("can't find pane: {pane}"))?;
-    let caller = state.cli_io.as_ref().and_then(|io| io.pid);
+    let caller = ctx.request.cli_io.as_ref().and_then(|io| io.pid);
     let (resume, expect, binding) = match what {
         Set::Clear => (None, None, None),
         Set::Resume(argv) => {

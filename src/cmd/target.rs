@@ -908,6 +908,7 @@ mod tests {
             env: Vec::new(),
             client: None,
             dialect: crate::protocol::Dialect::Grofe,
+            request: Default::default(),
         }
     }
 
