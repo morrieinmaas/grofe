@@ -1,0 +1,85 @@
+name: Pages
+
+# The project site: the landing page (site/), the mdBook guide and generated
+# options reference (docs/book/) and the vhs screenshots (docs/tapes/),
+# assembled by scripts/site.sh as `just site` does locally. Pull requests
+# build it and keep it as an artifact; main also deploys it to GitHub Pages.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  MDBOOK_VERSION: 0.5.4
+  VHS_VERSION: 0.12.1
+  TTYD_VERSION: 1.7.7
+  NERD_FONTS_VERSION: v3.4.0
+
+jobs:
+  build:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml's channel.
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build grofe
+        run: cargo build --release --locked
+
+      - name: Install mdbook, vhs, ttyd, ffmpeg and a Nerd Font
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fontconfig unzip vim bsdextrautils
+          mkdir -p "$HOME/.local/bin" "$HOME/.local/share/fonts"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.local/bin"
+          curl -fsSL "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          find "$RUNNER_TEMP" -name vhs -type f -exec install -m 755 {} "$HOME/.local/bin/vhs" \;
+          curl -fsSL -o "$HOME/.local/bin/ttyd" \
+            "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64"
+          chmod +x "$HOME/.local/bin/ttyd"
+          curl -fsSL -o "$RUNNER_TEMP/font.zip" \
+            "https://github.com/ryanoasis/nerd-fonts/releases/download/${NERD_FONTS_VERSION}/JetBrainsMono.zip"
+          unzip -o -q "$RUNNER_TEMP/font.zip" -d "$HOME/.local/share/fonts/JetBrainsMono"
+          fc-cache -f
+          fonts=$(fc-list : family)
+          grep -q "JetBrainsMono Nerd Font" <<< "$fonts"
+
+      - name: Assemble the site
+        env:
+          GROFE_BIN: ${{ github.workspace }}/target/release/grofe
+        run: scripts/site.sh _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

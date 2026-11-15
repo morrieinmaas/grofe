@@ -850,3 +850,35 @@ fn apply_config_copies_agent_surface_tables() {
     assert_eq!(state.agents_picker.width_pct, 55);
     assert_eq!(state.agents_grid.tile_width, 33);
 }
+
+/// Every built-in option, scalar or list, says what it does: the
+/// generated reference prints it.
+#[test]
+fn every_builtin_has_a_doc() {
+    let missing: Vec<&str> = BUILTINS
+        .iter()
+        .filter(|b| b.doc.trim().is_empty())
+        .map(|b| b.name)
+        .chain(
+            LISTS
+                .iter()
+                .filter(|l| l.doc.trim().is_empty())
+                .map(|l| l.name),
+        )
+        .collect();
+    assert!(missing.is_empty(), "options with no doc: {missing:?}");
+}
+
+/// Every option in the reference has its TOML key, so the book never
+/// shows an option the config cannot set.
+#[test]
+fn reference_lists_every_option_with_its_toml_key() {
+    let text = reference_markdown();
+    for name in BUILTINS.iter().map(|b| b.name).chain(list_names()) {
+        assert!(text.contains(&format!("\n## {name}\n")), "{name} missing");
+    }
+    assert!(
+        !text.contains("TOML key**: `(none)`"),
+        "an option has no TOML key"
+    );
+}
