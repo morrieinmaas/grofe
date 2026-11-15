@@ -3162,14 +3162,14 @@ fn split_commands(
             break;
         };
         let fresh = !l.started;
-        if !c.is_whitespace() && !(c == '\\' && fresh) {
+        if !c.is_ascii_whitespace() && !(c == '\\' && fresh) {
             l.escaped_semicolon = false;
         }
         if fresh {
             l.formats = 0;
         }
         match c {
-            c if c.is_whitespace() => l.end_word(),
+            c if c.is_ascii_whitespace() => l.end_word(),
             // A command cannot start with a list (tmux's grammar: `{{`
             // is a syntax error, recorded).
             '{' if fresh && l.words.is_empty() => return Err(syntax_error()),
@@ -6786,6 +6786,26 @@ mod scratchpad_tests {
             Ok(Command::ChooseScratchpad)
         ));
         assert!(parse(&argv(&["choose-scratchpad", "x"])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod fuzz_regression_tests {
+    use super::*;
+
+    /// Found by the `parse_command` fuzz target: only ASCII whitespace
+    /// separates words, as in tmux. A no-break space or U+0085 is a word
+    /// character, so `escape_arg` need not quote it.
+    #[test]
+    fn non_ascii_whitespace_is_part_of_a_word() {
+        for sep in ['\u{85}', '\u{a0}', '\u{2003}'] {
+            let text = format!("send-keys a{sep}b");
+            assert_eq!(
+                split_command_string(&text),
+                Ok(vec![vec!["send-keys".to_string(), format!("a{sep}b")]]),
+                "{sep:?}"
+            );
+        }
     }
 }
 
