@@ -24,8 +24,7 @@ under the `tmux` name they are unknown commands, as they are in tmux.
    ```
 
 2. Start an agent in a grofe pane as usual. To let grofe start it with
-   `grofe agent new claude`, first tell it the command (see
-   [Starting agents](#starting-agents)).
+   `grofe agent new claude` (see [Starting agents](#starting-agents)).
 3. Press `prefix u` to jump to the agent that needs you most.
 
 Agents with no hooks still show up: grofe recognises them by program name and
@@ -141,9 +140,8 @@ grofe agent new codex -p               # split the current pane instead
 grofe agent new claude -w -b fix/api   # in a new git worktree on branch fix/api
 ```
 
-The built-in kinds know how to recognise an agent but not how to start one,
-so set `command` for each kind you want `agent new` to run; without it,
-`agent new` says the kind has no command:
+Each built-in kind starts the program of its own name. To run something else,
+set `command` for the kind:
 
 ```toml
 [agents.kinds.claude]
@@ -202,7 +200,7 @@ scan-interval = "1s"      # how often a busy pane's program is checked
 [agents.kinds.claude]     # merges over the built-in kind; enabled = false removes it
 match = ["claude"]
 resume = "claude --resume {id}"
-# command = "claude"      # not set by default; needed for `agent new`
+# command = "claude"      # default: the kind's own name
 # worktree = "ask"        # overrides agents.new.worktree for this kind
 
 [agents.new]
