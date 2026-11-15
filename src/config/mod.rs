@@ -42,7 +42,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("history-limit", "history-limit"),
     ("mouse", "mouse"),
     ("remain-on-exit", "remain-on-exit"),
-    // M4 (spec §6): read by T4.3 and T4.4.
+    // Spec §6.
     ("restore-on-start", "restore-on-start"),
     ("restore-stagger-ms", "restore-stagger-ms"),
     ("start-from-tmux", "start-from-tmux"),
@@ -147,7 +147,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     // Clock mode (B1d), by tmux's names.
     ("clock-mode-colour", "clock-mode-colour"),
     ("clock-mode-style", "clock-mode-style"),
-    // Copy mode (M5 stub).
+    // Copy mode.
     ("word-separators", "word-separators"),
     ("wrap-search", "wrap-search"),
     ("copy-command", "copy-command"),
@@ -245,6 +245,7 @@ pub const LIST_NAMES: &[(&str, &str)] = &[
     ("codepoint-widths", "codepoint-widths"),
     ("pane-colours", "pane-colours"),
     ("user-keys", "user-keys"),
+    ("copy-hint-patterns", "copy-hint-patterns"),
 ];
 
 /// The tmux name of a list option's TOML key.
@@ -317,6 +318,17 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "prompt-history-limit"
         | "restore-stagger-ms" => Ty::Int,
         _ => Ty::Str,
+    }
+}
+
+/// An option value (tmux form) as the TOML literal a config would write.
+pub(crate) fn literal(toml: &str, value: &str) -> String {
+    match (toml_type(toml), toml, value) {
+        (Ty::Bool, _, v) => (v == "on").to_string(),
+        (Ty::Int, "status.lines", "off") => "0".to_string(),
+        (Ty::Int, "status.lines", "on") => "1".to_string(),
+        (Ty::Int, _, v) => v.to_string(),
+        (Ty::Str, _, v) => crate::util::quote::toml_str(v),
     }
 }
 
@@ -641,7 +653,9 @@ mod tests {
 
     #[test]
     fn every_list_option_has_a_toml_name() {
-        let lists: Vec<&str> = crate::server::dispatch::options::list_names().collect();
+        let lists: Vec<&str> = crate::server::dispatch::options::list_names()
+            .chain(crate::server::dispatch::options::grofe_only_list_names())
+            .collect();
         let named: Vec<&str> = LIST_NAMES.iter().map(|(_, n)| *n).collect();
         assert_eq!(lists.len(), named.len());
         for name in lists {

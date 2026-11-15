@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::{Harness, require_tool};
 
@@ -104,7 +104,7 @@ fn var(srv: &TestServer, target: &str, name: &str) -> String {
 }
 
 fn wait_active(srv: &TestServer, pane: &str, what: &str) {
-    let got = wait_until(|| var(srv, pane, "#{pane_active}") == "1", WAIT);
+    let got = try_wait_until(|| var(srv, pane, "#{pane_active}") == "1", WAIT);
     assert!(got.is_ok(), "{what}: {pane} never became active");
 }
 
@@ -113,7 +113,7 @@ fn wait_active(srv: &TestServer, pane: &str, what: &str) {
 /// client's input is handled in order.
 fn fence(a: &mut Harness, srv: &TestServer, pane: &str, mark: &str) {
     a.send(format!("echo {mark}\r"));
-    let got = wait_until(|| srv.capture(pane).lines().any(|l| l.trim() == mark), WAIT);
+    let got = try_wait_until(|| srv.capture(pane).lines().any(|l| l.trim() == mark), WAIT);
     assert!(got.is_ok(), "{mark} never showed in {pane}");
 }
 
@@ -245,14 +245,14 @@ nnoremap <silent> <C-l> <Cmd>call Nav('l')<CR>
     }
 
     fn wait_log(&self, what: &str, done: impl Fn(&[String]) -> bool) {
-        let got = wait_until(|| done(&self.log()), WAIT);
+        let got = try_wait_until(|| done(&self.log()), WAIT);
         assert!(got.is_ok(), "{what}: the log is {:?}", self.log());
     }
 
     /// Up, with its mappings, and sampled as the pane's foreground process.
     fn wait_ready(&self, srv: &TestServer, pane: &str) {
         self.wait_log("VimEnter", |l| l.iter().any(|l| l == "ready"));
-        let sampled = wait_until(
+        let sampled = try_wait_until(
             || var(srv, pane, "#{pane_current_argv}").starts_with("nvim "),
             WAIT,
         );
@@ -500,7 +500,7 @@ fn a_key_right_after_nvim_starts_or_quits_sees_the_process_in_front() {
 
     srv.cmd(&["select-pane", "-t", &right]).expect("select");
     a.send(":qa!\r");
-    let gone = wait_until(
+    let gone = try_wait_until(
         || srv.capture(&right).lines().any(|l| l.trim() == "nvim-gone"),
         WAIT,
     );
@@ -532,7 +532,7 @@ fn a_pipeline_matches_on_a_member_that_is_not_the_leader() {
     );
     let (srv, left, right) = start(SH, &pipeline);
     let mut a = attach(&srv);
-    let up = wait_until(
+    let up = try_wait_until(
         || {
             var(&srv, &right, "#{pane_foreground_argv}")
                 .lines()
@@ -549,7 +549,7 @@ fn a_pipeline_matches_on_a_member_that_is_not_the_leader() {
 
     a.send(C_H);
     a.send("fence-mark\r");
-    let echoed = wait_until(|| srv.capture(&right).contains("fence-mark"), WAIT);
+    let echoed = try_wait_until(|| srv.capture(&right).contains("fence-mark"), WAIT);
     assert!(
         echoed.is_ok(),
         "C-h moved focus, so the fence went to {left}"
@@ -630,7 +630,7 @@ fn case_6_the_keys_spawn_no_process() {
     assert_eq!(reaped_children(pid), before, "a nav key forked");
 
     a.send(b"\x07");
-    let ran = wait_until(|| var(&srv, &left, "#{@probe}") == "ran", WAIT);
+    let ran = try_wait_until(|| var(&srv, &left, "#{@probe}") == "ran", WAIT);
     assert!(ran.is_ok(), "the shell-form probe never ran");
     assert!(
         reaped_children(pid) > before,

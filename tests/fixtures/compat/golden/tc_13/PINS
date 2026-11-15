@@ -2,5 +2,5 @@
 # that GROFE_COMPAT_CANOPY and GROFE_COMPAT_ATHOME must name (the suite
 # checks both checkouts' HEAD). Both are pushed: canopy `m37-gate`,
 # athome `grofe-config`.
-canopy 433aee7939966bf6037012b8d5e8f4c4eeef2e2e
+canopy 07fa17f6b5b8511262eed8b96811dcd727ff0198
 athome ed0d87b711f20b484ba469ec0848906d5f27bf71

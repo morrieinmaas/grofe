@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{TestServer, exists, process_gone, wait_child, wait_until};
+use common::{TestServer, exists, process_gone, try_wait_until, wait_child};
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
@@ -138,7 +138,7 @@ fn a_stale_socket_is_replaced() {
     assert!(exists(&srv.socket));
     // On macOS std sets CLOEXEC on the listener after socket(), so a CLI
     // forked by a concurrent test can hold it briefly: wait for that to end.
-    wait_until(|| UnixStream::connect(&srv.socket).is_err(), WAIT)
+    try_wait_until(|| UnixStream::connect(&srv.socket).is_err(), WAIT)
         .expect("stale socket still accepts connections");
 
     // A non-starting verb reports no server and leaves it alone.
@@ -179,7 +179,7 @@ fn dropping_the_harness_stops_the_server_even_on_panic() {
     });
     assert!(result.is_err());
     let socket = socket.lock().unwrap().clone().expect("server started");
-    wait_until(|| UnixStream::connect(&socket).is_err(), WAIT)
+    try_wait_until(|| UnixStream::connect(&socket).is_err(), WAIT)
         .expect("server still running after the harness dropped");
 }
 
@@ -195,7 +195,7 @@ fn dropping_the_harness_stops_a_server_whose_socket_is_gone() {
     assert!(!process_gone(pid));
 
     drop(srv);
-    wait_until(|| process_gone(pid), WAIT).expect("server outlived its harness");
+    try_wait_until(|| process_gone(pid), WAIT).expect("server outlived its harness");
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn logged_server_pid(srv: &TestServer) -> nix::unistd::Pid {
 
 /// The server process is gone and so is its socket.
 fn assert_server_gone(srv: &TestServer, pid: nix::unistd::Pid) {
-    wait_until(|| process_gone(pid), WAIT)
+    try_wait_until(|| process_gone(pid), WAIT)
         .unwrap_or_else(|e| panic!("server {pid} still alive: {e}\nlog:\n{}", srv.log()));
     assert!(!exists(&srv.socket), "socket left behind");
 }
@@ -330,7 +330,7 @@ fn a_successful_first_new_session_keeps_the_server() {
     let srv = TestServer::unstarted();
     assert_reached_server(&srv.run(&["new-session", "-d", "sleep", "30"]));
     let pid = logged_server_pid(&srv);
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(!process_gone(pid));
     assert!(srv.is_running(), "log:\n{}", srv.log());
 }
@@ -340,7 +340,7 @@ fn explicit_start_server_stays_up_after_a_failed_new_session() {
     let srv = TestServer::start();
     let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(srv.is_running(), "log:\n{}", srv.log());
     assert_eq!(srv.cmd(&["list-sessions"]).unwrap(), "");
 }
@@ -375,7 +375,7 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
 
     let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(
         srv.is_running(),
         "exited with a connection open; log:\n{}",
@@ -490,7 +490,7 @@ fn an_auto_started_server_nobody_connects_to_exits() {
         .stderr(Stdio::null());
     let server = cmd.spawn().expect("spawn server");
     // Watch for the socket file only: connecting would count as a client.
-    wait_until(|| exists(&srv.socket), WAIT).expect("server binds");
+    try_wait_until(|| exists(&srv.socket), WAIT).expect("server binds");
 
     let status = wait_child(server, Duration::from_secs(10))
         .unwrap_or_else(|e| panic!("idle server did not exit: {e}\nlog:\n{}", srv.log()));
@@ -558,7 +558,7 @@ fn sighup_is_ignored_and_sigint_stops_the_server() {
         .expect("new-session");
     let pid = server_pid(&srv);
     kill(pid, Signal::SIGHUP).expect("SIGHUP");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!process_gone(pid), "SIGHUP stopped the server");
     assert!(
         srv.cmd(&["list-sessions"])
@@ -567,7 +567,7 @@ fn sighup_is_ignored_and_sigint_stops_the_server() {
     kill(pid, Signal::SIGINT).expect("SIGINT");
     // The server is the harness's unreaped child, so its exit shows in the
     // log and on the socket rather than as a vanished pid.
-    wait_until(
+    try_wait_until(
         || !srv.is_running() && srv.log().contains("grofe server exiting"),
         WAIT,
     )
@@ -589,7 +589,7 @@ fn hung_job(pidfile: &std::path::Path, dir: &std::path::Path, ignore_term: bool)
 /// The pid `hung_job` wrote, once it has.
 fn job_pid(pidfile: &std::path::Path) -> nix::unistd::Pid {
     let mut pid = None;
-    wait_until(
+    try_wait_until(
         || {
             pid = std::fs::read_to_string(pidfile)
                 .ok()
@@ -613,7 +613,7 @@ fn kill_server_ends_a_hung_background_run_shell() {
         .expect("run-shell -b");
     let pid = job_pid(&pidfile);
     srv.cmd(&["kill-server"]).expect("kill-server");
-    wait_until(|| process_gone(pid), WAIT)
+    try_wait_until(|| process_gone(pid), WAIT)
         .unwrap_or_else(|e| panic!("job {pid} outlived the server: {e}"));
 }
 
@@ -628,6 +628,6 @@ fn dropping_the_harness_ends_a_job_that_ignores_sigterm() {
         .expect("run-shell -b");
     let pid = job_pid(&pidfile);
     drop(srv);
-    wait_until(|| process_gone(pid), WAIT)
+    try_wait_until(|| process_gone(pid), WAIT)
         .unwrap_or_else(|e| panic!("job {pid} outlived the harness: {e}"));
 }

@@ -44,6 +44,7 @@ use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthChar;
 
 use crate::cmd;
+use crate::cmd::format::char_width;
 use crate::config::Resolved;
 use crate::protocol::{ClientCtx, Dialect, Failure};
 use crate::server::input::{Input, InputHook, Key, KeyCode, Mouse, MouseButton, MouseKind, Routed};
@@ -494,10 +495,6 @@ fn format_width(text: &str) -> usize {
             Token::Style(_) => 0,
         })
         .sum()
-}
-
-fn char_width(c: char) -> usize {
-    UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
 enum Token<'a> {

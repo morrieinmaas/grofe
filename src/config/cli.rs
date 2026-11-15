@@ -11,10 +11,11 @@ use std::process::ExitCode;
 
 use super::{
     ConfigHook, ConfigKind, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES,
-    Resolved, Ty, closest, list_tmux_name, load, load_with_file, tmux_name, toml_type,
+    Resolved, closest, list_tmux_name, literal, load, load_with_file, tmux_name,
 };
 use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
+use crate::util::quote;
 
 const USAGE: &str = "usage: show-config [--explain] [--file <path>]... [<key>]";
 
@@ -92,9 +93,17 @@ fn run(args: &[String]) -> Result<String, String> {
     let binding = |out: &mut String, b: &KeyBinding| {
         out.push_str(&format!(
             "keys.{}.{} = {}\n",
-            bare_or_quoted(&b.table),
-            bare_or_quoted(&b.key.to_string()),
-            binding_value(b)
+            quote::toml_key(&b.table),
+            quote::toml_key(&b.key.to_string()),
+            quote::toml_binding(
+                &b.command,
+                &[
+                    ("desc", b.desc.as_deref()),
+                    ("group", b.group.as_deref()),
+                    ("name", b.name.as_deref()),
+                ],
+                b.repeat,
+            )
         ));
         if explain {
             out.push_str(&format!("  set by {}\n", b.source.describe(home)));
@@ -110,7 +119,7 @@ fn run(args: &[String]) -> Result<String, String> {
     let status_source = |out: &mut String, name: &str, s: &ConfigSource| {
         out.push_str(&format!(
             "status.sources.{} = {}\n",
-            bare_or_quoted(name),
+            quote::toml_key(name),
             source_value(s)
         ));
         if explain {
@@ -120,7 +129,7 @@ fn run(args: &[String]) -> Result<String, String> {
     let plugin = |out: &mut String, name: &str, p: &ConfigPlugin| {
         out.push_str(&format!(
             "plugins.{} = {}\n",
-            bare_or_quoted(name),
+            quote::toml_key(name),
             plugin_value(p)
         ));
         if explain {
@@ -133,15 +142,15 @@ fn run(args: &[String]) -> Result<String, String> {
         let name = name.strip_prefix('@').unwrap_or(name);
         out.push_str(&format!(
             "user-options.{} = {}\n",
-            bare_or_quoted(name),
-            quote(value)
+            quote::toml_key(name),
+            quote::toml_str(value)
         ));
     };
     let variable = |out: &mut String, name: &str, value: &str| {
         out.push_str(&format!(
             "environment.{} = {}\n",
-            bare_or_quoted(name),
-            quote(value)
+            quote::toml_key(name),
+            quote::toml_str(value)
         ));
     };
     let load_commands = |out: &mut String| {
@@ -304,30 +313,8 @@ fn find_binding<'a>(r: &'a Resolved, rest: &str) -> Option<&'a KeyBinding> {
     r.keys.iter().find(|b| b.table == table && b.key == key)
 }
 
-/// An option value (tmux form) as the TOML literal a config would write.
-fn literal(toml: &str, value: &str) -> String {
-    match (toml_type(toml), toml, value) {
-        (Ty::Bool, _, v) => (v == "on").to_string(),
-        (Ty::Int, "status.lines", "off") => "0".to_string(),
-        (Ty::Int, "status.lines", "on") => "1".to_string(),
-        (Ty::Int, _, v) => v.to_string(),
-        (Ty::Str, _, v) => quote(v),
-    }
-}
-
-fn quote(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
-}
-
-fn bare_or_quoted(s: &str) -> String {
-    let bare = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if bare { s.to_string() } else { quote(s) }
-}
-
 fn source_value(s: &ConfigSource) -> String {
-    let mut fields = vec![format!("cmd = {}", quote(&s.cmd))];
+    let mut fields = vec![format!("cmd = {}", quote::toml_str(&s.cmd))];
     for (k, v) in [("interval", s.interval), ("timeout", s.timeout)] {
         if let Some(v) = v {
             fields.push(format!("{k} = {v}"));
@@ -343,7 +330,7 @@ fn plugin_value(p: &ConfigPlugin) -> String {
         let vars: Vec<String> = p
             .env
             .iter()
-            .map(|(k, v)| format!("{} = {}", bare_or_quoted(k), quote(v)))
+            .map(|(k, v)| format!("{} = {}", quote::toml_key(k), quote::toml_str(v)))
             .collect();
         fields.push(format!("env = {{ {} }}", vars.join(", ")));
     }
@@ -375,7 +362,7 @@ fn agents_lines(
     let kind = |out: &mut String, name: &str, k: &ConfigKind| {
         out.push_str(&format!(
             "agents.kinds.{} = {}\n",
-            bare_or_quoted(name),
+            quote::toml_key(name),
             kind_value(k)
         ));
         if explain {
@@ -398,7 +385,7 @@ fn agents_lines(
         } else {
             format!("{ms}ms")
         };
-        scalar(&mut out, "agents.scan-interval", quote(&text));
+        scalar(&mut out, "agents.scan-interval", quote::toml_str(&text));
     }
     let list =
         |v: &[String]| toml::Value::Array(v.iter().cloned().map(toml::Value::String).collect());
@@ -419,13 +406,13 @@ fn agents_lines(
         ),
         (
             "agents.picker.width",
-            quote(&format!("{}%", a.picker.width_pct)),
+            quote::toml_str(&format!("{}%", a.picker.width_pct)),
         ),
         (
             "agents.picker.height",
-            quote(&format!("{}%", a.picker.height_pct)),
+            quote::toml_str(&format!("{}%", a.picker.height_pct)),
         ),
-        ("agents.new.worktree", quote(&a.new.worktree)),
+        ("agents.new.worktree", quote::toml_str(&a.new.worktree)),
         (
             "agents.new.worktree-command",
             list(&a.new.worktree_command).to_string(),
@@ -467,7 +454,7 @@ fn notify_lines(
         |v: &[String]| toml::Value::Array(v.iter().cloned().map(toml::Value::String).collect());
     let secs = |d: std::time::Duration| {
         let ms = d.as_millis();
-        quote(&if ms.is_multiple_of(1000) {
+        quote::toml_str(&if ms.is_multiple_of(1000) {
             format!("{}s", ms / 1000)
         } else {
             format!("{ms}ms")
@@ -483,7 +470,7 @@ fn notify_lines(
         ("done-min-work", secs(n.done_min_work)),
         ("min-interval", secs(n.min_interval)),
         ("toast-time", secs(n.toast_time)),
-        ("delivery", quote(&n.delivery)),
+        ("delivery", quote::toml_str(&n.delivery)),
         ("sound", n.sound.to_string()),
     ];
     if let Some(c) = &n.command {
@@ -521,30 +508,14 @@ fn kind_value(k: &ConfigKind) -> String {
     }
     for (name, v) in [("command", &k.command), ("resume", &k.resume)] {
         if let Some(v) = v {
-            fields.push(format!("{name} = {}", quote(v)));
+            fields.push(format!("{name} = {}", quote::toml_str(v)));
         }
     }
     if let Some(e) = k.enabled {
         fields.push(format!("enabled = {e}"));
     }
     if let Some(w) = &k.worktree {
-        fields.push(format!("worktree = {}", quote(w)));
-    }
-    format!("{{ {} }}", fields.join(", "))
-}
-
-fn binding_value(b: &KeyBinding) -> String {
-    if b.desc.is_none() && b.group.is_none() && b.name.is_none() && !b.repeat {
-        return quote(&b.command);
-    }
-    let mut fields = vec![format!("cmd = {}", quote(&b.command))];
-    for (k, v) in [("desc", &b.desc), ("group", &b.group), ("name", &b.name)] {
-        if let Some(v) = v {
-            fields.push(format!("{k} = {}", quote(v)));
-        }
-    }
-    if b.repeat {
-        fields.push("repeat = true".to_string());
+        fields.push(format!("worktree = {}", quote::toml_str(w)));
     }
     format!("{{ {} }}", fields.join(", "))
 }

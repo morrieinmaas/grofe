@@ -1,5 +1,5 @@
 # tmux 3.7b's option tables as `show` lists them on a fresh server with
-# tests/fixtures/compat/tmux-defaults.conf: names, order and default texts
+# the compat tests' tmux-defaults.conf: names, order and default texts
 # for the tmux dialect's show (compat::tmux::formats). Kept equal to the
 # golden fe_3/tmux-tables by tests/compat/fe_3.rs; re-record, then copy.
 [session]

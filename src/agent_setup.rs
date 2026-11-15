@@ -6,6 +6,8 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::util::quote;
+
 /// (event, matcher, state arguments) for one hook grofe installs.
 type HookDef = (&'static str, Option<&'static str>, &'static str);
 
@@ -69,15 +71,10 @@ const KINDS: &[&str] = &["claude", "codex", "opencode", "pi", "gemini"];
 
 const PLUGIN_MARKER: &str = "// grofe: managed by `grofe agent setup opencode`";
 
-/// Single-quotes `s` for a shell, since the agents run hook commands through one.
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 fn command(kind: &Kind, grofe: &str, args: &str) -> String {
     format!(
         "{} agent report {args} --hook {}",
-        shell_quote(grofe),
+        quote::sh(grofe),
         kind.hook
     )
 }

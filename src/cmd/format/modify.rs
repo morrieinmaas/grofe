@@ -10,14 +10,13 @@
 //! bracket-aware splitting ([`skip1`]) only has the `##` and `#{` forms
 //! left to step over.
 
-use nix::libc;
-use unicode_width::UnicodeWidthChar;
-
+use super::time::{localtime, pretty_time, strftime};
 use super::x11::X11;
 use super::{
-    Expander, Fail, FormatVars, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, ctime, flag,
-    fnmatch, is_truthy, posix_basename, regex_match,
+    Expander, Fail, FormatVars, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, char_width,
+    ctime, flag, fnmatch, is_truthy, posix_basename, regex_match,
 };
+use crate::util::quote;
 
 /// `FORMAT_MAX_WIDTH`, `_REPEAT` and `_PRECISION`.
 const MAX_WIDTH: i64 = 10000;
@@ -179,10 +178,6 @@ fn leading_hashes(b: &[u8], at: usize) -> (usize, usize, usize) {
         return (n, n / 2, at + n);
     }
     (n, n / 2, at + n - 1)
-}
-
-fn char_width(c: char) -> usize {
-    c.width().unwrap_or(0)
 }
 
 /// tmux's `format_width`: the columns of text, counting `#[...]` styles as
@@ -384,58 +379,6 @@ fn strip(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-}
-
-fn localtime(t: i64) -> Option<libc::tm> {
-    let t = t as libc::time_t;
-    // SAFETY: `tm` is plain old data, so all zeroes is a valid value.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers are to live locals; localtime_r is reentrant.
-    (!unsafe { libc::localtime_r(&t, &mut tm) }.is_null()).then_some(tm)
-}
-
-/// `strftime(3)` of `fmt` for `tm`, with a buffer of `max` bytes: `None`
-/// when the result is empty or does not fit, as tmux reads a 0 return.
-fn strftime(fmt: &str, tm: &libc::tm, max: usize) -> Option<String> {
-    let cfmt = std::ffi::CString::new(fmt).ok()?;
-    let mut buf = vec![0u8; max];
-    // SAFETY: `buf` is `max` bytes long and `cfmt` a NUL-terminated string;
-    // `tm` is a fully initialised broken-down time.
-    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), max, cfmt.as_ptr(), tm) };
-    (n != 0).then(|| String::from_utf8_lossy(&buf[..n]).into_owned())
-}
-
-/// `fmt` through `strftime` at the current local time (the first thing
-/// tmux's `format_expand_time` does).
-pub(super) fn strftime_now(fmt: &str, max: usize) -> Option<String> {
-    strftime(fmt, &localtime(now_secs())?, max)
-}
-
-/// tmux's `format_pretty_time`: how long ago, as short as it can be.
-fn pretty_time(t: i64) -> String {
-    let now = now_secs().max(t);
-    let age = now - t;
-    let (Some(now_tm), Some(tm)) = (localtime(now), localtime(t)) else {
-        return String::new();
-    };
-    let fmt = if age < 24 * 3600 {
-        "%H:%M"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon == now_tm.tm_mon) || age < 28 * 24 * 3600 {
-        "%a%d"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon < now_tm.tm_mon)
-        || (tm.tm_year == now_tm.tm_year - 1 && tm.tm_mon > now_tm.tm_mon)
-    {
-        "%d%b"
-    } else {
-        "%h%y"
-    };
-    strftime(fmt, &tm, 9).unwrap_or_default()
-}
-
 /// tmux's `regsub`: every match of the extended regular expression
 /// `pattern` in `text` replaced by `with`, whose `\0` to `\9` are the match
 /// and its groups. `None` when the pattern does not compile.
@@ -616,64 +559,6 @@ fn quote_style(s: &str) -> String {
     s.replace('#', "##")
 }
 
-/// One word of a command line, quoted as tmux's `args_escape` quotes it
-/// (checked against tmux 3.7b): double quotes around a word with any of
-/// ` #';${}%`, else single quotes around one with a space or `"`; a lone
-/// special character, or a leading `~`, gets a backslash; control
-/// characters and backslashes are escaped C-style.
-pub fn escape_arg(s: &str) -> String {
-    const DQUOTED: &str = " #';${}%";
-    const SQUOTED: &str = " \"";
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    let quote = if s.contains(|c| DQUOTED.contains(c)) {
-        Some('"')
-    } else if s.contains(|c| SQUOTED.contains(c)) {
-        Some('\'')
-    } else {
-        None
-    };
-    let mut chars = s.chars();
-    if let (Some(c), None) = (chars.next(), chars.next())
-        && c != ' '
-        && (quote.is_some() || c == '~')
-    {
-        return format!("\\{c}");
-    }
-    let bytes = s.as_bytes();
-    let mut body = String::with_capacity(s.len());
-    for (i, c) in s.char_indices() {
-        match c {
-            '\\' => body.push_str("\\\\"),
-            '\n' => body.push_str("\\n"),
-            '\t' => body.push_str("\\t"),
-            '\r' => body.push_str("\\r"),
-            '\x07' => body.push_str("\\a"),
-            '\x08' => body.push_str("\\b"),
-            '\x0b' => body.push_str("\\v"),
-            '\x0c' => body.push_str("\\f"),
-            c if c.is_ascii_control() => body.push_str(&format!("\\{:03o}", c as u32)),
-            '"' if quote == Some('"') => body.push_str("\\\""),
-            // `$` only where a shell would start a variable after it.
-            '$' if quote == Some('"')
-                && bytes.get(i + 1).is_some_and(|&n| {
-                    n == b'_' || n == b'{' || n.is_ascii_alphabetic() || n >= 0x80
-                }) =>
-            {
-                body.push_str("\\$")
-            }
-            c => body.push(c),
-        }
-    }
-    let tilde = if body.starts_with('~') { "\\" } else { "" };
-    match quote {
-        Some('\'') => format!("'{body}'"),
-        Some(q) => format!("{q}{tilde}{body}{q}"),
-        None => format!("{tilde}{body}"),
-    }
-}
-
 /// What the modifiers of one `#{...}` ask for (tmux's `FORMAT_*` bits).
 #[derive(Default)]
 struct Flags {
@@ -850,7 +735,7 @@ impl Expander<'_> {
             v = quote_style(&v);
         }
         if f.quote_args {
-            v = escape_arg(&v);
+            v = quote::tmux_arg(&v);
         }
         Some(v)
     }

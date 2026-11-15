@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 
 use tokio::sync::mpsc;
 
+use crate::cmd::format::fnmatch;
 use crate::cmd::{Resolve, Target};
 use crate::event::{Event, Place};
 use crate::protocol::ClientCtx;
@@ -146,7 +147,11 @@ impl Subscriber {
         if name == PANE_OUTPUT {
             return self.filters.iter().any(|f| f == PANE_OUTPUT);
         }
-        self.filters.is_empty() || self.filters.iter().any(|f| glob(f, name))
+        self.filters.is_empty()
+            || self
+                .filters
+                .iter()
+                .any(|f| fnmatch(f.as_bytes(), name.as_bytes()))
     }
 
     fn passes(&self, event: &Event, place: Place, model: &Model) -> bool {
@@ -183,26 +188,6 @@ impl Subscriber {
             Err(TrySendError::Closed(_)) => false,
         }
     }
-}
-
-/// `*` matches any run of characters; everything else literally.
-fn glob(pattern: &str, name: &str) -> bool {
-    let mut parts = pattern.split('*');
-    let first = parts.next().unwrap_or("");
-    let Some(mut rest) = name.strip_prefix(first) else {
-        return false;
-    };
-    let parts: Vec<&str> = parts.collect();
-    let Some((last, middle)) = parts.split_last() else {
-        return rest.is_empty();
-    };
-    for part in middle {
-        match rest.find(part) {
-            Some(i) => rest = &rest[i + part.len()..],
-            None => return false,
-        }
-    }
-    rest.ends_with(last)
 }
 
 /// What a client's view was when `pane-focus` last looked at it.
@@ -426,17 +411,6 @@ mod tests {
 
     fn names(n: &[&str]) -> Vec<String> {
         n.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn globs_match_like_fnmatch_star() {
-        assert!(glob("option-*", "option-changed"));
-        assert!(glob("*", "pane-exited"));
-        assert!(glob("pane-*ed", "pane-exited"));
-        assert!(glob("*-exited", "pane-exited"));
-        assert!(!glob("window-*", "pane-exited"));
-        assert!(!glob("pane-", "pane-exited"));
-        assert!(glob("pane-exited", "pane-exited"));
     }
 
     #[test]

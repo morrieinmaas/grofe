@@ -15,6 +15,8 @@
 //! waits on it (D8); the CLI's reply comes through
 //! [`dispatch::defer_reply`] once the command exits (R23).
 
+use crate::cmd::NoVars;
+use crate::server::spawn;
 use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -1015,7 +1017,7 @@ impl InputHook for PromptHook {
         prompt.separators = separators;
         prompt.clip = clip;
         let history = &history[prompt.kind];
-        // `-N` (M5): as tmux 3.7b's `status_prompt_key`, any key but a
+        // `-N`: as tmux 3.7b's `status_prompt_key`, any key but a
         // digit answers the prompt and then goes on as a key (copy mode's
         // counts: `5` then `j`).
         if let (Read::Line, true, Input::Key(key)) = (prompt.read, prompt.numeric, input) {
@@ -2284,14 +2286,6 @@ pub(crate) fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> Stri
     }
 }
 
-struct NoVars;
-
-impl cmd::FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
-    }
-}
-
 /// Runs `script` to completion: its stdout (ending in a newline) when
 /// `capture` is set, or the error tmux words for a nonzero exit or a
 /// signal. stderr is discarded, as in tmux; without `capture` so is
@@ -2324,29 +2318,21 @@ pub(crate) async fn shell_with(
     } else {
         Stdio::null()
     };
-    let child = {
-        let _lock = pane::spawn_lock();
-        tokio::process::Command::new("/bin/sh")
-            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
-            .arg0("sh")
-            .arg("-c")
-            // `-E`: tmux's job writes stderr to the pipe stdout goes to.
-            .arg(if merge_stderr && capture {
-                format!("exec 2>&1\n{script}")
-            } else {
-                script.to_string()
-            })
+    // `-E`: tmux's job writes stderr to the pipe stdout goes to.
+    let text = if merge_stderr && capture {
+        format!("exec 2>&1\n{script}")
+    } else {
+        script.to_string()
+    };
+    let child = spawn::spawn(
+        spawn::sh(&text, Some(env))
             .current_dir(cwd)
-            .env_clear()
-            .envs(env)
             // As a pane: a `grofe` run inside talks to this server.
             .env("GROFE", socket)
             .env_remove("GROFE_PANE")
             .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(Stdio::null())
-            .spawn()
-    };
+            .stdout(stdout),
+    );
     let child = child.map_err(|e| format!("failed to run command: {e}"))?;
     let tracked = jobs.track(&child);
     let out = child.wait_with_output().await;

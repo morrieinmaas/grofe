@@ -21,7 +21,7 @@ fn kind(name: &str, resume: Option<&str>) -> Kind {
     Kind {
         name: name.into(),
         matches: vec![name.into()],
-        command: None,
+        command: Some(name.into()),
         resume: resume.map(Into::into),
         worktree: None,
     }
@@ -146,6 +146,13 @@ mod tests {
             Some(argv(&["claude", "--resume", "abc-1"]))
         );
         assert_eq!(resume_argv("", "abc"), None);
+    }
+
+    #[test]
+    fn builtin_kinds_start_their_own_program() {
+        for k in builtin() {
+            assert_eq!(k.command.as_deref(), Some(k.name.as_str()));
+        }
     }
 
     #[test]

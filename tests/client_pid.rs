@@ -6,7 +6,7 @@ mod common;
 #[path = "acceptance/harness.rs"]
 mod harness;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 use harness::Harness;
 
 /// The pids of processes whose command line has `needle`.
@@ -28,7 +28,7 @@ fn client_pid_is_the_attached_process() {
     srv.cmd(&["new-session", "-d", "-s", "main", "-x", "80", "-y", "24"])
         .expect("new-session");
     let _client = Harness::spawn_attach_with_env(srv.command(), "main", &[], 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-clients", "-F", "#{client_pid}"])
                 .is_ok_and(|out| !out.trim().is_empty())
