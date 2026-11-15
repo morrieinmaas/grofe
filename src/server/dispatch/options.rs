@@ -2614,9 +2614,47 @@ fn load_config() -> Result<Resolved, Vec<config::ConfigError>> {
             };
             let files: Vec<PathBuf> = files
                 .into_iter()
-                .filter(|f| f != Path::new("/dev/null") && f.exists())
+                .filter(|f| f != Path::new("/dev/null") && f.exists() && !is_tmux_conf(f))
                 .collect();
             config::load_with_file(&only, &files)
+        }
+    }
+}
+
+/// A `tmux -f` file is tmux config (not grofe TOML) when a CLI run as
+/// `tmux` started the server, as `source-file` reads a file by dialect;
+/// a `.toml` stays grofe's.
+fn is_tmux_conf(file: &Path) -> bool {
+    crate::compat::started_as_tmux() && file.extension().is_none_or(|e| e != "toml")
+}
+
+/// Sources the `tmux -f` files that are tmux config, in order, after the
+/// server took tmux's defaults. A missing file or `/dev/null` is no
+/// config; an error is logged and the next file still loads.
+pub fn source_start_files(state: &mut State) {
+    let files = crate::compat::start_config().unwrap_or_default();
+    for file in files {
+        if file == Path::new("/dev/null") || !file.exists() || !is_tmux_conf(&file) {
+            continue;
+        }
+        let ctx = ClientCtx {
+            cwd: PathBuf::from("/"),
+            pane: None,
+            env: Vec::new(),
+            client: None,
+            dialect: Dialect::Tmux,
+        };
+        let c = SourceFile {
+            quiet: false,
+            format: false,
+            parse_only: false,
+            verbose: false,
+            target: None,
+            paths: vec![glob_escape(&file)],
+        };
+        match source_file(state, &ctx, c) {
+            Ok(_) => {}
+            Err(e) => eprintln!("grofe config: {}: {e}", file.display()),
         }
     }
 }
