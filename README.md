@@ -86,7 +86,7 @@ ordinary programs in whatever language you like.
 
 grofe runs on macOS and Linux. Each tagged release has prebuilt binaries for
 x86_64 and arm64 (static on Linux) on the
-[releases page](https://github.com/morrieinmaas/grofe/releases): unpack one
+[releases page](https://github.com/termage/grofe/releases): unpack one
 and put `grofe` on your `PATH`.
 
 Or build it with Rust 1.88 or newer (get Rust from
