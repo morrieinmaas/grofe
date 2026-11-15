@@ -191,8 +191,10 @@ mod tests {
         let r = Runtime::new(Limits::default()).unwrap();
         let t = Instant::now();
         let e = r.exec("p", src).unwrap_err();
+        // Unbudgeted, these never return, so any finite bound proves the abort; 2 s leaves room
+        // for a descheduled runner. The 2x-budget contract is a_spin_ends_within_twice_the_budget.
         assert!(
-            t.elapsed() < Duration::from_millis(150),
+            t.elapsed() < Duration::from_secs(2),
             "{src}: {:?}",
             t.elapsed()
         );
