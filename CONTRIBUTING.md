@@ -69,7 +69,7 @@ request:
 - The guide is an [mdBook](https://rust-lang.github.io/mdBook/) in
   `docs/book/src/`; `just docs-serve` previews it with live reload.
 - The options reference (`docs/book/src/reference/options.md`) is generated
-  from the option table in `src/server/dispatch/options.rs`. Each option has
+  from the option table in `src/server/dispatch/options/table.rs` (lists in `lists.rs`). Each option has
   a `doc` line; after changing the table, run `just docs` to regenerate the
   file. A test fails while it is out of date.
 - The screenshots come from `docs/tapes/` and are rendered with

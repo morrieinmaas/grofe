@@ -1,9 +1,18 @@
 name: Release
 
 # A `v*` tag builds grofe for Linux (static, musl) and macOS, on x86_64 and
-# arm64, and publishes the tarballs and their SHA-256 sums as that tag's
-# GitHub release, or adds them to a release already made for it. The tag
-# must match Cargo.toml's version.
+# arm64, plus .deb and .rpm packages for both Linux targets, and publishes
+# them as that tag's GitHub release (its notes are the tag's CHANGELOG.md
+# section), or adds them to a release already made for it. Every asset has
+# a .sha256, SHA256SUMS lists them all, and each has a build provenance
+# attestation (`gh attestation verify`). The tag must match Cargo.toml's
+# version. RELEASING.md has the steps and the one-time setup.
+#
+# Then, each only when its credential is configured (skipped otherwise):
+#   homebrew  Formula/grofe.rb to <owner>/homebrew-tap (secret HOMEBREW_TAP_DEPLOY_KEY)
+#   aur       grofe-bin to the AUR (secret AUR_SSH_PRIVATE_KEY)
+#   crates    cargo publish by trusted publishing (variable CRATES_IO_TRUSTED),
+#             skipped when crates.io already has the version
 
 on:
   push:
@@ -15,7 +24,10 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -29,23 +41,35 @@ jobs:
           - { os: macos-latest, target: x86_64-apple-darwin }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
 
       - name: Check the tag matches Cargo.toml
         run: |
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           [ "v$version" = "$TAG" ] || { echo "tag $TAG but Cargo.toml says $version" >&2; exit 1; }
 
-      - name: musl tools
+      - name: cargo-deb and cargo-generate-rpm
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
 
-      - name: Build
+      # Natively on Alpine (musl), which has the C++ compiler mlua's Luau
+      # needs; musl-tools on Ubuntu has none. The result is static.
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src rust:1-alpine sh -euc '
+            apk add --no-cache g++ musl-dev
+            rustup toolchain install
+            rustup target add ${{ matrix.target }}
+            cargo build --release --locked --target ${{ matrix.target }}'
+          sudo chown -R "$(id -u):$(id -g)" target
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
         run: |
           rustup target add ${{ matrix.target }}
           cargo build --release --locked --target ${{ matrix.target }}
@@ -53,34 +77,194 @@ jobs:
       - name: Package
         run: |
           name="grofe-$TAG-${{ matrix.target }}"
-          mkdir "$name"
+          mkdir -p "$name" dist
           cp "target/${{ matrix.target }}/release/grofe" README.md LICENSE "$name/"
-          tar czf "$name.tar.gz" "$name"
-          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          tar czf "dist/$name.tar.gz" "$name"
+
+      # The same commands as `just deb` and `just rpm`, on the binary just built.
+      - name: .deb and .rpm
+        if: runner.os == 'Linux'
+        run: |
+          cargo deb --target ${{ matrix.target }} --no-build -o dist/
+          cargo generate-rpm --target ${{ matrix.target }} -o dist/
+
+      - name: SHA-256 sums
+        working-directory: dist
+        run: |
+          for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: grofe-*.tar.gz*
+          path: dist/*
 
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     env:
-      TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
+          path: dist
           merge-multiple: true
-      # A release made by hand first (with the builds made elsewhere) gets
-      # these added, replacing any of the same name.
+      # Each build's own sums still match after the hand-over, and
+      # SHA256SUMS covers every asset in one file.
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum -c ./*.sha256
+          find . -maxdepth 1 -type f ! -name '*.sha256' -printf '%f\n' | sort |
+            xargs sha256sum > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          cat SHA256SUMS
+      # `gh attestation verify <file> --repo <owner>/grofe` checks these.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/SHA256SUMS
+      # A release made by hand first (with the builds made elsewhere), or by
+      # an earlier run, gets these added, replacing any of the same name, and
+      # keeps its notes. A new release's notes are the tag's CHANGELOG.md
+      # section.
       - name: Publish the release
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-              grofe-*.tar.gz grofe-*.tar.gz.sha256
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
           else
+            packaging/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "grofe $TAG" \
-              --generate-notes --prerelease grofe-*.tar.gz grofe-*.tar.gz.sha256
+              --notes-file "$RUNNER_TEMP/notes.md" dist/*
           fi
+
+  # Which of the optional publish jobs have their credentials. Secrets cannot
+  # be read in a job's `if`, so this turns them into outputs.
+  credentials:
+    runs-on: ubuntu-latest
+    outputs:
+      homebrew: ${{ steps.check.outputs.homebrew }}
+      aur: ${{ steps.check.outputs.aur }}
+    steps:
+      - id: check
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          echo "homebrew=${HOMEBREW_TAP_DEPLOY_KEY:+true}" >> "$GITHUB_OUTPUT"
+          echo "aur=${AUR_SSH_PRIVATE_KEY:+true}" >> "$GITHUB_OUTPUT"
+
+  homebrew:
+    needs: [publish, credentials]
+    if: needs.credentials.outputs.homebrew == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - name: Render the formula from the release's sha256 files
+        run: packaging/render.sh "$TAG" target/pkg
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+      - name: Push Formula/grofe.rb
+        working-directory: tap
+        run: |
+          mkdir -p Formula
+          cp ../target/pkg/grofe.rb Formula/grofe.rb
+          git add Formula/grofe.rb
+          if git diff --cached --quiet; then echo "formula unchanged"; exit 0; fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "grofe ${TAG#v}"
+          git push
+
+  aur:
+    needs: [publish, credentials]
+    if: needs.credentials.outputs.aur == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - name: Render the PKGBUILD from the release's sha256 files
+        run: packaging/render.sh "$TAG" target/pkg
+      # makepkg refuses to run as root, and .SRCINFO is what it prints.
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD/target/pkg:/pkg" archlinux:latest bash -euc '
+            useradd -m builder
+            cp /pkg/PKGBUILD /home/builder/
+            cd /home/builder
+            su builder -c "makepkg --printsrcinfo" > /pkg/.SRCINFO'
+      - name: Push to the AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # The Ed25519 key aur.archlinux.org publishes (fingerprint
+          # SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4), pinned.
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
+          git clone ssh://aur@aur.archlinux.org/grofe-bin.git aur
+          cp target/pkg/PKGBUILD target/pkg/.SRCINFO aur/
+          cd aur
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then echo "PKGBUILD unchanged"; exit 0; fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "grofe-bin ${TAG#v}"
+          git push origin HEAD:master
+
+  # The first publish is by hand (RELEASING.md); after it, set the repo
+  # variable CRATES_IO_TRUSTED to true and configure this workflow as the
+  # crate's trusted publisher.
+  crates:
+    needs: publish
+    if: vars.CRATES_IO_TRUSTED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      # A re-run of a published release stays green: the sparse index lists
+      # every published version, one JSON object per line.
+      - name: Already on crates.io?
+        id: published
+        run: |
+          version="${TAG#v}"
+          if curl -fsSL https://index.crates.io/gr/of/grofe | jq -e --arg v "$version" 'select(.vers == $v)' >/dev/null; then
+            echo "grofe $version is already on crates.io"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.published.outputs.skip != 'true'
+        id: auth
+      - if: steps.published.outputs.skip != 'true'
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

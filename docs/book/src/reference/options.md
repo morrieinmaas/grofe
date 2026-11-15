@@ -1,6 +1,6 @@
 # Options
 
-<!-- Generated from the option table in src/server/dispatch/options.rs.
+<!-- Generated from the option table in src/server/dispatch/options/table.rs and lists.rs.
      Do not edit by hand: run `just docs` to regenerate. -->
 
 Every built-in option, by its tmux name. Set one in `config.toml` by its

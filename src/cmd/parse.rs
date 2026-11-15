@@ -2553,73 +2553,6 @@ fn quote_word(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
-/// One argument as tmux 3.7b's `args_escape` prints it: `''` when empty;
-/// double quotes around a word holding any of ` #';${}%`, else single
-/// quotes around one holding a space or `"`; a single such character
-/// (or `~`) as a backslash and itself; inside, `\\`, `\"` (in double
-/// quotes), `\$` before a name, C escapes (`\n`, `\t`, ...) and octal
-/// for other control characters; a leading `~` escaped.
-pub fn escape_arg(s: &str) -> String {
-    const DQUOTED: &[char] = &[' ', '#', '\'', ';', '$', '{', '}', '%'];
-    const SQUOTED: &[char] = &[' ', '"'];
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    let quote = if s.contains(DQUOTED) {
-        Some('"')
-    } else if s.contains(SQUOTED) {
-        Some('\'')
-    } else {
-        None
-    };
-    let mut chars = s.chars();
-    if let (Some(c), None) = (chars.next(), chars.next())
-        && c != ' '
-        && (quote.is_some() || c == '~')
-    {
-        return format!("\\{c}");
-    }
-    let dq = quote == Some('"');
-    let mut out = String::new();
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
-        match c {
-            '$' if dq => {
-                if it
-                    .peek()
-                    .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{')
-                {
-                    out.push('\\');
-                }
-                out.push('$');
-            }
-            '"' if dq => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{7}' => out.push_str("\\a"),
-            '\u{b}' => out.push_str("\\v"),
-            '\u{c}' => out.push_str("\\f"),
-            '\0' => {
-                out.push_str("\\0");
-                if it.peek().is_some_and(|n| ('0'..='7').contains(n)) {
-                    out.push_str("00");
-                }
-            }
-            c if c.is_ascii_control() => out.push_str(&format!("\\{:03o}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    match quote {
-        Some(q) if out.starts_with('~') => format!("{q}\\{out}{q}"),
-        Some(q) => format!("{q}{out}{q}"),
-        None if out.starts_with('~') => format!("\\{out}"),
-        None => out,
-    }
-}
-
 /// The character a backslash before `c` stands for, in a bare word or in
 /// double quotes, as tmux 3.7b's lexer reads it (recorded: `"a\tb\nc\sd\ee"`
 /// is a tab, a newline, a space and an escape): `\a \b \e \f \n \r \s \t
@@ -4562,33 +4495,6 @@ mod tests {
         );
     }
 
-    /// `args_escape` as tmux 3.7b prints arguments (recorded in
-    /// `list-keys` of tmux's stock table and of bound strings).
-    #[test]
-    fn escape_arg_is_tmux_s() {
-        for (arg, want) in [
-            ("", "''"),
-            ("kill-pane", "kill-pane"),
-            ("#S", "\"#S\""),
-            ("%%", "\"%%\""),
-            ("a b", "\"a b\""),
-            ("a\"b", "'a\"b'"),
-            ("say \"hi\" #x", "\"say \\\"hi\\\" #x\""),
-            ("$", "\\$"),
-            ("\"", "\\\""),
-            (";", "\\;"),
-            ("~", "\\~"),
-            ("~/x", "\\~/x"),
-            ("$HOME x", "\"\\$HOME x\""),
-            ("$1 x", "\"$1 x\""),
-            ("a\\b", "a\\\\b"),
-            ("a\tb", "a\\tb"),
-            (":=0", ":=0"),
-        ] {
-            assert_eq!(escape_arg(arg), want, "{arg:?}");
-        }
-    }
-
     #[test]
     fn parse_sequence_splits_at_semicolon_arguments() {
         assert_eq!(
@@ -5350,7 +5256,7 @@ mod fuzz_regression_tests {
 
     /// Found by the `parse_command` fuzz target: only ASCII whitespace
     /// separates words, as in tmux. A no-break space or U+0085 is a word
-    /// character, so `escape_arg` need not quote it.
+    /// character, so `tmux_arg` need not quote it.
     #[test]
     fn non_ascii_whitespace_is_part_of_a_word() {
         for sep in ['\u{85}', '\u{a0}', '\u{2003}'] {

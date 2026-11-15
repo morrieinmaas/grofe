@@ -12,4 +12,4 @@ all in
   describes.
 - Want to change these docs? Every page has an edit link at the top; the
   options reference is generated from the code, so change the option's `doc`
-  line in `src/server/dispatch/options.rs` and run `just docs`.
+  line in `src/server/dispatch/options/table.rs` (lists in `lists.rs`) and run `just docs`.

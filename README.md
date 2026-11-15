@@ -37,9 +37,20 @@ guide and the [options reference](https://termage.github.io/grofe/docs/reference
 
 ## Install
 
-grofe runs on macOS and Linux. Prebuilt binaries are on the
-[releases page](https://github.com/termage/grofe/releases). Or build it
-with Rust 1.88 or newer from a checkout:
+grofe runs on macOS and Linux.
+
+| Where | Install with |
+| --- | --- |
+| Homebrew (macOS, Linux) | `brew install termage/tap/grofe` |
+| crates.io | `cargo install --locked grofe` |
+| Debian, Ubuntu | the release's `.deb`: `sudo apt install ./grofe_0.2.0-1_amd64.deb` |
+| Fedora, RHEL | the release's `.rpm`: `sudo dnf install ./grofe-0.2.0-1.x86_64.rpm` |
+
+The [releases page](https://github.com/termage/grofe/releases) also has
+prebuilt binaries, and every file can be checked against `SHA256SUMS` and
+its build attestation (see
+[Verify a download](https://termage.github.io/grofe/docs/install.html#verify-a-download)).
+Or build it with Rust 1.88 or newer from a checkout:
 
 <!-- readme-test: begin -->
 ```sh
