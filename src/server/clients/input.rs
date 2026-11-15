@@ -414,7 +414,7 @@ pub(super) fn route(state: &mut State, id: ClientId, input: Input, now: Instant)
     // commands tmux marks read-only (`key_bindings_dispatch`).
     let routed = match routed {
         Routed::ToPane(_) if read_only && !matches!(input, Input::Focus(_)) => return,
-        Routed::Command(ref cmds, _) | Routed::Bound(ref cmds, _)
+        Routed::Command(ref cmds, _) | Routed::Keyed(ref cmds, ..) | Routed::Bound(ref cmds, _)
             if read_only && !cmds.iter().all(|argv| read_only_command(argv)) =>
         {
             show_message(state, id, "client is read-only");
@@ -468,7 +468,8 @@ pub(super) fn route(state: &mut State, id: ClientId, input: Input, now: Instant)
                 _ => {}
             }
         }
-        Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect),
+        Routed::Command(cmds, dialect) => run_binding(state, id, &cmds, dialect, None),
+        Routed::Keyed(cmds, dialect, key) => run_binding(state, id, &cmds, dialect, key),
         Routed::Bound(cmds, dialect) => {
             let key = match &input {
                 Input::Key(key) => Some(key.to_string()),
@@ -493,8 +494,13 @@ pub(super) fn route(state: &mut State, id: ClientId, input: Input, now: Instant)
 /// blocked `wait-for`, an `if-shell` branch) or an `after-*` hook of it
 /// waiting on its shell holds the rest of the commands, and the client's
 /// later input, until it is done ([`BindingRun`]).
-pub fn run_binding(state: &mut State, id: ClientId, cmds: &[Vec<String>], dialect: Dialect) {
-    let key = state.command_key.take();
+pub fn run_binding(
+    state: &mut State,
+    id: ClientId,
+    cmds: &[Vec<String>],
+    dialect: Dialect,
+    key: Option<String>,
+) {
     run_commands_for(state, id, cmds, dialect, false, None, key);
 }
 
@@ -605,6 +611,10 @@ pub(super) fn run_from(state: &mut State, mut run: BindingRun) {
         let ctx = ClientCtx {
             pane,
             dialect: run.dialect,
+            request: crate::protocol::RequestCtx {
+                event_key: run.key.clone(),
+                ..crate::protocol::RequestCtx::default()
+            },
             ..c.ctx.clone()
         };
         let bound = run.bound;
@@ -625,12 +635,10 @@ pub(super) fn run_from(state: &mut State, mut run: BindingRun) {
                 format!("{} key {key}: {printed}", who.unwrap_or_default()),
             );
         }
-        let saved = std::mem::replace(&mut state.event_key, run.key.clone());
         let result = match &run.mouse {
             Some(target) => MouseState::with_current(state, Some(target.clone()), one),
             None => one(state),
         };
-        state.event_key = saved;
         let wait = binding_wait(state, id);
         // What a command prints shows in the view mode of the client's
         // pane (`server_client_print`), the error on its status line.

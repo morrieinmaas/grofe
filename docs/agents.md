@@ -248,7 +248,7 @@ Add your own kind with an `[agents.kinds.<name>]` table. `agents.picker`
 sizes are percentages written as strings (`"80%"`); the sidebar and grid
 sizes are plain numbers of cells.
 
-The look comes from options (see the [config reference](config-reference.md)):
+The look comes from options (see the [options reference](https://termage.github.io/grofe/docs/reference/options.html)):
 `agent-glyph-blocked`, `agent-glyph-error`, `agent-glyph-unseen`,
 `agent-glyph-working`, `notify-muted-glyph` and `agent-blocked-border-style`.
 

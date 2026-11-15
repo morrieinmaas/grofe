@@ -96,27 +96,16 @@ use pane::{PaneEvent, PaneEventKind};
 /// these lines to prove one server per socket.
 pub const START_MARKER: &str = "grofe server starting";
 
-/// What a CLI request brings besides its argv (TM.7).
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CliIo {
-    /// Its stdin, decoded; `None` when it sent none.
-    pub stdin: Option<Vec<u8>>,
-    pub umask: Option<u32>,
-    /// The requesting process (the socket peer), when the OS says.
-    pub pid: Option<i32>,
-}
-
-impl CliIo {
-    fn of(req: &Request, pid: Option<i32>) -> CliIo {
-        use base64::Engine as _;
-        CliIo {
-            stdin: req
-                .stdin
-                .as_deref()
-                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
-            umask: req.umask,
-            pid,
-        }
+/// What a CLI request brings besides its argv (TM.7), for its context.
+fn cli_io_of(req: &Request, pid: Option<i32>) -> protocol::CliIo {
+    use base64::Engine as _;
+    protocol::CliIo {
+        stdin: req
+            .stdin
+            .as_deref()
+            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
+        umask: req.umask,
+        pid,
     }
 }
 
@@ -289,20 +278,23 @@ pub struct State {
     /// What a request printed before the command that failed it: the
     /// reply carries it next to the error, as tmux prints both (FE.2).
     pub(crate) failed_out: String,
-    /// The running CLI request's stdin and umask, for `load-buffer -` and
-    /// the files `save-buffer` creates (TM.7); `None` outside one.
-    pub(crate) cli_io: Option<CliIo>,
-    /// The log lines of the request now running, logged as its commands
-    /// fire (`clients::log_fired`).
-    pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
-    /// The key whose binding is running its commands (`show-messages`).
-    pub(crate) event_key: Option<String>,
-    /// The key the next [`clients::run_binding`] logs its commands under:
-    /// set by a prompt, confirm or menu a binding opened.
-    pub(crate) command_key: Option<String>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
+    /// The resume binding sampling timer, while one runs (`resume::watch`).
+    /// The snapshot writer, started by the first [`snapshot::track`].
+    /// How many tmux files `source-file` has open, one inside another, and
+    /// whether `-v` is on for the one running (`with_source_depth`).
+    pub(crate) source_depth: u32,
+    pub(crate) source_verbose: bool,
+    /// `send-keys -K` nesting: how deep it runs inside the bindings of the
+    /// keys it typed, and whether that hit its limit.
+    pub(crate) typing: (u32, bool),
+    pub(crate) snapshot_writer: Option<snapshot::Writer>,
+    pub(crate) resume_timer: Option<tokio::task::AbortHandle>,
+    /// Restored panes whose process runs their saved resume, by pane and
+    /// spawn generation (`restore`).
+    pub(crate) from_resume: Vec<(crate::types::PaneId, u64)>,
     /// Started implicitly by a session-creating command (`__server
     /// --exit-when-empty`): exits once it has no sessions and no client
     /// connections, even if it never had a session. `start-server` leaves
@@ -700,10 +692,12 @@ async fn serve(
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        cli_io: None,
-        command_log: Default::default(),
-        event_key: None,
-        command_key: None,
+        source_depth: 0,
+        source_verbose: false,
+        typing: (0, false),
+        snapshot_writer: None,
+        resume_timer: None,
+        from_resume: Vec::new(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -949,22 +943,20 @@ fn handle(state: &mut State, msg: ServerMsg) {
             }
             // Parsed once: classified, then run.
             state.failed_out.clear();
-            state.cli_io = Some(CliIo::of(&req, pid));
-            let ctx = crate::compat::forget_stale_pane(state, ctx);
+            let mut ctx = crate::compat::forget_stale_pane(state, ctx);
+            ctx.request.cli_io = Some(std::sync::Arc::new(cli_io_of(&req, pid)));
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors
             // (`show-messages`).
             let who = pid.map_or_else(|| "client".to_string(), |p| format!("client-{p}"));
-            state.command_log = match &parsed {
+            let mut log = match &parsed {
                 Ok(dispatch::Parsed::Commands(cmds)) => {
                     clients::plan_command_log(state, &who, &ctx, &req.argv, cmds.len())
                 }
                 _ => Default::default(),
             };
-            let result = dispatch::run_parsed(state, &ctx, parsed);
-            state.cli_io = None;
-            state.command_log.clear();
+            let result = dispatch::run_parsed(state, &ctx, parsed, &mut log);
             if let Err(e) = &result {
                 clients::log_error(state, &who, e);
             }
@@ -1380,6 +1372,7 @@ pub(crate) fn test_ctx() -> ClientCtx {
         env: Vec::new(),
         client: None,
         dialect: protocol::Dialect::Grofe,
+        request: Default::default(),
     }
 }
 
@@ -1438,10 +1431,12 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        cli_io: None,
-        command_log: Default::default(),
-        event_key: None,
-        command_key: None,
+        source_depth: 0,
+        source_verbose: false,
+        typing: (0, false),
+        snapshot_writer: None,
+        resume_timer: None,
+        from_resume: Vec::new(),
         exit: false,
         exit_when_empty: false,
         connections: 0,

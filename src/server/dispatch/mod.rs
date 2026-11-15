@@ -51,6 +51,7 @@ use ulid::Ulid;
 
 use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
+use crate::server::clients::CommandLog;
 use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
 use crate::server::{State, clients, graphics, grid, keymenu, picker, prompt, sidebar, tray};
@@ -82,21 +83,23 @@ pub fn parse(state: &State, ctx: &ClientCtx, argv: &[String]) -> Result<Parsed, 
 /// or its error message: [`parse`], then [`run_parsed`].
 pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
     let parsed = parse(state, ctx, argv);
-    run_parsed(state, ctx, parsed)
+    run_parsed(state, ctx, parsed, &mut CommandLog::new())
 }
 
 /// Runs a parsed request. argv may have held several commands, split at
 /// `;` arguments as tmux's CLI splits them ([`cmd::parse_sequence`]): they
 /// run in order and the first error stops the rest; what the commands
-/// before it printed goes out with the error (`State::failed_out`).
+/// before it printed goes out with the error (`State::failed_out`). `log`
+/// is the request's log plan, logged as its commands fire.
 pub fn run_parsed(
     state: &mut State,
     ctx: &ClientCtx,
     parsed: Result<Parsed, String>,
+    log: &mut CommandLog,
 ) -> Result<String, String> {
     match parsed? {
         Parsed::AttachCheck(args) => clients::attach_check(state, ctx, &args),
-        Parsed::Commands(cmds) => run_commands(state, ctx, cmds),
+        Parsed::Commands(cmds) => run_commands_logged(state, ctx, cmds, log),
     }
 }
 
@@ -155,6 +158,17 @@ pub(crate) fn run_commands(
     ctx: &ClientCtx,
     cmds: Vec<Command>,
 ) -> Result<String, String> {
+    run_commands_logged(state, ctx, cmds, &mut CommandLog::new())
+}
+
+/// [`run_commands`] for a request's own commands: those that fire at the
+/// top of its queue are logged from `log`.
+fn run_commands_logged(
+    state: &mut State,
+    ctx: &ClientCtx,
+    cmds: Vec<Command>,
+    log: &mut CommandLog,
+) -> Result<String, String> {
     // Names follow their panes (automatic-rename) before a command reads
     // or targets them. A new name is drawn even if the command only reads.
     if window::automatic_rename(&mut state.model) {
@@ -168,7 +182,7 @@ pub(crate) fn run_commands(
         let answered = state.deferred_reply.is_none();
         let shell = matches!(cmd, Command::RunShell(_));
         if server::hooks::depth(state) == 1 && !server::hooks::in_hook(state) {
-            clients::log_fired(state);
+            clients::log_fired(state, log);
         }
         match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
@@ -209,8 +223,8 @@ pub(crate) fn run_commands(
                     ctx: ctx.clone(),
                     cmds: rest,
                     keep_going: false,
-                    depth: options::source_depth(),
-                    verbose: options::source_verbose(),
+                    depth: state.source_depth,
+                    verbose: state.source_verbose,
                 });
             }
             break;

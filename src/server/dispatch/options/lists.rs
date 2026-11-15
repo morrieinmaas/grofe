@@ -4,6 +4,8 @@ use super::*;
 /// global default, element by element from index 0.
 pub(super) struct ListBuiltin {
     pub(super) name: &'static str,
+    /// One line for the generated options reference.
+    pub(super) doc: &'static str,
     pub(super) scope: OptionScope,
     pub(super) default: &'static [&'static str],
 }
@@ -15,11 +17,13 @@ pub(super) struct ListBuiltin {
 pub(super) const LISTS: &[ListBuiltin] = &[
     ListBuiltin {
         name: "command-alias",
+        doc: "Command aliases, each name=command; tmux's six defaults apply under tmux identity.",
         scope: OptionScope::Global,
         default: &[],
     },
     ListBuiltin {
         name: "status-format",
+        doc: "Format of each status line row; an empty row 0 draws the built-in row (left part, window list, right part).",
         scope: OptionScope::Session,
         default: &[
             "",
@@ -31,6 +35,7 @@ pub(super) const LISTS: &[ListBuiltin] = &[
     // and switch-client, tmux 3.7b's default (recorded).
     ListBuiltin {
         name: "update-environment",
+        doc: "Environment variables copied from the client into a session when it is created or a client attaches.",
         scope: OptionScope::Session,
         default: &[
             "DISPLAY",
@@ -52,6 +57,7 @@ pub(super) const LISTS: &[ListBuiltin] = &[
     // probe decides what the outer terminal can do (spec D7, §4.5).
     ListBuiltin {
         name: "terminal-features",
+        doc: "Features of outer terminals by TERM pattern; grofe asks the terminal what it supports instead.",
         scope: OptionScope::Global,
         default: &[
             "xterm*:clipboard:ccolour:cstyle:focus:title",
@@ -62,28 +68,33 @@ pub(super) const LISTS: &[ListBuiltin] = &[
     // B1a: tmux 3.7b's (recorded); no effect, as `terminal-features`.
     ListBuiltin {
         name: "terminal-overrides",
+        doc: "terminfo overrides for outer terminals by TERM pattern; grofe asks the terminal what it supports instead.",
         scope: OptionScope::Global,
         default: &["linux*:AX@"],
     },
     // B2a: tmux 3.7b's arrays with no effect (recorded defaults).
     ListBuiltin {
         name: "codepoint-widths",
+        doc: "Width overrides for Unicode code points, each codepoint=width.",
         scope: OptionScope::Global,
         default: &[],
     },
     ListBuiltin {
         name: "pane-colours",
+        doc: "The colour palette programs in a pane see.",
         scope: OptionScope::Window,
         default: &[],
     },
     ListBuiltin {
         name: "user-keys",
+        doc: "Escape sequences that become the keys User0, User1 and so on.",
         scope: OptionScope::Global,
         default: &[],
     },
     // grofe's own (`GROFE_ONLY`): copy mode's hints.
     ListBuiltin {
         name: "copy-hint-patterns",
+        doc: "Regular expressions copy-mode -h labels on screen, tried in order.",
         scope: OptionScope::Global,
         default: HINT_PATTERNS,
     },

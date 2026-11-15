@@ -398,6 +398,7 @@ impl TestServer {
             env: vec![("HOME".to_string(), self.home.display().to_string())],
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         }
     }
 

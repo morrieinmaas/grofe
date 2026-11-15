@@ -19,7 +19,6 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::protocol::ClientCtx;
@@ -117,7 +116,7 @@ pub fn set(state: &mut State, ctx: &ClientCtx, pane: PaneId, what: Set) -> Resul
         .panes
         .get(&pane)
         .ok_or_else(|| format!("can't find pane: {pane}"))?;
-    let caller = state.cli_io.as_ref().and_then(|io| io.pid);
+    let caller = ctx.request.cli_io.as_ref().and_then(|io| io.pid);
     let (resume, expect, binding) = match what {
         Set::Clear => (None, None, None),
         Set::Resume(argv) => {
@@ -360,16 +359,15 @@ pub fn on_pane_exited(state: &mut State, pane: PaneId) {
     }
 }
 
-/// The sampling timer, while one runs.
-// ponytail: one server per process, so one timer per process; `State`
-// has no field for it (rule 4: the stub edit adds fields, not T4.2).
-static TIMER: Mutex<Option<tokio::task::AbortHandle>> = Mutex::new(None);
-
-/// Starts the sampling timer unless it runs. It stops itself once no
-/// binding remains, so an idle server wakes for nothing.
-pub fn watch(state: &State) {
-    let mut timer = TIMER.lock().unwrap_or_else(PoisonError::into_inner);
-    if timer.as_ref().is_some_and(|t| !t.is_finished()) {
+/// Starts the sampling timer (`State::resume_timer`) unless it runs. It
+/// stops itself once no binding remains, so an idle server wakes for
+/// nothing.
+pub fn watch(state: &mut State) {
+    if state
+        .resume_timer
+        .as_ref()
+        .is_some_and(|t| !t.is_finished())
+    {
         return;
     }
     let Ok(rt) = tokio::runtime::Handle::try_current() else {
@@ -381,7 +379,7 @@ pub fn watch(state: &State) {
             tokio::time::sleep(SAMPLE).await;
             let job: Job = Box::new(|state: &mut State| {
                 if !sweep(state) {
-                    stop();
+                    stop(state);
                 }
             });
             if jobs.send(job).await.is_err() {
@@ -389,12 +387,11 @@ pub fn watch(state: &State) {
             }
         }
     });
-    *timer = Some(task.abort_handle());
+    state.resume_timer = Some(task.abort_handle());
 }
 
-fn stop() {
-    let mut timer = TIMER.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(t) = timer.take() {
+fn stop(state: &mut State) {
+    if let Some(t) = state.resume_timer.take() {
         t.abort();
     }
 }

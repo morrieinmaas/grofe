@@ -369,6 +369,7 @@ fn ctx(opts: &Options, pane: Option<&str>) -> ClientCtx {
         env: opts.env.clone(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     }
 }
 

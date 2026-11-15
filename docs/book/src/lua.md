@@ -1,4 +1,4 @@
-# Scripting and plugins
+# Lua scripting and packs
 
 grofe runs Luau (a sandboxed Lua) inside the server. Use it to bind keys, react to events, run
 timers and fill the status line. `grofe pack` installs plugins written in Luau, and tmux plugins too.
@@ -50,7 +50,7 @@ local cfg = grofe.plugin("my-plugin")        -- what that plugin's init.luau ret
 
 `grofe.every` and `grofe.system` are the only way to run things over time. `system` kills the
 process at `timeout_ms` (default 10000) and reports `code = -1`. Event names are the ones
-`grofe control` can subscribe to (see [protocol v1](protocol-v1.md)); the callback receives the
+`grofe control` can subscribe to (see [protocol v1](https://github.com/termage/grofe/blob/main/docs/protocol-v1.md)); the callback receives the
 event as a table.
 
 ## Example: a status widget

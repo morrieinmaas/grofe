@@ -77,6 +77,7 @@ fn client_less_ctx() -> ClientCtx {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Grofe,
+        request: Default::default(),
     }
 }
 

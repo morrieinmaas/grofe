@@ -1,0 +1,11 @@
+# The Gruvbox dark palette for pills.toml: load it after that file (a later
+# conf.d name, or user.toml) on a dark terminal.
+[user-options]
+theme_bg = "#282828"
+theme_fg = "#ebdbb2"
+theme_blue = "#83a598"
+theme_yellow = "#fabd2f"
+theme_green = "#b8bb26"
+theme_grey = "#928374"
+theme_muted = "#a89984"
+theme_red = "#fb4934"
