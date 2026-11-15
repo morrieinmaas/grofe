@@ -1,10 +1,28 @@
 # Plugins
 
 Your tmux plugins load as they are (see
-[Switching from tmux](switching-from-tmux.md)). grofe also has plugins of its
-own: separate programs, in any language, that the server supervises.
+[Switching from tmux](switching-from-tmux.md)). grofe adds two kinds of its
+own: Luau scripts that run inside the server, and supervised plugins,
+separate programs in any language.
 
-## Declaring a plugin
+## Luau scripting
+
+grofe embeds Luau. An `init.luau` next to your config can bind keys, react to
+events, run timers and push values into the status line through a small
+`grofe.*` API. Every call runs under a 50 ms and 64 MiB budget, so a script
+can never freeze the server.
+
+```lua
+grofe.bind("prefix", "g", function() grofe.cmd("split-window -h") end, { desc = "Split" })
+```
+
+`grofe pack` installs plugins from git into a lockfile, Luau plugins and tmux
+plugins alike. The API, the pack manager and editor types are in
+[`docs/lua.md`](https://github.com/morrieinmaas/grofe/blob/main/docs/lua.md).
+
+## Supervised plugins
+
+### Declaring a plugin
 
 ```toml
 [plugins.event-log]
@@ -27,7 +45,7 @@ A plugin gets `GROFE` (the socket), `GROFE_PLUGIN` (its name) and
 `GROFE_STATE` (the state directory) in its environment; its output goes to
 `<state>/plugins/<name>.log`.
 
-## Talking to the server
+### Talking to the server
 
 `grofe control` is a stdio bridge that speaks protocol v1: one JSON request
 per line in, replies and events out, so a plugin needs no socket code.

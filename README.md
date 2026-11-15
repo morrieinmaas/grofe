@@ -101,6 +101,21 @@ run under the name `tmux`. See
 [Switching from tmux](https://morrieinmaas.github.io/grofe/docs/switching-from-tmux.html)
 for the gaps.
 
+## Scripting and plugins
+
+grofe embeds Luau. An `init.luau` next to your config can bind keys, react to
+events, run timers and push values into the status line, each call under a
+50 ms and 64 MiB budget so a script can never freeze the server. `grofe pack`
+installs plugins from git into a lockfile, Luau plugins and tmux plugins
+alike:
+
+```lua
+grofe.bind("prefix", "g", function() grofe.cmd("split-window -h") end, { desc = "Split" })
+```
+
+See [Plugins](https://morrieinmaas.github.io/grofe/docs/plugins.html) and
+[docs/lua.md](docs/lua.md) for the API, the pack manager and editor types.
+
 ## Contributing
 
 Issues and ideas are welcome; the
