@@ -79,3 +79,7 @@ rpm target="x86_64-unknown-linux-musl":
 # Render the Homebrew formula and AUR PKGBUILD for an existing release into target/pkg
 pkg-render version:
     packaging/render.sh {{ version }} target/pkg
+
+# The ssh remote-session scenarios against sshd containers (podman or docker)
+ssh-e2e *filter:
+    scripts/ssh-e2e.sh {{ filter }}
