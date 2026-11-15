@@ -17,11 +17,11 @@ PROBE_EMAIL="tc0-probe${AT}example.invalid"
 setup() {
     TMP="$(mktemp -d "${TMPDIR:-/tmp}/grofe-corpus.XXXXXX")"
     W="$TMP/repo"
-    mkdir -p "$W/docs/archive/specs" "$W/tests/compat"
+    mkdir -p "$W/docs/specs" "$W/tests/compat"
     cp -R "$REPO/scripts" "$W/scripts"
     cp -R "$REPO/tests/compat/corpus" "$W/tests/compat/corpus"
     cp "$REPO/docs/compat-coverage.md" "$W/docs/"
-    cp "$REPO/docs/archive/specs/2026-09-23-grofe-design.md" "$W/docs/archive/specs/"
+    cp "$REPO/docs/specs/2026-09-23-grofe-design.md" "$W/docs/specs/"
     C="$W/tests/compat/corpus"
 }
 

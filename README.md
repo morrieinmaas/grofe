@@ -451,7 +451,7 @@ plugins loading unchanged; and grofe's own supervised plugins over
 [protocol v1](docs/protocol-v1.md). It runs on Linux and macOS.
 
 The [roadmap](docs/roadmap.md) lists what is open, and the
-[design document](docs/archive/specs/2026-09-23-grofe-design.md) explains the
+[design document](docs/specs/2026-09-23-grofe-design.md) explains the
 reasoning behind every choice.
 
 ## Contributing

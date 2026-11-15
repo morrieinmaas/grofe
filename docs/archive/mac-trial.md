@@ -2,7 +2,7 @@
 
 `scripts/mac-trial.sh` lets you use grofe as your tmux for a few days, with
 your own keys, plugins and status bar, in one terminal window. Your live
-tmux, canopy and config keep running untouched in every other window.
+tmux, the session manager and config keep running untouched in every other window.
 
 ## What it does
 
@@ -12,17 +12,17 @@ or `--root <dir>`) and fills it:
 | In the root | What it is |
 |---|---|
 | `bin/grofe`, `bin/tmux -> grofe` | a copy of a release build (or of `--grofe <binary>`), and the name that gives it tmux identity |
-| `config/` | `XDG_CONFIG_HOME`: copies of your tmux dir (without TPM's `plugins/`) and canopy's config dir, grofe's config, and a link to every other entry of `~/.config` |
-| `data/` | `XDG_DATA_HOME`: a copy of canopy's store, and links to the rest of `~/.local/share` |
-| `state/` | `XDG_STATE_HOME`: grofe's logs and `compat-miss.log`, canopy's state and resurrect saves, and links to the rest of `~/.local/state` |
+| `config/` | `XDG_CONFIG_HOME`: copies of your tmux dir (without TPM's `plugins/`) and the session manager's config dir, grofe's config, and a link to every other entry of `~/.config` |
+| `data/` | `XDG_DATA_HOME`: a copy of the session manager's store, and links to the rest of `~/.local/share` |
+| `state/` | `XDG_STATE_HOME`: grofe's logs and `compat-miss.log`, the session manager's state and resurrect saves, and links to the rest of `~/.local/state` |
 | `run/`, `tmux-tmp/` | a private `XDG_RUNTIME_DIR` (grofe's socket) and `TMUX_TMPDIR` |
 | `zdotdir/` | zsh wrappers that source your own dotfiles, then put `bin/` first on `PATH` again |
 | `info/`, `reports/` | what setup found, and the reports you collect |
 
 grofe's config there is three layers: a generated `config.toml` that points
-canopy at its copies, canopy's fragments from `canopy grofe generate`, and a
+the session manager at its copies, the session manager's fragments from `the session manager grofe generate`, and a
 `user.toml` (see below). In the copies, the paths to your tmux dir and to
-canopy are rewritten to the copies, and a script that sets its own `PATH`
+the session manager are rewritten to the copies, and a script that sets its own `PATH`
 gets `bin/` in front of it. Your trial-only settings go in
 `config/grofe/conf.d/99-trial.toml`, which setup never overwrites.
 
@@ -32,14 +32,14 @@ attaches `tmux -L grofe-trial new-session -A -s trial`.
 
 ## What it never touches
 
-- `~/.config` (tmux, canopy, grofe or anything else), `~/.local/share/canopy`,
-  `~/.local/state/canopy`, `~/.local/state/grofe`. The script reads them and
+- `~/.config` (tmux, the session manager, grofe or anything else), `~/.local/share/private`,
+  `~/.local/state/private`, `~/.local/state/grofe`. The script reads them and
   writes only inside the root. It refuses a root that is, contains, or sits
   inside any of them, `$HOME`, `~/Library`, `/tmp` or `$TMPDIR`.
 - Your live tmux server and its sockets: grofe's socket is in the root's
   `run/`, and `TMUX_TMPDIR` points into the root too.
 - launchd and login items: continuum adds or removes a login agent every
-  time it loads, so in the trial's copy of canopy those scripts do nothing.
+  time it loads, so in the trial's copy of the session manager those scripts do nothing.
   The trial installs no agent and no service.
 - Your clipboard settings. Copying puts text on the real clipboard; that is
   one of the things to test.
@@ -52,14 +52,14 @@ write to it as they would outside the trial. `HOME` stays your own.
 
 You need two things the live setup does not have yet:
 
-1. **A canopy with the grofe backend** (`bin/canopy-grofe`). The canopy in
-   `~/.local/share/canopy` may predate it; setup says so and stops. Point
-   `--canopy` at a checkout at the commit in
-   `tests/e2e/alias-day/pins.env` (`CANOPY_SHA`). It is copied, never used
+1. **A the session manager with the grofe backend** (`bin/private-grofe`). The the session manager in
+   `~/.local/share/private` may predate it; setup says so and stops. Point
+   `--private` at a checkout at the commit in
+   `tests/e2e/alias-day/pins.env` (`private_SHA`). It is copied, never used
    in place.
-2. **A `user.toml`**, your `canopy/user.conf` in grofe's format. The best one
-   is the hand-ported file on athome's `grofe-config` branch, rendered with
-   your own chezmoi data:
+2. **A `user.toml`**, your `private/user.conf` in grofe's format. The best one
+   is the hand-ported file on the owner's dotfiles' `grofe-config` branch, rendered with
+   your own the dotfiles manager data:
 
    ```sh
    git -C <athome clone> show grofe-config:home/dot_config/grofe/user.toml.tmpl |
@@ -76,7 +76,7 @@ Then, from any shell that is not inside tmux:
 scripts/mac-trial.sh setup --canopy <canopy checkout> --user-toml ~/grofe-trial-user.toml
 ```
 
-`--grofe <binary>` skips the build; `--offline` skips downloading canopy's
+`--grofe <binary>` skips the build; `--offline` skips downloading the session manager's
 plugin binaries (opensessions and fzf-url stay dormant without them).
 
 ## Starting it
@@ -114,7 +114,7 @@ format, with the terminal it happened in.
 - [ ] **Popups and menus:** gh-dash, the pet picker, the network popup, the key
   list, which-key, sessionx.
 - [ ] **Resurrect:** `prefix M-s` saves (into the trial's
-  `state/canopy/resurrect`); after `tmux kill-server` inside the trial and a
+  `state/private/resurrect`); after `tmux kill-server` inside the trial and a
   fresh `start`, continuum should bring the layout back.
 - [ ] **Images in Ghostty and kitty:** `kitten icat <image>` works with no
   setup (Unicode placeholders). For direct placements and animation, add
@@ -141,10 +141,10 @@ started there would use the trial's `TMUX_TMPDIR`, not your live server.
 scripts/mac-trial.sh report
 ```
 
-writes `reports/report-<time>.txt` in the root: grofe's and canopy's
+writes `reports/report-<time>.txt` in the root: grofe's and the session manager's
 versions, macOS, the terminals you started the trial in, the config check,
 the import report, `compat-miss.log`, grofe's server log and panic reports,
-and canopy's plugin log. It holds no environment dump; your home is shown as
+and the session manager's plugin log. It holds no environment dump; your home is shown as
 `~`, the host name is masked, and values that look like tokens, keys or
 passwords are replaced. Read it before you share it.
 
