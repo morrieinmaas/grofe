@@ -20,3 +20,23 @@ fn options_reference_matches_the_table() {
         path.display()
     );
 }
+
+/// No TOML key appears twice in the options tables, so the reference lists
+/// each option once.
+#[test]
+fn every_option_is_documented_once() {
+    use grofe::config::{LIST_NAMES, OPTION_NAMES};
+    let mut keys: Vec<&str> = OPTION_NAMES
+        .iter()
+        .chain(LIST_NAMES)
+        .map(|(k, _)| *k)
+        .collect();
+    let total = keys.len();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(
+        keys.len(),
+        total,
+        "a TOML key appears twice in the options tables"
+    );
+}

@@ -12,6 +12,7 @@
 - [Scratchpads](scratchpads.md)
 - [Agent sessions](agents.md)
 - [Messages and the prompt](messages.md)
+- [Lua scripting and packs](lua.md)
 - [Plugins](plugins.md)
 - [Troubleshooting](troubleshooting.md)
 - [Contributing](contributing.md)

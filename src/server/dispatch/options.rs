@@ -5842,11 +5842,7 @@ pub fn reference_markdown() -> String {
     let mut entries: Vec<(&str, String)> = Vec::new();
     for b in BUILTINS {
         let key = toml_key(b.name, crate::config::OPTION_NAMES);
-        let ty = match crate::config::toml_type(key) {
-            config::Ty::Bool => "boolean",
-            config::Ty::Int => "integer",
-            config::Ty::Str => "string",
-        };
+        let ty = crate::config::toml_type_name(key);
         let mut text = format!(
             "## {}\n\n{}\n\n- **TOML key**: `{key}` ({ty})\n- **Scope**: {}\n- **Values**: {}\n\n",
             b.name,

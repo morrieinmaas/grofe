@@ -5,27 +5,28 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/morrieinmaas/grofe?style=social)](https://github.com/morrieinmaas/grofe)
 
-A terminal multiplexer for people who like tmux and are tired of working
-around it.
+An agent-native terminal multiplexer: run many coding-agent sessions side by
+side and let grofe keep track of them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://morrieinmaas.github.io/grofe/img/grofe-dark.png">
-  <img alt="grofe with three framed panes: vim, a file listing and a shell session" src="https://morrieinmaas.github.io/grofe/img/grofe-light.png">
+  <img alt="grofe with framed panes running coding agents, the agent sidebar and the status line" src="https://morrieinmaas.github.io/grofe/img/grofe-light.png">
 </picture>
 
-grofe keeps what tmux got right (sessions, windows and panes, a server that
-outlives your terminal, a prefix key, `split-window` and `send-keys`) and
-fixes the parts you keep fighting:
-
-- **Your work survives a reboot.** Panes come back in the same layout and
-  folders, and programs that know how to resume (your editor, a coding agent
-  mid-conversation) come back running. No resurrect, no continuum.
-- **A config you can debug.** TOML with a schema: a typo names the file and
-  line, and `show-config --explain` says where a value came from.
-- **A status line that never forks on redraw.** `#()` commands run on a timer
-  and are cached.
-- **Framed panes you can drag, dock and float**, coding agents tracked in the
-  status line, and modern terminal support out of the box.
+- **Knows your coding agents.** grofe sees which panes run an agent (Claude
+  Code, Codex, opencode, Gemini, pi, aider) and what each one is doing:
+  working, blocked on you, done. `prefix u` jumps to the one that needs you,
+  a picker, a sidebar and a grid show them all, and notifications reach you
+  when you are looking elsewhere.
+- **Agents come back after a restart.** Panes return in the same layout and
+  folders, and Claude Code, Codex and opencode come back in the same
+  conversation once their hooks are set up. No resurrect, no continuum.
+- **tmux, without the parts you fight.** tmux's keys, commands and formats,
+  so your scripts and plugins keep working, with a TOML config that names
+  the line of a typo, a status line that never forks on redraw, and framed
+  panes you can drag, dock and float.
+- **Scriptable.** Luau scripts and `grofe pack` plugins run inside a time
+  and memory budget, and `grofe control` speaks JSON to anything else.
 
 > grofe is an early preview (0.1). It is in daily use and passes a large tmux
 > compatibility suite, but expect rough edges and keep real tmux installed
@@ -118,12 +119,13 @@ alike:
 grofe.bind("prefix", "g", function() grofe.cmd("split-window -h") end, { desc = "Split" })
 ```
 
-See [Plugins](https://morrieinmaas.github.io/grofe/docs/plugins.html) and
-[docs/lua.md](docs/lua.md) for the API, the pack manager and editor types.
+See [Lua scripting and packs](https://morrieinmaas.github.io/grofe/docs/lua.html)
+for the API, the pack manager and editor types.
 
 ## Contributing
 
-Issues and ideas are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the
+Issues and ideas are welcome; the [roadmap](docs/roadmap.md) lists what is
+open. [CONTRIBUTING.md](CONTRIBUTING.md) covers the
 build, the checks a change must pass (`just check`), tests, commits and the
 docs. When you report a bug, include `grofe -V`, your OS and terminal, and
 whether it also happens under the `tmux` name. Security problems go through

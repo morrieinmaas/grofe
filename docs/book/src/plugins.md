@@ -5,20 +5,11 @@ Your tmux plugins load as they are (see
 own: Luau scripts that run inside the server, and supervised plugins,
 separate programs in any language.
 
-## Luau scripting
+## Luau scripting and packs
 
-grofe embeds Luau. An `init.luau` next to your config can bind keys, react to
-events, run timers and push values into the status line through a small
-`grofe.*` API. Every call runs under a 50 ms and 64 MiB budget, so a script
-can never freeze the server.
-
-```lua
-grofe.bind("prefix", "g", function() grofe.cmd("split-window -h") end, { desc = "Split" })
-```
-
-`grofe pack` installs plugins from git into a lockfile, Luau plugins and tmux
-plugins alike. The API, the pack manager and editor types are in
-[`docs/lua.md`](https://github.com/morrieinmaas/grofe/blob/main/docs/lua.md).
+grofe embeds Luau: an `init.luau` next to your config binds keys, reacts to
+events and feeds the status line, and `grofe pack` installs Luau and tmux
+plugins from git. See [Lua scripting and packs](lua.md).
 
 ## Supervised plugins
 

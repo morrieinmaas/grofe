@@ -58,4 +58,15 @@ its last pane) before stopping the server. To always start empty, set
 
 Panes come back in the same layout and directory. A pane that knows how to
 resume comes back running its program; the others come back as a shell.
-Before a reboot, `grofe reboot-check` lists what will come back and how.
+## Before a reboot
+
+`grofe reboot-check [--json]` reads the snapshot on disk and gives every pane
+a verdict: `will resume` (it has a saved resume command), `restores as a
+shell`, or the reason it will not come back as expected, such as a resume set
+a moment ago that is not saved yet. With `--json` it prints one object per
+pane with `target`, `uid` and `verdict`.
+
+Its exit status says whether the reboot is safe: `0` when every pane that
+expects a resume will get it, `1` when some will not, and `2` when
+persistence is misconfigured (restore off and no login unit that restores, or
+a state directory it cannot write). With no server it says so and exits `0`.

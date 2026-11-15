@@ -2,7 +2,7 @@
 
 Opt-in. With `graphics` off (the default) nothing below runs and the bytes
 sent to clients are what T3.8 sent: Unicode placeholders only, direct
-placements and sixel dropped. `docs/graphics-notes.md` has the survey of what
+placements and sixel dropped. `docs/archive/graphics-notes.md` has the survey of what
 tools send; this file is the design of the rest.
 
 ## Switch
