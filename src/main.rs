@@ -224,6 +224,10 @@ fn main() -> ExitCode {
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
         // grofe's own verb: under the tmux name `layout` is an unknown command.
         "layout" if dialect() == Dialect::Grofe => layout_glue::run(&globals, &rest[1..]),
+        // The plugin manager: client side only, no server involved.
+        "pack" if dialect() == Dialect::Grofe => {
+            ExitCode::from(grofe::pack::cli::run(&rest[1..]).clamp(0, 255) as u8)
+        }
         // A stdio bridge to the server (T6.2).
         // grofe's own verb: under the tmux name `control` is an unknown command.
         "control" if dialect() == Dialect::Grofe && rest.len() == 1 => {

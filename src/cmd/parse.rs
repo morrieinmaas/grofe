@@ -2796,6 +2796,25 @@ fn parse_show_scratchpad(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
+fn parse_lua(argv: &[String]) -> Result<Command, ParseError> {
+    if argv.is_empty() {
+        return Err(ParseError::MissingArgument("lua".to_string()));
+    }
+    Ok(Command::Lua {
+        src: argv.join(" "),
+    })
+}
+
+fn parse_lua_call(argv: &[String]) -> Result<Command, ParseError> {
+    let [id] = argv else {
+        return Err(ParseError::Other("lua-call needs one id".to_string()));
+    };
+    let id = id
+        .parse()
+        .map_err(|_| ParseError::Other(format!("lua-call: not a number: {id}")))?;
+    Ok(Command::LuaCall { id })
+}
+
 fn parse_drag_pane(argv: &[String]) -> Result<Command, ParseError> {
     const SHORT: &[(char, FlagKind)] = &[('M', FlagKind::Bool)];
     let flags = flags_for(argv, SHORT, "drag-pane")?;
@@ -4164,6 +4183,8 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             no_args(rest, "choose-scratchpad").map(|()| Command::ChooseScratchpad)
         }
         "drag-pane" => parse_drag_pane(rest),
+        "lua" => parse_lua(rest),
+        "lua-call" => parse_lua_call(rest),
         "place-pane" => parse_place_pane(rest),
         "display-menu" => parse_display_menu(rest),
         "display-panes" => parse_display_panes(rest),
@@ -6765,5 +6786,47 @@ mod scratchpad_tests {
             Ok(Command::ChooseScratchpad)
         ));
         assert!(parse(&argv(&["choose-scratchpad", "x"])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod lua_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn test_parse_lua() {
+        let Ok(Command::Lua { src }) = parse(&argv(&["lua", "return 1"])) else {
+            panic!("lua");
+        };
+        assert_eq!(src, "return 1");
+        let Ok(Command::Lua { src }) = parse(&argv(&["lua", "return", "1"])) else {
+            panic!("lua words");
+        };
+        assert_eq!(src, "return 1");
+        assert!(parse(&argv(&["lua"])).is_err());
+    }
+
+    #[test]
+    fn test_lua_call_needs_number() {
+        let Ok(Command::LuaCall { id }) = parse(&argv(&["lua-call", "7"])) else {
+            panic!("lua-call");
+        };
+        assert_eq!(id, 7);
+        assert!(parse(&argv(&["lua-call", "x"])).is_err());
+        assert!(parse(&argv(&["lua-call"])).is_err());
+        assert!(parse(&argv(&["lua-call", "1", "2"])).is_err());
+    }
+
+    #[test]
+    fn test_lua_unknown_in_tmux_dialect() {
+        for verb in ["lua", "lua-call"] {
+            let err = crate::compat::tmux::resolve(verb).err().map(|e| e.0);
+            assert_eq!(err, Some(format!("unknown command: {verb}")));
+        }
+        assert!(crate::compat::tmux::resolve("drag-pane").is_err());
     }
 }

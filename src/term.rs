@@ -8,7 +8,7 @@
 //! every one of them through grofe's real render path (pane, server,
 //! attach client, reconstructed outer terminal) on macOS and Linux, and
 //! all pass (`tests/acceptance/t3_6.rs`, the `term_rerun_*` tests), so
-//! D7's bar is met. See docs/spike-notes.md, "TERM decision" and "T3.6
+//! D7's bar is met. See docs/archive/spike-notes.md, "TERM decision" and "T3.6
 //! re-run", for the evidence.
 
 use std::path::PathBuf;

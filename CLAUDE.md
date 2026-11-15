@@ -1,6 +1,6 @@
 # grofe: agent conventions
 
-Conventions for agents implementing tasks from `docs/plans/2026-09-23-milestones.md`.
+Conventions for agents implementing tasks from `docs/archive/plans/2026-09-23-milestones.md`.
 
 ## Before starting a task
 
