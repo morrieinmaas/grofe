@@ -31,6 +31,26 @@ impl PrivateTmux<'_> {
             .is_ok_and(|s| s.success());
         assert!(ok, "tmux {args:?}");
     }
+
+    /// Waits until every pane's shell has moved into `prefix`: on Linux a
+    /// pane's cwd is the server's own until its child has done `chdir`.
+    fn wait_cwds(&self, prefix: &str) {
+        for _ in 0..200 {
+            let out = Command::new("tmux")
+                .env("TMUX_TMPDIR", self.0)
+                .env_remove("TMUX")
+                .env_remove("TMUX_PANE")
+                .args(["list-panes", "-a", "-F", "#{pane_current_path}"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            if !out.is_empty() && out.lines().all(|l| l.starts_with(prefix)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("tmux panes never reached {prefix}");
+    }
 }
 
 impl Drop for PrivateTmux<'_> {
@@ -98,6 +118,8 @@ fn an_empty_server_starts_with_the_running_tmux_sessions() {
     tmux.run(&["split-window", "-h", "-t", "alpha", "-c", b]);
     tmux.run(&["new-window", "-d", "-t", "alpha", "-n", "second", "-c", b]);
     tmux.run(&["new-session", "-d", "-s", "beta", "-c", a]);
+    let real = fs::canonicalize(work.path()).expect("canonicalize");
+    tmux.wait_cwds(real.to_str().expect("utf8"));
 
     // SAFETY: this file's only test; nothing else reads the environment.
     unsafe { std::env::set_var("TMUX_TMPDIR", tmpdir.path()) };
