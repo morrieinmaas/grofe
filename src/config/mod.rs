@@ -386,7 +386,10 @@ mod tests {
             let ok = match kind {
                 Kind::Bool => toml_type(toml) == Ty::Bool,
                 Kind::Number { .. } => toml_type(toml) == Ty::Int,
-                Kind::Choice(_) => true,
+                Kind::Choice(vs) => match toml_type(toml) {
+                    Ty::Str => true,
+                    Ty::Bool | Ty::Int => vs.contains(&"on") && vs.contains(&"off"),
+                },
                 _ => toml_type(toml) == Ty::Str,
             };
             assert!(
@@ -395,6 +398,16 @@ mod tests {
                 toml_type(toml)
             );
         }
+    }
+
+    /// Only the two choice options the TOML spells as a boolean or an integer
+    /// carry a type override (`remain-on-exit`, `status.lines`).
+    #[test]
+    fn only_two_options_override_their_toml_type() {
+        assert_eq!(toml_type("remain-on-exit"), Ty::Bool);
+        assert_eq!(toml_type("status.lines"), Ty::Int);
+        assert_eq!(toml_type("set-clipboard"), Ty::Str);
+        assert_eq!(toml_type("status.position"), Ty::Str);
     }
 
     #[test]
