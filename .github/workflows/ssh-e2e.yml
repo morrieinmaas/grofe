@@ -24,4 +24,7 @@ jobs:
         run: scripts/ci-linux.sh toolchain
       - uses: Swatinem/rust-cache@v2
       - name: Container end-to-end
+        env:
+          # ubuntu-latest has podman too, and the script prefers it.
+          GROFE_E2E_RUNTIME: docker
         run: scripts/ssh-e2e.sh
