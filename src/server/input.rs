@@ -3392,6 +3392,20 @@ fn ctrl_byte(c: char) -> Option<u8> {
         '^' | '6' | '~' => 30,
         '_' | '/' | '7' => 31,
         '8' | '?' => 127,
+        // tmux 3.7b folds a shifted US key to its base key first: `C-!` is
+        // `C-1` (so `1`), `C-"` is `'`, `C-:` is `;`, `C-{` is `C-[`.
+        '!' => b'1',
+        '(' => b'9',
+        ')' => b'0',
+        '"' | '\'' => b'\'',
+        '<' | ',' => b',',
+        '>' | '.' => b'.',
+        ':' => b';',
+        '-' => 31,
+        '`' => 0,
+        '{' => 27,
+        '|' => 28,
+        '}' => 29,
         _ => return None,
     })
 }
@@ -3411,6 +3425,8 @@ fn legacy_encode(key: &Key, modes: &InputModes) -> Vec<u8> {
     let m = key.mods;
     let mut out = if m.alt { vec![ESC] } else { Vec::new() };
     match key.code {
+        // Ctrl with these has no form: tmux's send-keys types `C-%` as text.
+        KeyCode::Char('#' | '$' | '%' | '&' | '*') if m.ctrl => return Vec::new(),
         KeyCode::Char(c) => match m.ctrl.then(|| ctrl_byte(c)).flatten() {
             Some(b) => out.push(b),
             None => out.extend(utf8(c)),
@@ -3422,8 +3438,8 @@ fn legacy_encode(key: &Key, modes: &InputModes) -> Vec<u8> {
         KeyCode::Keypad(_) if m.ctrl || m.shift => return Vec::new(),
         KeyCode::Keypad(k) if modes.app_keypad => out.extend([ESC, b'O', k.row().3]),
         KeyCode::Keypad(k) => out.push(k.row().2),
-        // A C0 code goes as itself, as `input_key_vt10x` writes it.
-        KeyCode::Control(_) if m.ctrl || m.shift => return Vec::new(),
+        // A C0 code goes as itself, as `input_key_vt10x` writes it, whatever
+        // the modifiers (recorded on tmux 3.7b: `C-[LF]` and `S-[LF]` are `\n`).
         KeyCode::Control(c) => out.push(c),
         // User keys are for bindings; no pane gets them.
         KeyCode::User(_) => return Vec::new(),
