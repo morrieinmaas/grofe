@@ -67,7 +67,7 @@ const CONNECT_RETRY: Duration = Duration::from_millis(5);
 
 /// Commands that start a server when none is running (spec §4.1). Every
 /// other command fails fast with `no server running on <socket>`.
-const AUTO_START: &[&str] = &["new-session", "new", "start-server", "start"];
+const AUTO_START: &[&str] = &["new-session", "start-server", "start"];
 
 fn main() -> ExitCode {
     install_panic_report();
@@ -157,16 +157,16 @@ fn main() -> ExitCode {
         rest
     };
     let rest = rest.as_slice();
-    let verb = &rest[0];
+    let verb = grofe::cmd::parse::canonical_name(&rest[0]);
 
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.
-    match verb.as_str() {
+    match verb {
         "__server" => {}
-        "attach-session" | "attach" => report_panics_for(&globals.socket(), "client"),
+        "attach-session" => report_panics_for(&globals.socket(), "client"),
         _ => report_panics_for(&globals.socket(), "cli"),
     }
-    match verb.as_str() {
+    match verb {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
@@ -220,7 +220,7 @@ fn main() -> ExitCode {
                 Err(e) => fail(&e),
             }
         }
-        "attach-session" | "attach" => attach(&globals.socket(), rest),
+        "attach-session" => attach(&globals.socket(), rest),
         // File layers only: never starts or contacts a server (R8).
         "show-config" => grofe::config::show_config(&rest[1..]),
         // Reads a tmux.conf, no server anywhere (spec 5.5).
@@ -272,10 +272,10 @@ fn main() -> ExitCode {
                 }
             }
         }
-        "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
+        "new-session" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
-        "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest, bare),
+        "new-session" if attaches(rest) => new_and_attach(&globals, rest, bare),
         _ => {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
@@ -748,7 +748,7 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     if let Err(e) = control_hello(socket) {
         return fail(&e);
     }
-    let stream = if AUTO_START.contains(&argv[0].as_str()) {
+    let stream = if AUTO_START.contains(&grofe::cmd::parse::canonical_name(&argv[0])) {
         // Implicit start: that server exits if it ends up with no sessions.
         connect_or_start(socket, own_dir, true)
     } else {
