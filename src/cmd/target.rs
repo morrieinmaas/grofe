@@ -858,9 +858,20 @@ mod tests {
             parse_target("1").unwrap(),
             Target::Session(SessionRef::Bare("1".to_string()))
         );
-        // Ids and a bare offset keep their native reading.
+        // Ids keep their native reading; a bare offset or `!` is left for
+        // the resolver, which reads it by the kind of target the verb wants
+        // (recorded on tmux 3.7b: `select-window -t +1`).
         assert_eq!(t("%3").unwrap(), parse_target("%3").unwrap());
-        assert!(t("+1").is_err());
+        for word in ["+1", "-2", "!", "{last}", "{next}", "{previous}"] {
+            assert_eq!(
+                t(word).unwrap(),
+                Target::Session(SessionRef::Bare(word.into()))
+            );
+            assert!(
+                parse_target(word).is_err() || word == "{previous}",
+                "{word}"
+            );
+        }
         // The reading ends with the call.
         assert!(parse_target(":.+").is_err());
     }
