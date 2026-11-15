@@ -833,14 +833,17 @@ start-from-tmux = <span class="k">true</span>
   if (window.fetch) {
     gh('').then(function (d) {
       var n = d.stargazers_count;
+      if (!(n > 0)) {
+        document.querySelectorAll('[data-gh="stars"]').forEach(function (el) { var li = el.closest('li'); if (li) li.remove(); });
+        return;
+      }
       put('stars', n.toLocaleString('en') + (n === 1 ? ' star' : ' stars'));
       put('stars-inline', ' · ' + n.toLocaleString('en'));
     }).catch(function () {});
-    fetch('https://api.github.com/repos/morrieinmaas/grofe/releases/latest').then(function (r) {
-      if (r.status === 404) { put('release', 'None tagged yet'); return null; }
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    }).then(function (d) { if (d && d.tag_name) put('release', d.tag_name); }).catch(function () {});
+    // newest release, pre-releases included (/releases/latest skips them)
+    gh('/releases?per_page=1').then(function (d) {
+      if (d && d[0] && d[0].tag_name) put('release', d[0].tag_name);
+    }).catch(function () {});
     gh('/actions/workflows/ci.yml/runs?branch=main&per_page=1').then(function (d) {
       var run = d.workflow_runs && d.workflow_runs[0];
       if (!run) return;
