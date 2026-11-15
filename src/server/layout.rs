@@ -2191,8 +2191,11 @@ pub fn find_adjacent(
     // always has a pane at column 0 and a framed one has none, its
     // leftmost pane `pad` cells in: so the rects go back on the inner
     // area, with no border status (frames ignore it), and the walk below
-    // is tmux's unchanged.
+    // is tmux's unchanged. The top pane sits `pad` rows down less any
+    // trim, so the rows shift by the topmost pane's offset, and the inner
+    // area is the panes' bounding box.
     let pad = panes.iter().map(|(_, r)| r.x).min().unwrap_or(0);
+    let top = panes.iter().map(|(_, r)| r.y).min().unwrap_or(0);
     let unframed: Vec<(PaneId, Rect)>;
     let (panes, area, status) = if pad == 0 {
         (panes, area, status)
@@ -2202,7 +2205,7 @@ pub fn find_adjacent(
             .map(|(id, r)| {
                 let r = Rect {
                     x: r.x - pad,
-                    y: r.y.saturating_sub(pad),
+                    y: r.y - top,
                     cols: r.cols.saturating_add(pad),
                     rows: r.rows.saturating_add(pad),
                 };
@@ -2210,8 +2213,16 @@ pub fn find_adjacent(
             })
             .collect();
         let area = Rect {
-            cols: area.cols.saturating_sub(pad),
-            rows: area.rows.saturating_sub(pad),
+            cols: unframed
+                .iter()
+                .map(|(_, r)| r.x + r.cols)
+                .max()
+                .unwrap_or(0),
+            rows: unframed
+                .iter()
+                .map(|(_, r)| r.y + r.rows)
+                .max()
+                .unwrap_or(0),
             ..area
         };
         (unframed.as_slice(), area, PaneStatus::Off)
@@ -4852,6 +4863,30 @@ mod tests {
         assert_eq!(framed, unframed);
         assert_eq!(find(&tree, A, Edge::Right), Some(B));
         assert_eq!(find(&tree, B, Edge::Down), Some(C));
+    }
+
+    /// A trimmed framed window (its top gap given back) finds the same
+    /// neighbours: from the top right of a 2x2, left is the top left even
+    /// when the bottom left was active more recently, and down is below.
+    #[test]
+    fn find_adjacent_in_a_trimmed_framed_window() {
+        let area = rect(80, 24);
+        let mut tree = LayoutTree::new(A);
+        tree.split(area, A, Dir::Horizontal, B, SplitSize::Half)
+            .unwrap();
+        tree.split(area, A, Dir::Vertical, C, SplitSize::Half)
+            .unwrap();
+        tree.split(area, B, Dir::Vertical, D, SplitSize::Half)
+            .unwrap();
+        tree.set_pad(2);
+        tree.set_trim(1, 1);
+        let recent = |p| if p == C { 9 } else { 0 };
+        let find = |p, e| find_adjacent(&tree.compute(area), area, PaneStatus::Off, p, e, recent);
+        assert_eq!(find(B, Edge::Left), Some(A));
+        assert_eq!(find(B, Edge::Down), Some(D));
+        assert_eq!(find(A, Edge::Down), Some(C));
+        assert_eq!(find(D, Edge::Up), Some(B));
+        assert_eq!(find(D, Edge::Left), Some(C));
     }
 
     /// Every framed content rect has a cell, sits `pad` in from the
