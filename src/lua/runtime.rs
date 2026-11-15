@@ -191,14 +191,33 @@ mod tests {
         let r = Runtime::new(Limits::default()).unwrap();
         let t = Instant::now();
         let e = r.exec("p", src).unwrap_err();
+        // Unbudgeted, these never return, so any finite bound proves the abort; 2 s leaves room
+        // for a descheduled runner. The 2x-budget contract is a_spin_ends_within_twice_the_budget.
         assert!(
-            t.elapsed() < Duration::from_millis(150),
+            t.elapsed() < Duration::from_secs(2),
             "{src}: {:?}",
             t.elapsed()
         );
         assert!(e.message.contains(want), "{src}: {e}");
-        r.exec("next", "z = 1").unwrap();
-        assert_eq!(r.lua().globals().get::<i64>("z").unwrap(), 1);
+        runs_after(&r);
+    }
+
+    /// Checks that a trivial call runs. The budget is wall-clock, so a descheduled runner can push
+    /// even `z = 1` past it; a stale deadline fails at once, so only a full-budget miss is retried.
+    fn runs_after(r: &Runtime) {
+        let budget = Limits::default().budget;
+        for _ in 0..5 {
+            let t = Instant::now();
+            match r.exec("next", "z = 1") {
+                Ok(()) => return assert_eq!(r.lua().globals().get::<i64>("z").unwrap(), 1),
+                Err(e) => assert!(
+                    e.message.contains("budget") && t.elapsed() >= budget,
+                    "{e} after {:?}",
+                    t.elapsed()
+                ),
+            }
+        }
+        panic!("five trivial calls in a row ran over the budget");
     }
     #[test]
     fn deep_recursion_is_a_lua_error() {
@@ -217,12 +236,26 @@ mod tests {
     }
     #[test]
     fn the_interrupt_fires_inside_the_pattern_matcher() {
-        aborts("string.rep('a', 2e4):match('(.-)(.-)(.-)(.-)x')", "budget");
-        aborts("string.rep('a', 2e7):find('%b()')", "budget");
-        aborts(
-            "string.gsub(string.rep('a', 1e6), 'a', 'bbbbbbbbbbbbbbbbbbbbbbbbbbb')",
-            "budget",
-        );
+        // Timing-free: the subject is built outside the budget and `done` is set only if the
+        // matcher returns, so a budget error with `done` unset means it was interrupted inside.
+        // Uninterrupted, the match never ends, the find takes ~2 s and the gsub runs out of memory.
+        for (n, src) in [
+            (20_000, "s:match('(.-)(.-)(.-)(.-)x') done = true"),
+            (20_000_000, "s:find('%b()') done = true"),
+            (
+                1_000_000,
+                "string.gsub(s, 'a', 'bbbbbbbbbbbbbbbbbbbbbbbbbbb') done = true",
+            ),
+        ] {
+            let r = rt();
+            let s = r.lua().create_string(vec![b'a'; n]).unwrap();
+            r.lua().globals().set("s", s).unwrap();
+            let e = r.exec("p", src).unwrap_err();
+            assert!(e.message.contains("budget"), "{src}: {e}");
+            let done: Option<bool> = r.lua().globals().get("done").unwrap();
+            assert_eq!(done, None, "{src} ran to completion");
+            runs_after(&r);
+        }
     }
     #[test]
     fn spins_in_coroutines_sorts_and_metamethods_abort() {
