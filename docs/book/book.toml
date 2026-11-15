@@ -1,6 +1,6 @@
 [book]
 title = "grofe"
-description = "A terminal multiplexer for people who like tmux and are tired of working around it."
+description = "grofe, the agent-native tmux: a terminal multiplexer in Rust."
 language = "en"
 src = "src"
 
@@ -12,4 +12,5 @@ site-url = "/grofe/docs/"
 git-repository-url = "https://github.com/morrieinmaas/grofe"
 edit-url-template = "https://github.com/morrieinmaas/grofe/edit/main/docs/book/{path}"
 default-theme = "light"
-preferred-dark-theme = "ayu"
+preferred-dark-theme = "coal"
+additional-css = ["theme/gruvbox.css"]
