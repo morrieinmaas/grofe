@@ -38,7 +38,7 @@ shipped files". Several docs are finished one-off notes that read like current d
   main (Luau, `grofe pack`, native agents) once #11 has merged.
 - Add the missing user docs: `docs/config-reference.md` listing every TOML key with type, default
   and the tmux option it maps to (generated from the options table by a test that fails when the doc
-  is stale, the same way `tests/docs_lua.rs` guards `docs/lua.md`), and a section for
+  is stale, the same way `tests/docs_lua.rs` guards `docs/book/src/lua.md`), and a section for
   `reboot-check` and `show-config --explain`.
 
 **Done when.** `grep -rniE "canopy|athome|chezmoi|\.claude|/Users/" docs README.md` finds nothing
