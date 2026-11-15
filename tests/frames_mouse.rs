@@ -1,8 +1,9 @@
 //! FR.3: moving panes with the mouse (spec 2026-11-05-frames.md "The
 //! mouse", "Drag and drop"), through SGR reports from an attached client.
 //! A framed tile's title drag and `drag-pane -M` (`C-MouseDrag1Pane`) move
-//! a pane: onto another's middle they swap, onto the outer quarter of a
-//! side the pane docks there, onto itself nothing changes. A drag on a gap
+//! a pane: onto another's middle they swap, onto the thin band along a
+//! side the pane docks there, onto itself nothing changes, off every tile
+//! a tiled pane snaps to the nearest. A drag on a gap
 //! or any other frame edge resizes. A Ctrl-drop of a floating pane
 //! unfloats it where it lands. Under tmux identity `drag-pane` is unknown
 //! and `C-MouseDrag1Pane` unbound.
@@ -262,37 +263,74 @@ fn a_dragged_pane_follows_the_pointer_until_the_release() {
     stays(&srv, &before);
 }
 
-/// Released over no tile (a gap), the pane stays floating where it was
-/// dropped, at its size, as the same pane.
+/// Released over no tile (a gap), a floating pane stays floating where it
+/// was dropped, at its size, as the same pane.
 #[test]
-fn releasing_a_pane_over_a_gap_leaves_it_floating_there() {
+fn releasing_a_floating_pane_over_a_gap_leaves_it_floating_there() {
     let srv = framed();
+    ok(&srv, &["split-window", "-v", "-t", "%1", "cat"]);
+    ok(
+        &srv,
+        &[
+            "float-pane",
+            "-t",
+            "%2",
+            "-x",
+            "20",
+            "-y",
+            "5",
+            "-X",
+            "45",
+            "-Y",
+            "4",
+        ],
+    );
     let mut a = attach(&srv);
-    let (l0, t0, w0, h0) = rect(&srv, "%0");
-    let pid = var(&srv, "%0", "#{pane_pid}");
+    let (l0, t0, w0, _) = rect(&srv, "%0");
+    let (_, _, w2, h2) = rect(&srv, "%2");
+    let pid = var(&srv, "%2", "#{pane_pid}");
     let gap = l0 + w0 + 1;
     let at = (gap, t0 + 5);
-    drag(&mut a, 0, title(&srv, "%0"), &[(50, 5), at]);
-    let floated = wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "1", WAIT);
-    assert!(floated.is_ok(), "{:?}", layout(&srv));
+    drag(&mut a, 0, title(&srv, "%2"), &[(50, 5), at]);
     let corner = lifted_corner(at);
-    assert_eq!(rect(&srv, "%0"), (corner.0 + 1, corner.1 + 1, w0, h0));
-    assert_eq!(var(&srv, "%0", "#{pane_pid}"), pid);
-    assert_eq!(var(&srv, "%0", "#{pane_active}"), "1");
-    // %1 has the tiling to itself.
-    assert_eq!(rect(&srv, "%1").0, l0, "{:?}", layout(&srv));
+    let there = wait_until(
+        || rect(&srv, "%2") == (corner.0 + 1, corner.1 + 1, w2, h2),
+        WAIT,
+    );
+    assert!(there.is_ok(), "{:?}", layout(&srv));
+    assert_eq!(var(&srv, "%2", "#{pane_floating_flag}"), "1");
+    assert_eq!(var(&srv, "%2", "#{pane_pid}"), pid);
+    assert_eq!(var(&srv, "%2", "#{pane_active}"), "1");
     // Moved by its title, it stays floating and follows.
-    let (fx, fy, _, _) = rect(&srv, "%0");
+    let (fx, fy, _, _) = rect(&srv, "%2");
     drag(
         &mut a,
         0,
         (fx + 3, fy - 1),
         &[(fx + 5, fy - 1), (fx + 8, fy + 1)],
     );
-    let moved = wait_until(|| rect(&srv, "%0").0 == fx + 5, WAIT);
-    assert!(moved.is_ok(), "{:?}", rect(&srv, "%0"));
-    assert_eq!(rect(&srv, "%0").1, fy + 2);
-    assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "1");
+    let moved = wait_until(|| rect(&srv, "%2").0 == fx + 5, WAIT);
+    assert!(moved.is_ok(), "{:?}", rect(&srv, "%2"));
+    assert_eq!(rect(&srv, "%2").1, fy + 2);
+    assert_eq!(var(&srv, "%2", "#{pane_floating_flag}"), "1");
+}
+
+/// A tiled pane released off every tile (here on the status line) snaps
+/// into the grid by the nearest tile and never floats: %0 docks below %1.
+#[test]
+fn releasing_a_tiled_pane_off_every_tile_snaps_it_into_the_grid() {
+    let srv = framed();
+    let mut a = attach(&srv);
+    let pid = var(&srv, "%0", "#{pane_pid}");
+    let (l1, _, w1, _) = rect(&srv, "%1");
+    drag(&mut a, 0, title(&srv, "%0"), &[(50, 5), (l1 + w1 / 2, 23)]);
+    let snapped = wait_until(|| rect(&srv, "%0").1 > rect(&srv, "%1").1, WAIT);
+    assert!(snapped.is_ok(), "{:?}", layout(&srv));
+    assert_eq!(rect(&srv, "%0").0, rect(&srv, "%1").0, "{:?}", layout(&srv));
+    assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "0");
+    assert_eq!(var(&srv, "%0", "#{pane_pid}"), pid);
+    assert_eq!(var(&srv, "%0", "#{pane_active}"), "1");
+    assert_eq!(var(&srv, "%1", "#{window_panes}"), "2");
 }
 
 /// A right click or Escape while the button is down cancels the move: the
