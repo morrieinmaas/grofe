@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assemble the project site in <out> (default _site/), as the Pages
-# workflow does: the landing page at the root, the book under docs/ and the
+# workflow does: site/ at the root, the book under docs/ and the
 # screenshots under img/. Needs mdbook, plus what scripts/screenshots.sh
 # needs (vhs, ttyd, ffmpeg and a built grofe).
 set -euo pipefail
@@ -11,7 +11,8 @@ rm -rf "$out"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
-cp "$root/site/index.html" "$out/index.html"
+# Everything under site/ (the landing page and its assets) goes to the root.
+cp -R "$root/site/." "$out/"
 touch "$out/.nojekyll"
 mdbook build "$root/docs/book" -d "$out/docs"
 "$root/scripts/screenshots.sh" "$out/img"

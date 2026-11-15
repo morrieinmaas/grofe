@@ -1,14 +1,6 @@
-# The screenshot server's config: grofe's defaults, a plain prompt, no
-# restore between renders, Nerd font pill ends, and a status line in the
-# terminal theme's own colours so it reads in both the light and dark shot.
+# The screenshot server's config: grofe's defaults (status line included),
+# a plain prompt, no restore between renders, and the Nerd font's pill ends
+# for frames and messages.
 default-command = "PS1='$ ' exec bash --norc --noprofile"
 restore-on-start = false
 pane-frame-tab-ends = "\ue0b6\ue0b4"
-
-[status]
-style = "bg=default,fg=default"
-left = "#[fg=blue,bold] #{session_name} #[default] "
-right = "#[fg=magenta]\ue0a0 main#[default] "
-
-[status.window]
-current-style = "fg=green,bold"

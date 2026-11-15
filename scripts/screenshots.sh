@@ -29,7 +29,7 @@ cd "$root"
 for theme in dark light; do
     case $theme in
         dark) name="Catppuccin Mocha" ;;
-        light) name="Catppuccin Latte" ;;
+        light) name="Builtin Light" ;;
     esac
     sed -e "s|@THEME@|$name|" -e "s|@FONT@|$font|" \
         -e "s|@GIF@|$work/$theme.gif|" -e "s|@PNG@|$out/grofe-$theme.png|" \

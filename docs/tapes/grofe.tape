@@ -15,7 +15,7 @@ Hide
 Type "source docs/tapes/setup.sh" Enter
 Sleep 3s
 Type "grofe -S $GROFE_SOCK attach -t weather" Enter
-Sleep 4s
+Sleep 6s
 Show
 Sleep 1s
 Screenshot "@PNG@"

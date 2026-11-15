@@ -25,13 +25,20 @@ printf 'city,temp\nLisbon,24\nOslo,9\nTokyo,18\n' > "$demo/cities.csv"
 
 g() { grofe -S "$GROFE_SOCK" "$@"; }
 run() { sleep 1; g send-keys -t "$1" "$2" Enter; }
+# Pane titles are set so nothing shows the machine's hostname.
 g new-session -d -s weather -n code -c "$demo"
+g select-pane -t weather:code -T config.toml
 run weather:code 'vim --clean config.toml'
 g split-window -h -l 46% -t weather:code -c "$demo"
+g select-pane -t weather:code -T shell
 run weather:code 'ls -R'
 g split-window -v -t weather:code -c "$demo"
+g select-pane -t weather:code -T data
 run weather:code 'column -s, -t cities.csv'
-run weather:code 'echo "build ok"'
 g new-window -d -t weather -n logs -c "$demo"
-g select-pane -t weather:code.1
+g new-scratchpad -t weather:code -c "$demo"
+g select-pane -t weather:code -T scratchpad
+run weather:code 'wc -l cities.csv src/main.rs'
+# A message pill once the tape's client has attached.
+(sleep 5; g display-message -d 0 'prefix S hides the scratchpad') >/dev/null 2>&1 &
 clear
