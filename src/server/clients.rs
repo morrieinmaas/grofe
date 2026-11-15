@@ -416,6 +416,9 @@ pub struct Registry {
     /// The status-line messages `show-messages` prints (TC.9), oldest
     /// first, with when each was shown.
     messages: VecDeque<(SystemTime, String)>,
+    /// The options a `set-option` has already warned about: stored, but
+    /// with no effect in grofe.
+    inert_warned: BTreeSet<String>,
     /// `wait-for` channels (TC.9).
     waits: BTreeMap<String, WaitChannel>,
     /// The clients now locked, their `lock-command` running in a popup
@@ -483,6 +486,7 @@ impl Default for Registry {
             status_at: None,
             names_at: None,
             messages: VecDeque::new(),
+            inert_warned: BTreeSet::new(),
             waits: BTreeMap::new(),
             locked: BTreeSet::new(),
             lock_fired: BTreeMap::new(),
@@ -856,6 +860,14 @@ fn log_message(state: &mut State, id: ClientId, text: &str) {
         return;
     };
     push_message(state, format!("{name} message: {text}"));
+}
+
+/// Logs to `show-messages`, once per option and server, that setting `name`
+/// does nothing: grofe stores it and never reads it.
+pub(crate) fn warn_inert_option(state: &mut State, name: &str) {
+    if state.registry.inert_warned.insert(name.to_string()) {
+        push_message(state, format!("{name}: stored, but has no effect in grofe"));
+    }
 }
 
 fn push_message(state: &mut State, line: String) {
