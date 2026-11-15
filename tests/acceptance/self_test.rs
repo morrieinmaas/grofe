@@ -85,6 +85,7 @@ fn nvim_edit() {
     h.wait_for("~");
     h.send("ihello-spike\x1b");
     h.wait_for("hello-spike");
+    // Past nvim's ttimeout, so `:` is not Meta-:.
     sleep(Duration::from_millis(300));
     h.send(":q!\r");
     h.wait_exit();
@@ -107,6 +108,7 @@ fn nvim_exit_restores_primary_screen() {
     );
     h.send("ihello-alt\x1b");
     h.wait_for("hello-alt");
+    // Past nvim's ttimeout, so `:` is not Meta-:.
     sleep(Duration::from_millis(300));
     h.send(":q!\r");
     h.wait_until(

@@ -138,9 +138,12 @@ fn puts(bytes: &[u8]) -> Vec<Put> {
     let mut from = 0;
     while let Some(i) = text[from..].find("\x1b_Ga=p,") {
         let start = from + i;
-        let end = text[start..]
-            .find("\x1b\\")
-            .map_or(text.len(), |e| start + e);
+        // An APC cut off by the end of what was read so far is not complete:
+        // the next poll sees all of it.
+        let Some(e) = text[start..].find("\x1b\\") else {
+            break;
+        };
+        let end = start + e;
         let keys = keys_of(&text[start + 3..end]);
         // The move before it: ESC [ row ; col H.
         let before = &text[..start];
@@ -442,7 +445,7 @@ fn a_popup_hides_a_placement_and_a_late_client_gets_it() {
     );
     // A client without kitty graphics gets none of it.
     let mut d = attach(&srv, &[]);
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     let out = String::from_utf8_lossy(d.output()).into_owned();
     assert!(!out.contains("a=p,") && !out.contains("a=t,"), "{out:?}");
 }
@@ -1033,9 +1036,9 @@ fn a_stalled_client_gets_its_placements_again() {
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(0)
     };
-    let stalled = common::wait_until(|| discarded() > 0, WAIT);
+    let stalled = common::try_wait_until(|| discarded() > 0, WAIT);
     touch(&stop);
-    let ended = common::wait_until(|| srv.capture("main").contains("END"), WAIT);
+    let ended = common::try_wait_until(|| srv.capture("main").contains("END"), WAIT);
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).expect("SIGCONT");
     stalled.expect("a frame was dropped for the stopped client");
     ended.expect("the pane finished");

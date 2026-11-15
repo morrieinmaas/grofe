@@ -8,7 +8,7 @@ mod common;
 use std::fs;
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 #[test]
 fn with_no_tmux_running_the_newest_resurrect_save_is_restored() {
@@ -50,7 +50,7 @@ fn with_no_tmux_running_the_newest_resurrect_save_is_restored() {
         ])
         .unwrap_or_default();
     assert_eq!(windows, "work:editor 2\n", "server log:\n{}", srv.log());
-    let ran = wait_until(|| marker.exists(), Duration::from_secs(10));
+    let ran = try_wait_until(|| marker.exists(), Duration::from_secs(10));
     assert!(
         ran.is_ok(),
         "the saved command did not run; log:\n{}",

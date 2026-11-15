@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -41,7 +41,7 @@ fn start(config: &str) -> Live {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = cmd.spawn().expect("spawn server");
-    wait_until(|| srv.is_running(), CMD_TIMEOUT).expect("server up");
+    try_wait_until(|| srv.is_running(), CMD_TIMEOUT).expect("server up");
     Live { child, srv }
 }
 
@@ -118,12 +118,12 @@ fn load_commands_run_in_order_at_start_and_on_reload() {
     let child = cmd.spawn().expect("spawn server");
     let live = Live { child, srv };
     let srv = &live.srv;
-    wait_until(|| srv.is_running(), CMD_TIMEOUT).expect("server up");
-    wait_until(|| lines(&log).len() == 3, WAIT)
+    try_wait_until(|| srv.is_running(), CMD_TIMEOUT).expect("server up");
+    try_wait_until(|| lines(&log).len() == 3, WAIT)
         .unwrap_or_else(|_| panic!("ran: {:?}", lines(&log)));
     assert_eq!(lines(&log), ["one", "two", "three"], "in config order");
     ok(srv, &["reload"]);
-    wait_until(|| lines(&log).len() == 6, WAIT)
+    try_wait_until(|| lines(&log).len() == 6, WAIT)
         .unwrap_or_else(|_| panic!("ran: {:?}", lines(&log)));
     assert_eq!(lines(&log)[3..], ["one", "two", "three"]);
 }

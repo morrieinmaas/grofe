@@ -38,6 +38,7 @@ fn spec(id: u32, argv: &[&str]) -> PaneSpawn {
         images: false,
         identity: Default::default(),
         delay: std::time::Duration::ZERO,
+        colours: Default::default(),
     }
 }
 

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use common::{PROMPT, TestServer, wait_until};
+use common::{PROMPT, TestServer, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -79,7 +79,7 @@ fn agent_list(srv: &TestServer) -> String {
 }
 
 fn wait_agents(srv: &TestServer, n: usize) {
-    wait_until(
+    try_wait_until(
         || {
             agent_list(srv)
                 .lines()
@@ -117,11 +117,11 @@ fn sidebar_toggle_resizes_window() {
     assert_eq!(display(&srv, "#{window_width}"), "160");
     a.send(PREFIX);
     a.send("b");
-    wait_until(|| display(&srv, "#{window_width}") == "127", WAIT)
+    try_wait_until(|| display(&srv, "#{window_width}") == "127", WAIT)
         .unwrap_or_else(|e| panic!("{e}: window shrinks to 127"));
     a.send(PREFIX);
     a.send("b");
-    wait_until(|| display(&srv, "#{window_width}") == "160", WAIT)
+    try_wait_until(|| display(&srv, "#{window_width}") == "160", WAIT)
         .unwrap_or_else(|e| panic!("{e}: window back to 160"));
 }
 
@@ -147,7 +147,7 @@ fn grid_enter_jumps() {
         t.contains("main:1.1") && !t.contains("main:2.1")
     });
     a.send("\r");
-    wait_until(|| display(&srv, "#{window_id}") == first, WAIT)
+    try_wait_until(|| display(&srv, "#{window_id}") == first, WAIT)
         .unwrap_or_else(|e| panic!("{e}: jumped to the first window"));
 }
 
@@ -157,7 +157,7 @@ fn agent_new_opens_window_with_record() {
     write_claude_kind(&srv);
     assert_eq!(window_count(&srv), 1);
     srv.cmd(&["agent", "new", "claude"]).expect("agent new");
-    wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
+    try_wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
     wait_agents(&srv, 1);
     let list = agent_list(&srv);
     assert!(list.starts_with("idle"), "got {list:?}");
@@ -199,7 +199,7 @@ fn agent_new_worktree_with_git_repo() {
     .expect("agent new -w");
     let wt: PathBuf = base.join("worktrees").join("feat-x");
     assert!(wt.is_dir(), "worktree {wt:?} missing");
-    wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
+    try_wait_until(|| window_count(&srv) == 2, WAIT).unwrap_or_else(|e| panic!("{e}: new window"));
     let paths = srv
         .cmd(&["list-windows", "-t", "main", "-F", "#{pane_current_path}"])
         .expect("list-windows");
