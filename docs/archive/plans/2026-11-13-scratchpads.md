@@ -65,8 +65,8 @@ superlite's scripts and agents run in this checkout; main was clean).
   tmux identity): `prefix S` `toggle-scratchpad`, `prefix a` `new-scratchpad`,
   `prefix A` `choose-scratchpad`. tmux 3.7b binds none of the three.
   Ruling: S, a and A, not the first-drafted N, g and G (because the user's own
-  canopy `user.conf` binds N, g and G, which would shadow grofe's defaults; S,
-  a and A are free in tmux 3.7b, canopy's key table and that file).
+  the session manager `user.conf` binds N, g and G, which would shadow grofe's defaults; S,
+  a and A are free in tmux 3.7b, the session manager's key table and that file).
 
 `// ponytail:` ceilings to mark: hidden scratchpads are not saved by snapshots
 or restored; `pane-exited` is not emitted for an evicted scratchpad.

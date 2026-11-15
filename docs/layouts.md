@@ -196,7 +196,7 @@ The menu keys are `1`-`9` then `a`-`z`.
 ## Binding example
 
 grofe ships no stock binding. `g` is unbound in tmux 3.7b's stock prefix
-table and in canopy's prefix bindings and plugin defaults, so in
+table and in the maintainer's private prefix bindings and plugin defaults, so in
 `~/.config/grofe/user.toml`:
 
 ```toml

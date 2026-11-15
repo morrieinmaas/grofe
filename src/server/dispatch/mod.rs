@@ -415,6 +415,11 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::FloatPane(c) => popup::float_pane(state, ctx, c),
         Command::UnfloatPane(c) => popup::unfloat_pane(state, ctx, c),
         Command::DragPane(_) => server::mouse::drag_pane(state),
+        Command::Lua { src } => server::lua_host::run_chunk(state, ctx, &src),
+        Command::LuaCall { id } => {
+            server::lua_host::call(state, id, crate::lua::api::Payload::None);
+            Ok(String::new())
+        }
         Command::PlacePane(c) => popup::place_pane(state, ctx, c),
         Command::NewScratchpad(c) => scratch::new(state, ctx, c),
         Command::ToggleScratchpad(c) => scratch::toggle(state, ctx, c),
