@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 mod common;
 
-use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, wait_child, wait_until};
+use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, try_wait_until, wait_child};
 use grofe::protocol::{Dialect, Hello, decode_hello};
 
 const TMUX_NESTED: &str = "sessions should be nested with care, unset $TMUX to force";
@@ -113,7 +113,7 @@ fn pane_env(srv: &TestServer, verb: &[&str], file: &str) -> BTreeMap<String, Str
     let mut args = verb.to_vec();
     args.push(&command);
     grofe(srv, &args).expect("spawn an env pane");
-    wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its env");
+    try_wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its env");
     fs::read_to_string(&path)
         .unwrap()
         .lines()
@@ -223,7 +223,7 @@ fn xtversion_replies(srv: &TestServer, name: &str) -> String {
         path.display()
     );
     grofe(srv, &["new-session", "-d", "-s", name, &script]).expect("new-session");
-    wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its replies");
+    try_wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its replies");
     fs::read_to_string(&path).unwrap()
 }
 
@@ -321,7 +321,7 @@ fn type_line(srv: &TestServer, target: &str, line: &str) {
 
 /// `path`'s text once the shell has written its `rc=<status>` line.
 fn wait_file(path: &Path) -> String {
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(path).is_ok_and(|t| t.contains("rc=") && t.ends_with('\n')),
         CMD_TIMEOUT,
     )
@@ -390,7 +390,7 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
         "outer",
         &format!("{grofe_bin} attach -t inner; echo rc=$? > {home}/other"),
     );
-    wait_until(
+    try_wait_until(
         || {
             grofe(&srv, &["list-clients", "-F", "#{client_session}"])
                 .is_ok_and(|out| out.trim() == "inner")
@@ -401,7 +401,7 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
 
     grofe(&srv, &["send-keys", "-t", "outer", "C-b", ":"]).unwrap();
     type_line(&srv, "outer", "setw -g @typed at-the-prompt");
-    wait_until(
+    try_wait_until(
         || {
             // tmux's global window scope, which formats see.
             grofe(&srv, &["display-message", "-p", "#{@typed}"])

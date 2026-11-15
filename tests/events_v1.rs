@@ -12,7 +12,7 @@ mod harness;
 use std::fs;
 use std::time::Duration;
 
-use common::{Subscription, TestServer, wait_until};
+use common::{Subscription, TestServer, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -49,7 +49,7 @@ fn quiet(sub: &mut Subscription) {
 /// The name of the one attached client, once it has attached.
 fn client_name(srv: &TestServer) -> String {
     let listed = || ok(srv, &["list-clients", "-F", "#{client_name}"]);
-    wait_until(|| !listed().trim().is_empty(), WAIT).expect("a client attached");
+    try_wait_until(|| !listed().trim().is_empty(), WAIT).expect("a client attached");
     listed().trim_end().to_string()
 }
 
@@ -440,7 +440,7 @@ fn pane_focus_on_a_click() {
     let window = display(&srv, "s", "#{window_id}");
     ok(&srv, &["set", "-g", "mouse", "on"]);
     // Let the client take the mouse modes before it clicks.
-    wait_until(
+    try_wait_until(
         || {
             ok(&srv, &["show", "-gv", "mouse"]).trim() == "on"
                 && display(&srv, "s", "#{client_width}") == "80"
@@ -462,13 +462,13 @@ fn pane_focus_on_terminal_focus_in_only_with_focus_events_on() {
     // Off: focus reports move the client's flag and nothing else.
     ok(&srv, &["set", "-g", "focus-events", "off"]);
     client.send("\x1b[O");
-    wait_until(
+    try_wait_until(
         || !ok(&srv, &["list-clients", "-F", "#{client_flags}"]).contains("focused"),
         WAIT,
     )
     .unwrap();
     client.send("\x1b[I");
-    wait_until(
+    try_wait_until(
         || ok(&srv, &["list-clients", "-F", "#{client_flags}"]).contains("focused"),
         WAIT,
     )
@@ -477,7 +477,7 @@ fn pane_focus_on_terminal_focus_in_only_with_focus_events_on() {
     // On: losing focus is silent, regaining it is one event.
     ok(&srv, &["set", "-g", "focus-events", "on"]);
     client.send("\x1b[O");
-    wait_until(
+    try_wait_until(
         || !ok(&srv, &["list-clients", "-F", "#{client_flags}"]).contains("focused"),
         WAIT,
     )

@@ -516,6 +516,7 @@ fn probe_times_out_cleanly_on_a_terminal_that_answers_nothing() {
     // not forwarded as keys; a lone ESC is not held back for ever.
     // Split across reads, within the client's wait for the rest of an ESC.
     tty.write(b"\x1b[?0u\x1b[?2026;2$");
+    // The pause between the two writes is the test: a reply split across reads.
     sleep(Duration::from_millis(2));
     tty.write(b"y\x1b[?62;22cafter");
     let got = conn.input_until(b"after");
@@ -813,6 +814,7 @@ fn signals_are_handled_while_the_server_stops_reading() {
         .get_process_mut()
         .set_window_size(100, 40)
         .expect("resize pty");
+    // The resize must reach the client before the signal: no state to observe.
     sleep(Duration::from_millis(100));
     kill(pid, Signal::SIGTERM).expect("SIGTERM the client");
     tty.wait_for(b"STATUS=143");
@@ -851,8 +853,14 @@ fn flood_until(
 fn stdin_eof_sends_detach() {
     // stdin is a second pty the test can hang up; output stays on the
     // expectrl pty.
-    let pty = nix::pty::openpty(None, None).expect("openpty");
-    let slave = nix::unistd::ttyname(&pty.slave).expect("ttyname");
+    let size = nix::pty::Winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let (pty, slave) = grofe::server::pane::open_pty(&size).expect("openpty");
+    let slave = slave.expect("ttyname");
     let srv = FakeServer::new();
     let client = format!("{ATTACH} <{}", slave.display());
     let mut tty = Tty::spawn(&script(&client), &srv.socket, &[]);
@@ -890,6 +898,7 @@ fn resize_storms_during_the_handshake_never_lose_typeahead() {
             .get_process_mut()
             .set_window_size(80 + i % 2, 24)
             .expect("resize pty");
+        // Spacing between resizes is the stress under test.
         sleep(Duration::from_millis(2));
     }
     conn.reply(&ok());

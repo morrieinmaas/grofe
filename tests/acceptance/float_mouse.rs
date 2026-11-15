@@ -9,7 +9,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{TestServer, run_bounded, wait_until};
+use common::{TestServer, run_bounded, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -17,6 +17,12 @@ const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const WAIT: Duration = Duration::from_secs(10);
 /// Past tmux's click timeout, so the next press is no second click.
 const CLICK_GAP: Duration = Duration::from_millis(350);
+
+/// Waits out the click timeout, so the next press is a plain press. The
+/// timeout is the thing under test, so this is a real sleep.
+fn past_click_timeout() {
+    std::thread::sleep(CLICK_GAP);
+}
 
 /// Session `main` (80x23 window) running `cat`, with a floating pane of
 /// 20x4 content at window cell (10, 5) running `cat`, so its border is
@@ -108,13 +114,13 @@ fn rect(srv: &TestServer, pane: &str) -> (u16, u16, u16, u16) {
 }
 
 fn wait_rect(srv: &TestServer, pane: &str, want: (u16, u16, u16, u16)) {
-    let got = wait_until(|| rect(srv, pane) == want, WAIT);
+    let got = try_wait_until(|| rect(srv, pane) == want, WAIT);
     assert!(got.is_ok(), "want {want:?}, got {:?}", rect(srv, pane));
 }
 
 /// `rect` is still `want` once the server had time to act on the reports.
 fn stays(srv: &TestServer, pane: &str, want: (u16, u16, u16, u16)) {
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(rect(srv, pane), want);
 }
 
@@ -171,7 +177,7 @@ fn the_top_edge_moves_the_pane_and_the_left_edge_resizes_it() {
     drag(&mut a, (19, 7));
     wait_rect(&srv, &float, (14, 8, 20, 4));
     release(&mut a, (19, 7));
-    std::thread::sleep(CLICK_GAP);
+    past_click_timeout();
     press(&mut a, (13, 9));
     drag(&mut a, (10, 9));
     wait_rect(&srv, &float, (11, 8, 23, 4));
@@ -192,10 +198,19 @@ fn a_drag_resize_reaches_the_pty_at_its_final_size() {
     }
     release(&mut a, (40, 13));
     wait_rect(&srv, &float, (10, 12, 30, 4));
-    std::thread::sleep(Duration::from_millis(400));
-    srv.cmd(&["send-keys", "-t", &float, "stty size", "Enter"])
-        .expect("keys");
-    let seen = wait_until(|| srv.capture(&float).contains("4 30"), WAIT);
+    // The pty resize has no observable signal, so ask again until it shows.
+    let mut polls = 0;
+    let seen = try_wait_until(
+        || {
+            if polls % 50 == 0 {
+                srv.cmd(&["send-keys", "-t", &float, "stty size", "Enter"])
+                    .expect("keys");
+            }
+            polls += 1;
+            srv.capture(&float).contains("4 30")
+        },
+        WAIT,
+    );
     assert!(seen.is_ok(), "{}", srv.capture(&float));
 }
 
@@ -211,7 +226,7 @@ fn killing_the_pane_mid_drag_leaves_no_drag_behind() {
     drag(&mut a, (30, 12));
     release(&mut a, (30, 12));
     alive(&srv);
-    std::thread::sleep(CLICK_GAP);
+    past_click_timeout();
     let next = new_float(&srv, (10, 5), (20, 4), "cat");
     press(&mut a, (15, 4));
     drag(&mut a, (16, 4));
@@ -252,7 +267,7 @@ fn a_client_detached_mid_drag_leaves_the_pane_where_it_was() {
     press(&mut b, (50, 15));
     release(&mut b, (50, 15));
     stays(&srv, &float, (14, 8, 20, 4));
-    std::thread::sleep(CLICK_GAP);
+    past_click_timeout();
     press(&mut b, (20, 7));
     drag(&mut b, (21, 7));
     wait_rect(&srv, &float, (15, 8, 20, 4));
@@ -303,7 +318,7 @@ fn a_press_after_a_lost_release_ends_the_drag() {
     drag(&mut a, (19, 7));
     wait_rect(&srv, &float, (14, 8, 20, 4));
     press(&mut a, (50, 15));
-    let ended = wait_until(
+    let ended = try_wait_until(
         || user_option(&srv, "@end").as_deref() == Some("pane"),
         WAIT,
     );
@@ -332,7 +347,7 @@ fn the_release_of_a_floating_drag_fires_its_drag_end_key() {
     drag(&mut a, (19, 7));
     wait_rect(&srv, &float, (14, 8, 20, 4));
     release(&mut a, (19, 7));
-    let ended = wait_until(
+    let ended = try_wait_until(
         || user_option(&srv, "@end").as_deref() == Some("border"),
         WAIT,
     );
@@ -364,7 +379,7 @@ fn a_plain_click_on_the_border_clears_the_mark_and_raises() {
     let mut a = attach(&srv);
     press(&mut a, (15, 4));
     release(&mut a, (15, 4));
-    let raised = wait_until(
+    let raised = try_wait_until(
         || {
             var(&srv, &low, "#{pane_z} #{pane_active}") == "0 1"
                 && var(&srv, &high, "#{pane_z}") == "1"
@@ -389,16 +404,16 @@ fn unbinding_the_stock_rows_leaves_a_floating_border_to_bindings() {
     press(&mut a, (15, 4));
     drag(&mut a, (25, 10));
     release(&mut a, (25, 10));
-    std::thread::sleep(CLICK_GAP);
+    past_click_timeout();
     press(&mut a, (30, 9));
     drag(&mut a, (35, 12));
     release(&mut a, (35, 12));
     stays(&srv, &float, (10, 5, 20, 4));
     srv.cmd(&["select-pane", "-t", "%0"]).expect("select");
-    std::thread::sleep(CLICK_GAP);
+    past_click_timeout();
     press(&mut a, (15, 4));
     release(&mut a, (15, 4));
-    std::thread::sleep(Duration::from_millis(400));
+    common::quiet_period(Duration::from_millis(400));
     assert_eq!(var(&srv, &float, "#{pane_active}"), "0");
     srv.cmd(&[
         "bind-key",
@@ -410,10 +425,10 @@ fn unbinding_the_stock_rows_leaves_a_floating_border_to_bindings() {
         "#{pane_id}",
     ])
     .expect("bind");
-    std::thread::sleep(CLICK_GAP);
+    past_click_timeout();
     press(&mut a, (15, 4));
     release(&mut a, (15, 4));
-    let ran = wait_until(
+    let ran = try_wait_until(
         || user_option(&srv, "@down").as_deref() == Some(float.as_str()),
         WAIT,
     );
@@ -463,7 +478,7 @@ fn unbinding_the_drag_row_leaves_a_tiled_border_alone() {
         &srv,
         &["bind", "-n", "MouseDrag1Border", "resize-pane", "-M"],
     );
-    std::thread::sleep(CLICK_GAP);
+    past_click_timeout();
     press(&mut a, (border, 5));
     drag(&mut a, (border - 8, 5));
     release(&mut a, (border - 8, 5));
@@ -487,7 +502,7 @@ fn a_modifier_variant_of_the_border_keys_acts_only_if_bound() {
         a.send(sgr(32 + mods, (19, 7), false));
         a.send(sgr(mods, (19, 7), true));
         stays(&srv, &float, (10, 5, 20, 4));
-        std::thread::sleep(CLICK_GAP);
+        past_click_timeout();
     }
     assert_eq!(var(&srv, "%0", "#{pane_active}"), "0");
     tmux(
@@ -519,7 +534,7 @@ fn a_root_binding_for_the_border_wins() {
     press(&mut a, (15, 4));
     drag(&mut a, (25, 10));
     release(&mut a, (25, 10));
-    let ran = wait_until(
+    let ran = try_wait_until(
         || user_option(&srv, "@dragged").as_deref() == Some(float.as_str()),
         WAIT,
     );
@@ -549,7 +564,7 @@ fn float_pane_lifts_a_tiled_pane_and_place_pane_moves_it() {
         .to_string();
     srv.cmd(&["send-keys", "-t", &tiled, "kept", "Enter"])
         .expect("keys");
-    let seen = wait_until(|| srv.capture(&tiled).contains("kept"), WAIT);
+    let seen = try_wait_until(|| srv.capture(&tiled).contains("kept"), WAIT);
     assert!(seen.is_ok());
     let pid = var(&srv, &tiled, "#{pane_pid}");
     srv.cmd(&[
