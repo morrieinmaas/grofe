@@ -32,7 +32,7 @@ From v0.2.0 on, every release asset can be checked two ways. Download
 sha256sum -c --ignore-missing SHA256SUMS      # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
 
 # The file was built by this repository's Release workflow, from the tag.
-gh attestation verify grofe-v0.2.0-x86_64-unknown-linux-musl.tar.gz --repo morrieinmaas/grofe
+gh attestation verify grofe-v0.2.0-x86_64-unknown-linux-musl.tar.gz --repo termage/grofe
 ```
 
 `gh attestation verify` works on any asset (tarball, `.deb`, `.rpm` or
@@ -49,7 +49,7 @@ check the sha256 themselves on install.
    commit, then move the tag: `git tag -fa v0.2.0 -m "grofe v0.2.0"`.
 3. Push the commit and the tag: `git push origin HEAD v0.2.0`.
 4. Watch the Release workflow. When it is green, check the release page,
-   `brew upgrade grofe` (or `brew install morrieinmaas/tap/grofe`) and the
+   `brew upgrade grofe` (or `brew install termage/tap/grofe`) and the
    AUR page.
 
 To redo a release's build for a tag that already exists, run the Release
@@ -75,7 +75,7 @@ Done once by the maintainer, in this order.
    `cargo login`, then `cargo publish --locked`. The token can be revoked
    afterwards.
 3. On the crate's Settings page, add a trusted publisher: GitHub, owner
-   `morrieinmaas`, repository `grofe`, workflow `release.yml`, no
+   `termage`, repository `grofe`, workflow `release.yml`, no
    environment.
 4. In the GitHub repository (Settings, Secrets and variables, Actions,
    Variables), add the variable `CRATES_IO_TRUSTED` with the value `true`.
@@ -83,7 +83,7 @@ Done once by the maintainer, in this order.
 
 ### Homebrew tap
 
-1. Create the public repository `morrieinmaas/homebrew-tap` (a README is
+1. Create the public repository `termage/homebrew-tap` (a README is
    enough to start; the job creates `Formula/`).
 2. Make a key pair for it only: `ssh-keygen -t ed25519 -f homebrew-tap -N ""`.
 3. In the tap repository (Settings, Deploy keys) add `homebrew-tap.pub` with
@@ -91,7 +91,7 @@ Done once by the maintainer, in this order.
 4. In this repository add the secret `HOMEBREW_TAP_DEPLOY_KEY` with the
    private key `homebrew-tap`, then delete both files.
 
-Users then install with `brew install morrieinmaas/tap/grofe`.
+Users then install with `brew install termage/tap/grofe`.
 
 ### AUR
 

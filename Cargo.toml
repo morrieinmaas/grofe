@@ -7,8 +7,8 @@ edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
 description = "An agent-native terminal multiplexer that speaks tmux"
-repository = "https://github.com/morrieinmaas/grofe"
-homepage = "https://morrieinmaas.github.io/grofe/"
+repository = "https://github.com/termage/grofe"
+homepage = "https://termage.github.io/grofe/"
 readme = "README.md"
 keywords = ["tmux", "terminal", "multiplexer", "pty", "tui"]
 categories = ["command-line-utilities"]
@@ -52,7 +52,7 @@ tempfile = "3.27.0"
 # `cargo deb --target <triple>` and `cargo generate-rpm --target <triple>`
 # (see the justfile's deb and rpm recipes) read target/<triple>/release.
 [package.metadata.deb]
-maintainer = "morrieinmaas (https://github.com/morrieinmaas/grofe)"
+maintainer = "termage (https://github.com/termage/grofe)"
 copyright = "grofe contributors"
 section = "utils"
 priority = "optional"

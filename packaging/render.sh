@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 version="${1:?usage: render.sh <version> [out-dir]}"
 version="${version#v}"
 out="${2:-target/pkg}"
-base="https://github.com/morrieinmaas/grofe/releases/download/v$version"
+base="https://github.com/termage/grofe/releases/download/v$version"
 targets=(aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl)
 
 subst=(-e "s/@VERSION@/$version/g")

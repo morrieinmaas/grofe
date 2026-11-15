@@ -86,14 +86,14 @@ ordinary programs in whatever language you like.
 
 grofe runs on macOS and Linux. Each tagged release has prebuilt binaries for
 x86_64 and arm64 (static on Linux) on the
-[releases page](https://github.com/morrieinmaas/grofe/releases): unpack one
+[releases page](https://github.com/termage/grofe/releases): unpack one
 and put `grofe` on your `PATH`.
 
 From v0.2.0 on, each release is also packaged:
 
 | Where | Install with |
 | --- | --- |
-| Homebrew (macOS, Linux) | `brew install morrieinmaas/tap/grofe` |
+| Homebrew (macOS, Linux) | `brew install termage/tap/grofe` |
 | Arch Linux (AUR) | `yay -S grofe-bin`, or any AUR helper |
 | crates.io | `cargo install --locked grofe` |
 | Debian, Ubuntu | the release's `.deb`: `sudo apt install ./grofe_0.2.0-1_amd64.deb` |
@@ -101,8 +101,8 @@ From v0.2.0 on, each release is also packaged:
 
 The `.deb` and `.rpm` come for amd64 and arm64 (`arm64.deb`,
 `aarch64.rpm`). To check a download, run `sha256sum -c --ignore-missing
-SHA256SUMS` and `gh attestation verify <file> --repo morrieinmaas/grofe`
-(see [Verify a download](https://github.com/morrieinmaas/grofe/blob/main/RELEASING.md#verify-a-download)).
+SHA256SUMS` and `gh attestation verify <file> --repo termage/grofe`
+(see [Verify a download](https://github.com/termage/grofe/blob/main/RELEASING.md#verify-a-download)).
 
 Or build it with Rust 1.88 or newer (get Rust from
 [rustup](https://rustup.rs)) from a checkout of this repository:
