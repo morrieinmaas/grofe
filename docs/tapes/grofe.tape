@@ -14,7 +14,7 @@ Set TypingSpeed 0
 Hide
 Type "source docs/tapes/setup.sh" Enter
 Sleep 3s
-Type "grofe -S $GROFE_SOCK attach -t grofe" Enter
+Type "grofe -S $GROFE_SOCK attach -t weather" Enter
 Sleep 4s
 Show
 Sleep 1s

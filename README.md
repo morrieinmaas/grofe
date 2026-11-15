@@ -5,7 +5,7 @@ around it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://morrieinmaas.github.io/grofe/img/grofe-dark.png">
-  <img alt="grofe with three framed panes and the status line" src="https://morrieinmaas.github.io/grofe/img/grofe-light.png">
+  <img alt="grofe with three framed panes: vim, a file listing and a shell session" src="https://morrieinmaas.github.io/grofe/img/grofe-light.png">
 </picture>
 
 grofe keeps what tmux got right (sessions, windows and panes, a server that
