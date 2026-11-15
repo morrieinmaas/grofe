@@ -7,7 +7,7 @@
 //! `feed_output` those bytes must be written after the server bytes, and the server bytes
 //! must end on an escape sequence boundary.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
@@ -16,7 +16,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, TermMode};
-use alacritty_terminal::vte::ansi::{Color, Processor, StdSyncHandler};
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Timeout};
 use unicode_width::UnicodeWidthChar;
 
 /// Confirmed predictions in a row before they are drawn.
@@ -24,8 +24,95 @@ const CONFIDENT_AFTER: u32 = 3;
 /// A prediction the server has not confirmed after this long is erased.
 const TIMEOUT: Duration = Duration::from_secs(1);
 
+/// The mirror must see bytes as they arrive: no synchronized-update buffering.
+#[derive(Default)]
+struct NoSync;
+
+impl Timeout for NoSync {
+    fn set_timeout(&mut self, _: Duration) {}
+    fn clear_timeout(&mut self) {}
+    fn pending_timeout(&self) -> bool {
+        false
+    }
+}
+
 /// (row, column), both 0-based.
 type Pos = (usize, usize);
+
+/// Tracks whether the server byte stream is between escape sequences and UTF-8 chars. The
+/// attach stream is cut anywhere, and our own bytes must never land inside a sequence.
+#[derive(Clone, Copy, PartialEq)]
+enum Scan {
+    Ground,
+    /// After ESC.
+    Esc,
+    Csi,
+    /// An OSC, DCS, SOS, PM or APC string; the flag is true for OSC (BEL ends it).
+    Str(bool),
+    /// An ESC inside a string.
+    StrEsc(bool),
+    /// This many UTF-8 continuation bytes to go.
+    Utf8(u8),
+}
+
+impl Scan {
+    fn at_ground(&self) -> bool {
+        *self == Scan::Ground
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.step(b);
+        }
+    }
+
+    fn step(&mut self, b: u8) {
+        *self = match *self {
+            Scan::Utf8(n) if (0x80..=0xbf).contains(&b) => {
+                if n > 1 {
+                    Scan::Utf8(n - 1)
+                } else {
+                    Scan::Ground
+                }
+            }
+            Scan::Ground | Scan::Utf8(_) => match b {
+                0x1b => Scan::Esc,
+                0xc0..=0xdf => Scan::Utf8(1),
+                0xe0..=0xef => Scan::Utf8(2),
+                0xf0..=0xf7 => Scan::Utf8(3),
+                _ => Scan::Ground,
+            },
+            Scan::Esc => match b {
+                b'[' => Scan::Csi,
+                b']' => Scan::Str(true),
+                b'P' | b'X' | b'^' | b'_' => Scan::Str(false),
+                0x1b => Scan::Esc,
+                0x20..=0x2f | 0x00..=0x1a | 0x1c..=0x1f => Scan::Esc,
+                _ => Scan::Ground,
+            },
+            Scan::Csi => match b {
+                0x1b => Scan::Esc,
+                0x18 | 0x1a | 0x40..=0x7e => Scan::Ground,
+                _ => Scan::Csi,
+            },
+            Scan::Str(osc) => match b {
+                0x1b => Scan::StrEsc(osc),
+                0x18 | 0x1a => Scan::Ground,
+                0x07 if osc => Scan::Ground,
+                _ => Scan::Str(osc),
+            },
+            Scan::StrEsc(osc) => match b {
+                b'\\' => Scan::Ground,
+                0x1b => Scan::StrEsc(osc),
+                _ => {
+                    let mut next = Scan::Esc;
+                    next.step(b);
+                    next
+                }
+            },
+        };
+    }
+}
 
 struct Size {
     cols: usize,
@@ -88,19 +175,30 @@ enum Key {
     Back,
     Left,
     Right,
+    Paste(bool),
     Flush,
 }
 
 pub struct Predictor {
     term: Term<VoidListener>,
-    parser: Processor<StdSyncHandler>,
+    parser: Processor<NoSync>,
     cols: usize,
     enabled: bool,
     echo_hint: bool,
     pending: VecDeque<Pred>,
     confirmed: u32,
-    /// Start of a UTF-8 char split across two `on_input` calls.
+    /// Start of a UTF-8 char or an escape sequence split across two `on_input` calls.
     carry: Vec<u8>,
+    /// Between bracketed paste markers: typed text is not predicted.
+    in_paste: bool,
+    /// Where the server stream stands; nothing may be written to the terminal mid-sequence.
+    scan: Scan,
+    /// The user's terminal may differ from the mirror: repaint it at the next safe moment.
+    owed: bool,
+    /// Same, but only for the main screen, which the alt screen is hiding.
+    owed_main: bool,
+    /// The terminal cursor is where a prediction left it, not at the mirror's cursor.
+    displaced: bool,
 }
 
 impl Predictor {
@@ -119,6 +217,11 @@ impl Predictor {
             pending: VecDeque::new(),
             confirmed: 0,
             carry: Vec::new(),
+            in_paste: false,
+            scan: Scan::Ground,
+            owed: false,
+            owed_main: false,
+            displaced: false,
         }
     }
 
@@ -129,6 +232,9 @@ impl Predictor {
         self.cols = cols;
         self.pending.clear();
         self.confirmed = 0;
+        self.owed = false;
+        self.owed_main = false;
+        self.displaced = false;
     }
 
     /// `auto` or `on` (true), `off` or not remote (false). Returns the erase of anything shown.
@@ -143,12 +249,32 @@ impl Predictor {
         self.rollback()
     }
 
+    /// Write these bytes to the terminal before the server bytes of the next `feed_output`:
+    /// the server's output lands at the mirror's cursor, not where a prediction left it.
+    pub fn before_output(&mut self) -> Vec<u8> {
+        if !self.displaced || !self.scan.at_ground() {
+            return Vec::new();
+        }
+        self.displaced = false;
+        self.restore_cursor()
+    }
+
     /// Server output for the attach channel. Updates the mirror, confirms or invalidates
-    /// predictions. The returned bytes repaint affected cells and the cursor from the mirror.
+    /// predictions. Write the bytes it returns after the server bytes (and after the bytes of
+    /// `before_output`). Nothing is returned while the stream is inside an escape sequence.
     pub fn feed_output(&mut self, bytes: &[u8], _now: Instant) -> Vec<u8> {
         self.parser.advance(&mut self.term, bytes);
-        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+        self.scan.feed(bytes);
+        let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
+        if !alt && self.owed_main {
+            self.owed_main = false;
+            self.owed = true;
+        }
+        if alt {
             return self.rollback();
+        }
+        if !self.scan.at_ground() {
+            return Vec::new();
         }
         let cursor = self.mirror_cursor();
         let mut done = Vec::new();
@@ -180,7 +306,12 @@ impl Predictor {
             self.confirmed = 0;
             done.extend(self.pending.drain(..));
         }
-        self.repaint(&done)
+        let mut out = self.repaint(&done);
+        if self.pending.iter().any(|p| p.shown) {
+            out.extend(cup(self.cursor_now()));
+            self.displaced = true;
+        }
+        out
     }
 
     /// Local keystrokes. Returns what to draw now: predicted cells, underlined.
@@ -202,7 +333,8 @@ impl Predictor {
     pub fn tick(&mut self, now: Instant) -> Vec<u8> {
         match self.pending.front() {
             Some(p) if now.saturating_duration_since(p.at) >= TIMEOUT => self.rollback(),
-            _ => Vec::new(),
+            // A repaint owed from mid-sequence output.
+            _ => self.repaint(&[]),
         }
     }
 
@@ -217,9 +349,25 @@ impl Predictor {
             let b = buf[i];
             match b {
                 0x1b => {
-                    let (key, len) = escape(&buf[i..]);
-                    keys.push(key);
+                    let Some((key, len)) = escape(&buf[i..]) else {
+                        // Cut off by the end of the read: flush now, finish it next time.
+                        keys.push(Key::Flush);
+                        self.carry = buf[i..].to_vec();
+                        break;
+                    };
+                    match key {
+                        Key::Paste(on) => {
+                            self.in_paste = on;
+                            keys.push(Key::Flush);
+                        }
+                        _ if self.in_paste => keys.push(Key::Flush),
+                        key => keys.push(key),
+                    }
                     i += len;
+                }
+                _ if self.in_paste => {
+                    keys.push(Key::Flush);
+                    i += 1;
                 }
                 0x08 | 0x7f => {
                     keys.push(Key::Back);
@@ -240,7 +388,15 @@ impl Predictor {
                         0xf0..=0xf7 => 4,
                         _ => 1,
                     };
-                    if i + need > buf.len() {
+                    let have = buf.len() - i;
+                    let tail = &buf[i + 1..i + need.min(have)];
+                    if tail.iter().any(|b| !(0x80..=0xbf).contains(b)) {
+                        // Not UTF-8: leave the following bytes (maybe an ESC) alone.
+                        keys.push(Key::Flush);
+                        i += 1;
+                        continue;
+                    }
+                    if need > have {
                         self.carry = buf[i..].to_vec();
                         break;
                     }
@@ -261,20 +417,38 @@ impl Predictor {
     fn can_predict(&self) -> bool {
         self.enabled
             && self.echo_hint
-            && !self.term.mode().contains(TermMode::ALT_SCREEN)
+            && !self
+                .term
+                .mode()
+                .intersects(TermMode::ALT_SCREEN | TermMode::ORIGIN | TermMode::INSERT)
             && !self.password_prompt()
     }
 
+    /// The cursor's logical line (soft-wrapped rows joined) ends in a password prompt.
     fn password_prompt(&self) -> bool {
-        let row = self.mirror_cursor().0;
-        let line: String = (0..self.cols)
+        let mut row = self.mirror_cursor().0;
+        let mut line = self.row_text(row);
+        while row > 0 && self.wraps(row - 1) {
+            row -= 1;
+            line.insert_str(0, &self.row_text(row));
+        }
+        let line = line.trim_end().to_lowercase();
+        line.ends_with("assword:") || line.contains("password for") || line.contains("passphrase")
+    }
+
+    fn row_text(&self, row: usize) -> String {
+        (0..self.cols)
             .filter_map(|c| {
                 let cell = &self.term.grid()[Line(row as i32)][Column(c)];
                 (!cell.flags.contains(Flags::WIDE_CHAR_SPACER)).then_some(cell.c)
             })
-            .collect();
-        let line = line.trim_end();
-        line.ends_with("assword:") || line.to_lowercase().contains("passphrase")
+            .collect()
+    }
+
+    /// Row `row` continues on the next one.
+    fn wraps(&self, row: usize) -> bool {
+        let cell = &self.term.grid()[Line(row as i32)][Column(self.cols - 1)];
+        cell.flags.contains(Flags::WRAPLINE)
     }
 
     /// Track (and maybe draw) one key. None means it cannot be predicted: flush.
@@ -300,7 +474,7 @@ impl Predictor {
             Kind::Char(..) => before,
             _ => after,
         };
-        let shown = self.confirmed >= CONFIDENT_AFTER;
+        let shown = self.confirmed >= CONFIDENT_AFTER && self.scan.at_ground();
         let pred = Pred {
             kind,
             before,
@@ -310,7 +484,8 @@ impl Predictor {
             at: now,
             shown,
         };
-        let draw = shown.then(|| draw(&pred));
+        let draw = shown.then(|| self.draw(&pred));
+        self.displaced |= shown;
         self.pending.push_back(pred);
         Some(draw.unwrap_or_default())
     }
@@ -370,95 +545,181 @@ impl Predictor {
         self.repaint(&gone)
     }
 
-    /// Repaint the cells of the shown predictions from the mirror; the cursor ends where the
-    /// mirror's is.
-    fn repaint(&self, preds: &[Pred]) -> Vec<u8> {
-        let mut cells = BTreeSet::new();
-        let mut any = false;
-        for p in preds.iter().filter(|p| p.shown) {
-            any = true;
-            match p.kind {
-                Kind::Char(_, w) => cells.extend((0..w).map(|i| (p.before.0, p.before.1 + i))),
-                Kind::Back => {
-                    cells.insert(p.after);
-                }
-                Kind::Move => {}
+    /// If any of `preds` was drawn (or a repaint is still owed), paint the whole screen from
+    /// the mirror and put the cursor and pen where the mirror's are. Predictions are drawn at
+    /// fixed screen cells, and the server may have scrolled, moved or cleared them since, so
+    /// no smaller repaint is safe.
+    // ponytail: a few KB per resolved prediction; per-row diffing against a shadow of the
+    // terminal would shrink it.
+    fn repaint(&mut self, preds: &[Pred]) -> Vec<u8> {
+        if preds.iter().any(|p| p.shown) {
+            if self.term.mode().contains(TermMode::ALT_SCREEN) {
+                // The main screen is hidden; it is repainted on the way back.
+                self.owed_main = true;
+            } else {
+                self.owed = true;
             }
         }
-        if !any {
+        if !self.owed || !self.scan.at_ground() {
             return Vec::new();
         }
-        let mut out = b"\x1b7".to_vec();
-        for (row, col) in cells {
-            let cell = &self.term.grid()[Line(row as i32)][Column(col)];
+        self.owed = false;
+        self.displaced = false;
+        let mut out = Vec::new();
+        if self.term.mode().contains(TermMode::INSERT) {
+            out.extend(b"\x1b[4l");
+        }
+        let rows = self.term.screen_lines();
+        for row in 0..rows {
+            out.extend(self.paint_row(row));
+        }
+        if self.term.mode().contains(TermMode::INSERT) {
+            out.extend(b"\x1b[4h");
+        }
+        out.extend(self.restore_cursor());
+        out
+    }
+
+    fn paint_row(&self, row: usize) -> Vec<u8> {
+        let grid = self.term.grid();
+        let default = (Flags::empty(), DEFAULT_FG, DEFAULT_BG);
+        let cells: Vec<_> = (0..self.cols)
+            .map(|c| &grid[Line(row as i32)][Column(c)])
+            .collect();
+        let style = |c: &alacritty_terminal::term::cell::Cell| (c.flags & PAINTED, c.fg, c.bg);
+        let blank = |c: &&alacritty_terminal::term::cell::Cell| {
+            c.c == ' ' && style(c) == default && c.zerowidth().is_none()
+        };
+        let used = cells.iter().rposition(|c| !blank(c)).map_or(0, |i| i + 1);
+        let mut out = cup((row, 0));
+        out.extend(b"\x1b[0m");
+        let mut cur = default;
+        for cell in &cells[..used] {
             if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
             }
-            out.extend(cup((row, col)));
-            out.extend(sgr(cell.flags, cell.fg, cell.bg).bytes());
-            let mut utf8 = [0; 4];
-            out.extend(cell.c.encode_utf8(&mut utf8).bytes());
+            if style(cell) != cur {
+                cur = style(cell);
+                out.extend(sgr(cell.flags, cell.fg, cell.bg).bytes());
+            }
+            push_cell(&mut out, cell);
         }
-        out.extend(b"\x1b[0m\x1b8");
-        out.extend(cup(self.mirror_cursor()));
+        if used < self.cols {
+            if cur != default {
+                out.extend(b"\x1b[0m");
+            }
+            out.extend(b"\x1b[K");
+        }
+        out
+    }
+
+    /// The pen the server left, then the cursor where the mirror's is.
+    fn restore_cursor(&self) -> Vec<u8> {
+        let cursor = &self.term.grid().cursor;
+        let (row, col) = self.mirror_cursor();
+        let mut out = Vec::new();
+        if cursor.input_needs_wrap {
+            // The next char must wrap: only writing into the last column sets that state.
+            let mut at = col;
+            if self.term.grid()[Line(row as i32)][Column(at)]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
+            {
+                at = at.saturating_sub(1);
+            }
+            let cell = &self.term.grid()[Line(row as i32)][Column(at)];
+            out.extend(cup((row, at)));
+            out.extend(b"\x1b[0m");
+            out.extend(sgr(cell.flags, cell.fg, cell.bg).bytes());
+            push_cell(&mut out, cell);
+            out.extend(self.pen().bytes());
+        } else {
+            out.extend(self.pen().bytes());
+            out.extend(cup((row, col)));
+        }
+        out
+    }
+
+    /// The mirror's current SGR state.
+    fn pen(&self) -> String {
+        let t = &self.term.grid().cursor.template;
+        sgr(t.flags, t.fg, t.bg)
+    }
+
+    /// What to write for one shown prediction.
+    fn draw(&self, p: &Pred) -> Vec<u8> {
+        let mut out = Vec::new();
+        match p.kind {
+            Kind::Char(c, _) => {
+                out.extend(cup(p.before));
+                out.extend(b"\x1b[0;4m");
+                let mut utf8 = [0; 4];
+                out.extend(c.encode_utf8(&mut utf8).bytes());
+            }
+            Kind::Back => {
+                out.extend(cup(p.after));
+                out.extend(b"\x1b[0m ");
+            }
+            Kind::Move => {}
+        }
+        out.extend(self.pen().bytes());
+        out.extend(cup(p.after));
         out
     }
 }
 
-/// The key at the start of `buf` (an ESC) and how many bytes it takes.
-fn escape(buf: &[u8]) -> (Key, usize) {
-    // ponytail: a sequence cut off by the end of the read counts as a flush, not as pending.
-    match buf.get(1) {
-        None => (Key::Flush, 1),
-        Some(b'[') => {
+fn push_cell(out: &mut Vec<u8>, cell: &alacritty_terminal::term::cell::Cell) {
+    let mut utf8 = [0; 4];
+    out.extend(cell.c.encode_utf8(&mut utf8).bytes());
+    for z in cell.zerowidth().into_iter().flatten() {
+        out.extend(z.encode_utf8(&mut utf8).bytes());
+    }
+}
+
+const DEFAULT_FG: Color = Color::Named(NamedColor::Foreground);
+const DEFAULT_BG: Color = Color::Named(NamedColor::Background);
+/// The attributes `sgr` can express.
+const PAINTED: Flags = Flags::BOLD
+    .union(Flags::DIM)
+    .union(Flags::ITALIC)
+    .union(Flags::ALL_UNDERLINES)
+    .union(Flags::INVERSE)
+    .union(Flags::HIDDEN)
+    .union(Flags::STRIKEOUT);
+
+/// The key at the start of `buf` (an ESC) and how many bytes it takes; None if the sequence
+/// is cut off by the end of `buf`.
+fn escape(buf: &[u8]) -> Option<(Key, usize)> {
+    match buf.get(1)? {
+        b'[' => {
             let mut j = 2;
             while buf.get(j).is_some_and(|b| (0x20..=0x3f).contains(b)) {
                 j += 1;
             }
-            let end = (j + 1).min(buf.len());
-            let key = match &buf[2..end] {
+            buf.get(j)?;
+            let key = match &buf[2..=j] {
                 b"D" => Key::Left,
                 b"C" => Key::Right,
+                b"200~" => Key::Paste(true),
+                b"201~" => Key::Paste(false),
                 _ => Key::Flush,
             };
-            (key, end)
+            Some((key, j + 1))
         }
-        Some(b'O') => {
-            let key = match buf.get(2) {
-                Some(b'D') => Key::Left,
-                Some(b'C') => Key::Right,
+        b'O' => {
+            let key = match buf.get(2)? {
+                b'D' => Key::Left,
+                b'C' => Key::Right,
                 _ => Key::Flush,
             };
-            (key, 3.min(buf.len()))
+            Some((key, 3))
         }
-        Some(_) => (Key::Flush, 2),
+        _ => Some((Key::Flush, 2)),
     }
 }
 
 fn cup((row, col): Pos) -> Vec<u8> {
     format!("\x1b[{};{}H", row + 1, col + 1).into_bytes()
-}
-
-/// What to write for one shown prediction.
-fn draw(p: &Pred) -> Vec<u8> {
-    let mut out = b"\x1b7".to_vec();
-    match p.kind {
-        Kind::Char(c, _) => {
-            out.extend(cup(p.before));
-            out.extend(b"\x1b[0;4m");
-            let mut utf8 = [0; 4];
-            out.extend(c.encode_utf8(&mut utf8).bytes());
-            out.extend(b"\x1b[0m");
-        }
-        Kind::Back => {
-            out.extend(cup(p.after));
-            out.extend(b"\x1b[0m ");
-        }
-        Kind::Move => {}
-    }
-    out.extend(b"\x1b8");
-    out.extend(cup(p.after));
-    out
 }
 
 fn sgr(flags: Flags, fg: Color, bg: Color) -> String {
@@ -536,7 +797,7 @@ mod tests {
         let mut p = confident(t);
         p.on_input(b"d", t);
         let out = s(p.feed_output(b"d", t));
-        assert!(out.contains("\x1b[1;6H\x1b[0md"), "{out:?}");
+        assert!(out.contains("$ abcd\x1b[K"), "{out:?}");
         assert!(!out.contains(UL), "{out:?}");
         assert_eq!(p.tick(t + Duration::from_secs(5)), b"", "nothing pending");
     }
@@ -547,7 +808,7 @@ mod tests {
         let mut p = confident(t);
         p.on_input(b"x", t);
         let out = s(p.feed_output(b"y", t));
-        assert!(out.contains("\x1b[1;6H\x1b[0my"), "{out:?}");
+        assert!(out.contains("$ abcy\x1b[K"), "{out:?}");
         assert!(out.ends_with("\x1b[1;7H"), "mirror cursor last: {out:?}");
         assert_eq!(p.on_input(b"z", t), b"", "tentative again");
     }
@@ -558,9 +819,16 @@ mod tests {
         let mut p = confident(t);
         p.on_input(b"x", t);
         let out = s(p.feed_output(b"\x1b[?1049h", t));
-        assert!(out.contains("\x1b[1;6H\x1b[0m "), "{out:?}");
+        assert!(
+            out.is_empty(),
+            "the alt screen hides the stale cell: {out:?}"
+        );
         assert_eq!(p.on_input(b"q", t), b"", "no prediction on the alt screen");
-        p.feed_output(b"\x1b[?1049l", t);
+        let out = s(p.feed_output(b"\x1b[?1049l", t));
+        assert!(
+            out.contains("$ abc\x1b[K"),
+            "main screen repainted on return: {out:?}"
+        );
         assert_eq!(p.on_input(b"q", t), b"", "tentative after leaving");
     }
 
@@ -571,7 +839,7 @@ mod tests {
         p.on_input(b"x", t);
         assert_eq!(p.tick(t + Duration::from_millis(999)), b"");
         let out = s(p.tick(t + Duration::from_secs(1)));
-        assert!(out.contains("\x1b[1;6H\x1b[0m "), "{out:?}");
+        assert!(out.contains("$ abc\x1b[K"), "{out:?}");
         assert_eq!(p.tick(t + Duration::from_secs(2)), b"");
     }
 
@@ -581,7 +849,7 @@ mod tests {
         let mut p = confident(t);
         p.on_input(b"x", t);
         let out = s(p.feed_output(b"\x1b[3;3H", t));
-        assert!(out.contains("\x1b[1;6H\x1b[0m "), "{out:?}");
+        assert!(out.contains("$ abc\x1b[K"), "{out:?}");
         assert!(out.ends_with("\x1b[3;3H"), "{out:?}");
     }
 
@@ -606,7 +874,7 @@ mod tests {
         let mut p = confident(t);
         p.on_input(b"x", t);
         let out = s(p.set_echo_hint(false));
-        assert!(out.contains("\x1b[1;6H\x1b[0m "), "{out:?}");
+        assert!(out.contains("$ abc\x1b[K"), "{out:?}");
         assert_eq!(p.on_input(b"y", t), b"");
         p.set_echo_hint(true);
         assert_eq!(p.on_input(b"y", t), b"", "tentative after the hint returns");
@@ -647,11 +915,14 @@ mod tests {
     fn left_and_right_move_the_predicted_cursor() {
         let t = Instant::now();
         let mut p = confident(t);
-        assert_eq!(s(p.on_input(b"\x1b[D", t)), "\x1b7\x1b8\x1b[1;5H");
-        assert_eq!(s(p.on_input(b"\x1bOC", t)), "\x1b7\x1b8\x1b[1;6H");
+        assert_eq!(s(p.on_input(b"\x1b[D", t)), "\x1b[0m\x1b[1;5H");
+        assert_eq!(s(p.on_input(b"\x1bOC", t)), "\x1b[0m\x1b[1;6H");
         // The server moves left only: the first move confirms, the second times out.
         let out = s(p.feed_output(b"\x1b[D", t));
-        assert!(out.ends_with("\x1b[1;5H"), "{out:?}");
+        assert!(
+            out.ends_with("\x1b[1;6H"),
+            "cursor stays at the unconfirmed move: {out:?}"
+        );
         let out = s(p.tick(t + Duration::from_secs(1)));
         assert!(out.ends_with("\x1b[1;5H"), "{out:?}");
         assert_eq!(p.tick(t + Duration::from_secs(2)), b"");
@@ -679,7 +950,7 @@ mod tests {
         let mut p = confident(t);
         p.on_input(b"x", t);
         let out = s(p.on_input(b"\r", t));
-        assert!(out.contains("\x1b[1;6H\x1b[0m "), "{out:?}");
+        assert!(out.contains("$ abc\x1b[K"), "{out:?}");
         assert_eq!(p.on_input(b"y", t), b"", "tentative after a flush");
         let mut p = confident(t);
         p.on_input(b"x", t);
@@ -755,7 +1026,7 @@ mod tests {
         let late = t + Duration::from_millis(300);
         let out = s(p.feed_output(b"hel", late));
         assert!(!out.contains(UL), "{out:?}");
-        assert!(out.ends_with("\x1b[1;9H"), "{out:?}");
+        assert!(out.ends_with("\x1b[1;11H"), "{out:?}");
         let out = s(p.feed_output(b"lo", late));
         assert!(!out.contains(UL), "{out:?}");
         assert_eq!(p.tick(t + Duration::from_secs(5)), b"", "all confirmed");
@@ -772,7 +1043,7 @@ mod tests {
         p.feed_output(b"a", t + Duration::from_millis(600));
         assert_eq!(p.tick(t + Duration::from_millis(1400)), b"");
         let out = s(p.tick(t + Duration::from_millis(1500)));
-        assert!(out.contains("\x1b[1;7H\x1b[0m "), "{out:?}");
+        assert!(out.contains("$ abca\x1b[K"), "{out:?}");
     }
 
     #[test]
@@ -781,6 +1052,344 @@ mod tests {
         let mut p = confident(t);
         p.on_input(b"x", t);
         let out = s(p.feed_output(b"\x1b[1;31my", t));
-        assert!(out.contains("\x1b[1;6H\x1b[0;1;31my"), "{out:?}");
+        assert!(out.contains("$ abc\x1b[0;1;31my"), "{out:?}");
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The user's terminal: fed the server bytes and everything the predictor returns.
+    struct Model {
+        term: Term<VoidListener>,
+        parser: Processor<NoSync>,
+    }
+
+    impl Model {
+        fn new(cols: usize, rows: usize) -> Self {
+            let config = Config {
+                scrolling_history: 0,
+                ..Config::default()
+            };
+            Model {
+                term: Term::new(config, &Size { cols, rows }, VoidListener),
+                parser: Processor::new(),
+            }
+        }
+        fn feed(&mut self, bytes: &[u8]) {
+            self.parser.advance(&mut self.term, bytes);
+        }
+    }
+
+    const MASK: Flags = Flags::BOLD
+        .union(Flags::DIM)
+        .union(Flags::ITALIC)
+        .union(Flags::INVERSE)
+        .union(Flags::HIDDEN)
+        .union(Flags::STRIKEOUT)
+        .union(Flags::UNDERLINE);
+
+    fn snapshot(t: &Term<VoidListener>, cols: usize, rows: usize) -> String {
+        let mut s = String::new();
+        for r in 0..rows {
+            for c in 0..cols {
+                let cell = &t.grid()[Line(r as i32)][Column(c)];
+                s.push(cell.c);
+                let f = cell.flags & MASK;
+                if f.bits() != 0
+                    || cell.fg
+                        != Color::Named(alacritty_terminal::vte::ansi::NamedColor::Foreground)
+                    || cell.bg
+                        != Color::Named(alacritty_terminal::vte::ansi::NamedColor::Background)
+                {
+                    s += &format!("{{{:?}{:?}{:?}}}", f, cell.fg, cell.bg);
+                }
+            }
+            s.push('\n');
+        }
+        let p = t.grid().cursor.point;
+        s += &format!(
+            "cursor {} {} wrap={} show={} alt={}",
+            p.line.0,
+            p.column.0,
+            t.grid().cursor.input_needs_wrap,
+            t.mode().contains(TermMode::SHOW_CURSOR),
+            t.mode().contains(TermMode::ALT_SCREEN)
+        );
+        s
+    }
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        Input(&'static str),
+        Server(Vec<&'static str>, usize),
+        Tick(u64),
+    }
+
+    const INPUTS: &[&str] = &[
+        "a",
+        "b",
+        "z",
+        " ",
+        "漢",
+        "\x7f",
+        "\x1b[D",
+        "\x1b[C",
+        "\x1bOD",
+        "\r",
+        "\x03",
+        "\x1b",
+        "\x1b[200~",
+        "\x1b[201~",
+        "\u{301}",
+        "\x1b[A",
+    ];
+    const ATOMS: &[&str] = &[
+        "a",
+        "b",
+        "z",
+        "ab",
+        "漢",
+        "e\u{301}",
+        "\r\n",
+        "\n",
+        "\x08",
+        "\x08 \x08",
+        "\x1b[D",
+        "\x1b[C",
+        "\x1b[2K",
+        "\x1b[K",
+        "\x1b[1;31m",
+        "\x1b[0m",
+        "\x1b[1m",
+        "\x1b[3;5H",
+        "\x1b[1;9H",
+        "\x1b[?25l",
+        "\x1b[?25h",
+        "\x1b[?1049h",
+        "\x1b[?1049l",
+        "\x1b[J",
+        "$ ",
+        "Password: ",
+        "\x1b[?2026h",
+        "\x1b[?2026l",
+        "\x1b]0;title\x07",
+        "\x1b7",
+        "\x1b8",
+        "0123456789012345678901234567",
+        "\x1b[4;2r",
+        "\x1b[r",
+        "\x1bM",
+        "\x1b[2J\x1b[H",
+        "\x1b[38;5;200m",
+        "\x1b[48;2;1;2;3m",
+        "\x1b[4m",
+        "\x1b[7m",
+    ];
+
+    fn op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            4 => (0..INPUTS.len()).prop_map(|i| Op::Input(INPUTS[i])),
+            4 => (prop::collection::vec(0..ATOMS.len(), 1..4), 1usize..40)
+                .prop_map(|(v, cut)| Op::Server(v.into_iter().map(|i| ATOMS[i]).collect(), cut)),
+            1 => (0u64..1500).prop_map(Op::Tick),
+        ]
+    }
+
+    const COLS: usize = 12;
+    const ROWS: usize = 5;
+
+    fn run(ops: &[Op], preamble: &str) -> Result<(), String> {
+        let t0 = Instant::now();
+        let mut now = t0;
+        let mut p = Predictor::new(COLS, ROWS);
+        let mut m = Model::new(COLS, ROWS);
+        let server = |p: &mut Predictor, m: &mut Model, chunk: &[u8], now: Instant| {
+            m.feed(&p.before_output());
+            m.feed(chunk);
+            m.feed(&p.feed_output(chunk, now));
+        };
+        // Get confident first.
+        server(&mut p, &mut m, preamble.as_bytes(), now);
+        for ch in ["a", "b", "c", "d"] {
+            m.feed(&p.on_input(ch.as_bytes(), now));
+            server(&mut p, &mut m, ch.as_bytes(), now);
+        }
+        // The server stream is only ever cut, so the last chunk must end at ground.
+        for o in ops {
+            now += Duration::from_millis(20);
+            match o {
+                Op::Input(s) => m.feed(&p.on_input(s.as_bytes(), now)),
+                Op::Server(atoms, cut) => {
+                    let all: Vec<u8> = atoms.concat().into_bytes();
+                    for chunk in all.chunks(*cut) {
+                        server(&mut p, &mut m, chunk, now);
+                    }
+                }
+                Op::Tick(ms) => {
+                    now += Duration::from_millis(*ms);
+                    m.feed(&p.tick(now));
+                }
+            }
+        }
+        // Make the stream end at ground, then let everything time out.
+        server(&mut p, &mut m, b"\x1b\\\x07\x18", now);
+        now += Duration::from_secs(2);
+        m.feed(&p.tick(now));
+        m.feed(&p.tick(now));
+        let (a, b) = (snapshot(&m.term, COLS, ROWS), snapshot(&p.term, COLS, ROWS));
+        if a == b {
+            Ok(())
+        } else {
+            Err(format!("terminal:\n{a}\nmirror:\n{b}\nops: {ops:?}"))
+        }
+    }
+
+    /// The user sees what the caller writes: before_output, the server bytes, feed_output.
+    fn server(p: &mut Predictor, m: &mut Model, chunk: &[u8], now: Instant) -> Vec<u8> {
+        m.feed(&p.before_output());
+        m.feed(chunk);
+        let after = p.feed_output(chunk, now);
+        m.feed(&after);
+        after
+    }
+
+    fn confident(cols: usize, t: Instant) -> (Predictor, Model) {
+        let mut p = Predictor::new(cols, ROWS);
+        let mut m = Model::new(cols, ROWS);
+        server(&mut p, &mut m, b"$ ", t);
+        for ch in ["a", "b", "c"] {
+            m.feed(&p.on_input(ch.as_bytes(), t));
+            server(&mut p, &mut m, ch.as_bytes(), t);
+        }
+        (p, m)
+    }
+
+    #[test]
+    fn the_server_echo_lands_at_the_mirror_cursor_not_the_predicted_one() {
+        let t = Instant::now();
+        let (mut p, mut m) = confident(COLS, t);
+        m.feed(&p.on_input(b"d", t));
+        server(&mut p, &mut m, b"d", t);
+        assert_eq!(snapshot(&m.term, COLS, ROWS), snapshot(&p.term, COLS, ROWS));
+    }
+
+    #[test]
+    fn the_servers_saved_cursor_and_pen_survive_a_prediction() {
+        let t = Instant::now();
+        let (mut p, mut m) = confident(COLS, t);
+        server(&mut p, &mut m, b"\x1b7\x1b[1;31m", t);
+        m.feed(&p.on_input(b"d", t));
+        server(&mut p, &mut m, b"d\x1b[3;3H\x1b8Z", t);
+        m.feed(&p.tick(t + Duration::from_secs(2)));
+        assert_eq!(snapshot(&m.term, COLS, ROWS), snapshot(&p.term, COLS, ROWS));
+    }
+
+    #[test]
+    fn nothing_is_written_inside_a_split_escape_sequence() {
+        let t = Instant::now();
+        let (mut p, mut m) = confident(COLS, t);
+        m.feed(&p.on_input(b"d", t));
+        for chunk in [&b"\x1b"[..], b"[", b"3", b";3", b"H"] {
+            let after = server(&mut p, &mut m, chunk, t);
+            if chunk != b"H" {
+                assert!(after.is_empty(), "mid-sequence: {after:?}");
+            }
+        }
+        m.feed(&p.tick(t + Duration::from_secs(2)));
+        assert_eq!(snapshot(&m.term, COLS, ROWS), snapshot(&p.term, COLS, ROWS));
+    }
+
+    #[test]
+    fn a_split_utf8_char_from_the_server_is_not_interrupted() {
+        let t = Instant::now();
+        let (mut p, mut m) = confident(COLS, t);
+        m.feed(&p.on_input("漢".as_bytes(), t));
+        let bytes = "漢".as_bytes();
+        assert!(server(&mut p, &mut m, &bytes[..1], t).is_empty());
+        assert!(server(&mut p, &mut m, &bytes[1..2], t).is_empty());
+        server(&mut p, &mut m, &bytes[2..], t);
+        assert_eq!(snapshot(&m.term, COLS, ROWS), snapshot(&p.term, COLS, ROWS));
+    }
+
+    #[test]
+    fn a_scroll_does_not_leave_a_stale_underlined_cell() {
+        let t = Instant::now();
+        let (mut p, mut m) = confident(COLS, t);
+        server(&mut p, &mut m, b"\x1b[5;1Hxy", t);
+        for ch in ["1", "2", "3"] {
+            m.feed(&p.on_input(ch.as_bytes(), t));
+            server(&mut p, &mut m, ch.as_bytes(), t);
+        }
+        m.feed(&p.on_input(b"4", t));
+        server(&mut p, &mut m, b"\r\n\r\n", t);
+        m.feed(&p.tick(t + Duration::from_secs(2)));
+        assert_eq!(snapshot(&m.term, COLS, ROWS), snapshot(&p.term, COLS, ROWS));
+    }
+
+    #[test]
+    fn leaving_the_alt_screen_repaints_the_main_one() {
+        let t = Instant::now();
+        let (mut p, mut m) = confident(COLS, t);
+        m.feed(&p.on_input(b"d", t));
+        server(&mut p, &mut m, b"\x1b[?1049hvim", t);
+        server(&mut p, &mut m, b"\x1b[?1049l", t);
+        assert_eq!(snapshot(&m.term, COLS, ROWS), snapshot(&p.term, COLS, ROWS));
+    }
+
+    #[test]
+    fn an_arrow_key_split_across_reads_is_not_typed_text() {
+        let t = Instant::now();
+        let (mut p, _) = confident(COLS, t);
+        p.on_input(b"\x1b", t);
+        p.on_input(b"[D", t);
+        assert_eq!(p.pending.len(), 1, "one Left, not the chars [ and D");
+        assert!(matches!(p.pending[0].kind, Kind::Move));
+    }
+
+    #[test]
+    fn pasted_text_is_not_predicted() {
+        let t = Instant::now();
+        let (mut p, _) = confident(COLS, t);
+        p.on_input(b"\x1b[200~", t);
+        assert!(p.on_input(b"hi", t).is_empty());
+        assert!(p.pending.is_empty());
+        p.on_input(b"\x1b[20", t);
+        p.on_input(b"1~", t);
+        p.on_input(b"x", t);
+        assert_eq!(
+            p.pending.len(),
+            1,
+            "typing is predicted again after the paste"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_password_prompt_is_detected() {
+        let t = Instant::now();
+        let (mut p, _) = confident(COLS, t);
+        p.feed_output(b"\r\nEnter passphrase for key abc: ", t);
+        assert!(p.on_input(b"s", t).is_empty());
+        assert!(p.pending.is_empty());
+        let (mut p, _) = confident(COLS, t);
+        p.feed_output(b"\r\n[sudo] password for me: ", t);
+        p.on_input(b"s", t);
+        assert!(p.pending.is_empty());
+        let (mut p, _) = confident(COLS, t);
+        p.feed_output(b"\r\nENTER PASSWORD:", t);
+        p.on_input(b"s", t);
+        assert!(p.pending.is_empty());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(400))]
+        #[test]
+        fn rollback_leaves_the_terminal_equal_to_the_mirror(
+            ops in prop::collection::vec(op(), 1..25)
+        ) {
+            run(&ops, "$ ").map_err(TestCaseError::fail)?;
+        }
     }
 }
