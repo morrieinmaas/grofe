@@ -274,13 +274,15 @@ fn strip(state: &State, client: ClientId, cols: u16, rows: u16) -> Option<Strip>
     })
 }
 
+/// The state glyph at the head of an entry: one-cell marks that read as
+/// a column, so the names line up.
 fn glyph(a: &Agent) -> &'static str {
     match rank(a) {
-        Rank::Blocked => "⏸",
+        Rank::Blocked => "‖",
         Rank::Error => "✗",
         Rank::Unseen | Rank::Done => "✓",
         Rank::Working => "●",
-        Rank::Idle => "○",
+        Rank::Idle => "·",
     }
 }
 
@@ -780,10 +782,10 @@ mod tests {
         assert_eq!(at(2), format!("│ ● claude · infra{}│", " ".repeat(13)));
         assert_eq!(at(3).trim_matches(['│', ' ']), "busy");
         assert_eq!(at(4).trim_matches(['│', ' ']), "", "blank between entries");
-        assert_eq!(at(5).trim_matches(['│', ' ']), "⏸ claude · a:api");
+        assert_eq!(at(5).trim_matches(['│', ' ']), "‖ claude · a:api");
         assert_eq!(at(6).trim_matches(['│', ' ']), "ask me");
         assert_eq!(at(7).trim_matches(['│', ' ']), "");
-        assert_eq!(at(8).trim_matches(['│', ' ']), "○ claude · a:web");
+        assert_eq!(at(8).trim_matches(['│', ' ']), "· claude · a:web");
         assert_eq!(at(9).trim_matches(['│', ' ']), "idle");
         assert!(strip[47].starts_with('│') && strip[47].ends_with("│ "));
         assert!(strip[48].starts_with("╰─") && strip[48].ends_with("─╯ "));
@@ -801,7 +803,7 @@ mod tests {
         );
         let s = screen(&state, client, 160);
         let magenta = status::parse_style("fg=magenta").fg;
-        assert_eq!(cell(&s, 129, 5).c, '⏸');
+        assert_eq!(cell(&s, 129, 5).c, '‖');
         assert_eq!(cell(&s, 129, 5).fg, magenta, "blocked glyph");
         assert!(cell(&s, 131, 5).flags.contains(CellFlags::BOLD), "name");
         assert!(cell(&s, 131, 6).flags.contains(CellFlags::DIM), "detail");
@@ -855,7 +857,7 @@ mod tests {
         let strip = strip_of(&lines(&state, client, 160));
         assert!(strip[0].starts_with("│ ● claude · infra"), "{:?}", strip[0]);
         assert!(strip[1].contains("busy"));
-        assert!(strip[3].starts_with("│ ⏸ claude · a:api"));
+        assert!(strip[3].starts_with("│ ‖ claude · a:api"));
         assert!(strip[48].starts_with('│'));
         assert!(strip[49].trim().is_empty());
     }
