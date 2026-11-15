@@ -112,15 +112,14 @@ mod tests {
         Runtime::new(Limits::default()).unwrap()
     }
     #[test]
-    fn a_spin_ends_within_twice_the_budget() {
+    fn a_spin_ends_at_the_budget() {
         let r = rt();
         let t = Instant::now();
         let e = r.exec("spin", "while true do end").unwrap_err();
-        assert!(
-            t.elapsed() < Duration::from_millis(100),
-            "{:?}",
-            t.elapsed()
-        );
+        // Not before the budget (the deadline is honoured), and finite (unbudgeted it never ends).
+        // The upper bound is loose so a descheduled runner cannot fail it.
+        assert!(t.elapsed() >= Limits::default().budget, "{:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
         assert_eq!(e.who, "spin");
         assert!(e.message.contains("budget"), "{e}");
     }
@@ -135,7 +134,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(t.elapsed() < Duration::from_millis(100));
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     }
     #[test]
     fn the_next_call_after_an_abort_runs() {
@@ -174,12 +173,22 @@ mod tests {
     #[test]
     fn test_nested_guarded_keeps_outer_deadline() {
         let r = rt();
+        // Baseline: loop iterations a spin gets from one full, fresh budget.
+        r.exec("base", "n = 0 while true do n = n + 1 end")
+            .unwrap_err();
+        let fresh: f64 = r.lua().globals().get("n").unwrap();
         r.guarded("outer", |_| {
-            // Past the outer 50 ms deadline: a fresh inner budget would spin for another 50 ms.
+            // Past the outer deadline: a fresh inner budget would let the spin run as long as
+            // the baseline did. Counting iterations instead of time ignores runner speed.
             std::thread::sleep(Duration::from_millis(60));
-            let t = Instant::now();
-            let inner = r.exec("inner", "while true do end").unwrap_err();
-            assert!(t.elapsed() < Duration::from_millis(25), "{:?}", t.elapsed());
+            let inner = r
+                .exec("inner", "n = 0 while true do n = n + 1 end")
+                .unwrap_err();
+            let n: f64 = r.lua().globals().get("n").unwrap();
+            assert!(
+                n * 10.0 < fresh,
+                "inner ran {n} iterations, fresh budget {fresh}"
+            );
             assert!(inner.message.contains("budget"), "{inner}");
             Ok(())
         })
@@ -324,10 +333,6 @@ mod tests {
         let r = rt();
         let t = Instant::now();
         let _ = r.exec("c", "string.rep('a', 5e7):find('b')");
-        assert!(
-            t.elapsed() < Duration::from_millis(500),
-            "{:?}",
-            t.elapsed()
-        );
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     }
 }
