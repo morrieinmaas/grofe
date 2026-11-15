@@ -6,6 +6,7 @@ pub mod client;
 pub mod cmd;
 pub mod compat;
 pub mod config;
+pub mod control_mode;
 pub mod event;
 pub mod import_tmux;
 pub mod layouts;

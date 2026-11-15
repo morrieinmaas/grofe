@@ -1806,14 +1806,14 @@ pub struct TmuxCli {
     pub features: Vec<String>,
     /// `-v`: how many times (the log level; grofe logs nothing more).
     pub verbose: u8,
+    /// `-C`: how many times. One is control mode, two (`-CC`) wraps it in
+    /// a DCS.
+    pub control: u8,
 }
 
 /// tmux 3.7b's usage text, printed after a bad global option.
 pub const USAGE: &str = "usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
             [-S socket-path] [-T features] [command [flags]]";
-
-/// `-C` is control mode, which grofe does not have.
-const NOT_IMPLEMENTED: &[char] = &['C'];
 
 /// Reads the argv of the CLI run as `tmux` (`args` follow `argv[0]`), or
 /// the error to print and exit 1 with. Global flags are read as tmux's
@@ -1838,6 +1838,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         login: false,
         features: Vec::new(),
         verbose: 0,
+        control: 0,
     };
     let mut i = 0;
     'args: while let Some(arg) = args.get(i) {
@@ -1895,9 +1896,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                 // In tmux's getopt string, with no case of their own: the
                 // usage alone, with no complaint about the option.
                 'd' | 'U' => return Err(USAGE.to_string()),
-                c if NOT_IMPLEMENTED.contains(&c) => {
-                    return Err(format!("tmux front end is not implemented: -{c}"));
-                }
+                'C' => out.control = out.control.saturating_add(1),
                 c => return Err(format!("tmux: unknown option -- {c}\n{USAGE}")),
             }
         }
@@ -2586,8 +2585,8 @@ mod tests {
         assert!(err.starts_with("tmux: unknown option -- Z\nusage: tmux [-2CDhlNuVv]"));
         let err = cli(&args(&["-L"])).unwrap_err();
         assert!(err.starts_with("tmux: option requires an argument -- L\nusage: tmux"));
-        let err = cli(&args(&["-C"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: -C");
+        assert_eq!(cli(&args(&["-C"])).unwrap().control, 1);
+        assert_eq!(cli(&args(&["-CC", "attach"])).unwrap().control, 2);
         let got = cli(&args(&["-c", "echo a", "-cecho b"])).unwrap();
         assert_eq!(got.shell_command.as_deref(), Some("echo b"));
         assert!(got.argv.is_empty());
