@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use common::{CMD_TIMEOUT, TestServer, run_bounded, wait_until};
+use common::{CMD_TIMEOUT, TestServer, run_bounded, try_wait_until};
 use grofe::config::{self, Env, Restart};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -85,7 +85,7 @@ fn row(srv: &TestServer, name: &str) -> Row {
 /// Waits for `name` to be running and returns its pid.
 fn running(srv: &TestServer, name: &str) -> i32 {
     let mut pid = None;
-    let ok = wait_until(
+    let ok = try_wait_until(
         || match rows(srv).into_iter().find(|r| r.name == name) {
             Some(Row {
                 state,
@@ -104,7 +104,7 @@ fn running(srv: &TestServer, name: &str) -> i32 {
 }
 
 fn wait_state(srv: &TestServer, name: &str, state: &str) {
-    wait_until(|| row(srv, name).state == state, WAIT).unwrap_or_else(|e| {
+    try_wait_until(|| row(srv, name).state == state, WAIT).unwrap_or_else(|e| {
         panic!(
             "{name} never reached {state}: {e}; row {:?}",
             row(srv, name)
@@ -138,7 +138,7 @@ fn lines(path: &Path) -> usize {
 fn read(path: &Path) -> String {
     // The shell creates the file before it writes the line.
     let mut text = String::new();
-    wait_until(
+    try_wait_until(
         || {
             text = fs::read_to_string(path).unwrap_or_default();
             text.ends_with('\n')
@@ -292,11 +292,11 @@ fn the_fifth_crash_within_the_window_disables_the_plugin() {
     for crash in 1..=5 {
         // "running" is the fork; the script has not necessarily written its
         // line yet, and a kill before that loses it.
-        wait_until(|| lines(&starts) >= crash, WAIT).expect("plugin wrote its start line");
+        try_wait_until(|| lines(&starts) >= crash, WAIT).expect("plugin wrote its start line");
         sigkill(pid);
         if crash < 5 {
             let prev = pid;
-            wait_until(
+            try_wait_until(
                 || {
                     let r = row(&srv, "p");
                     r.state == "running" && r.pid.is_some_and(|p| p != prev)
@@ -310,7 +310,8 @@ fn the_fifth_crash_within_the_window_disables_the_plugin() {
     wait_state(&srv, "p", "disabled");
     assert_eq!(row(&srv, "p").pid, None);
     // Longer than the next backoff (16 x 50 ms) would have been.
-    std::thread::sleep(Duration::from_millis(1200));
+    // Negative wait: no restart may follow.
+    common::quiet_period(Duration::from_millis(1200));
     assert_eq!(row(&srv, "p").state, "disabled");
     assert_eq!(lines(&starts), 5, "nothing spawned after the fifth crash");
     let log = fs::read_to_string(srv.log_path()).unwrap_or_default();
@@ -341,7 +342,7 @@ fn kill_server_leaves_no_plugin_process_and_no_child() {
     let child_pid: i32 = read(&child).trim().parse().expect("child pid");
     assert!(alive(pid) && alive(child_pid));
     srv.cmd(&["kill-server"]).expect("kill-server");
-    wait_until(|| !alive(pid) && !alive(child_pid), WAIT)
+    try_wait_until(|| !alive(pid) && !alive(child_pid), WAIT)
         .unwrap_or_else(|e| panic!("plugin {pid} or child {child_pid} left: {e}"));
 }
 
@@ -360,10 +361,10 @@ fn a_plugin_that_ignores_sigterm_is_killed_after_the_grace() {
     // Scale 0.25: the 2 s grace is half a second.
     let srv = start_with(srv, &plugin_table("p", &p, ""), Some("0.25"));
     let pid = running(&srv, "p");
-    wait_until(|| ready.exists(), WAIT).expect("ready");
+    try_wait_until(|| ready.exists(), WAIT).expect("ready");
     let t = Instant::now();
     srv.cmd(&["kill-server"]).expect("kill-server");
-    wait_until(|| !alive(pid), WAIT).expect("killed");
+    try_wait_until(|| !alive(pid), WAIT).expect("killed");
     assert!(
         t.elapsed() >= Duration::from_millis(400),
         "no grace: {:?}",
@@ -397,7 +398,7 @@ fn stderr_and_stdout_land_in_the_plugin_log() {
     let srv = start_with(srv, &plugin_table("noisy", &p, ""), None);
     running(&srv, "noisy");
     let log = srv.state_home.join("grofe/plugins/noisy.log");
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(&log).is_ok_and(|t| t.contains("oops") && t.contains("out-line")),
         WAIT,
     )
@@ -416,7 +417,7 @@ fn the_log_rotates_at_one_mebibyte() {
     running(&srv, "big");
     let dir = srv.state_home.join("grofe/plugins");
     let (log, old) = (dir.join("big.log"), dir.join("big.log.1"));
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(&log).is_ok_and(|t| t.contains("tail-marker")),
         WAIT,
     )
@@ -456,7 +457,7 @@ fn reload_starts_stops_and_restarts_plugins_whose_config_changed() {
     write_config(&srv, &config);
     // `changing` starts under the first reload; then its env changes.
     srv.cmd(&["reload"]).expect("reload");
-    wait_until(|| !alive(gone), WAIT).expect("gone is stopped");
+    try_wait_until(|| !alive(gone), WAIT).expect("gone is stopped");
     assert_eq!(rows(&srv).len(), 3, "{:?}", rows(&srv));
     assert_eq!(
         row(&srv, "keep").pid,
@@ -474,7 +475,7 @@ fn reload_starts_stops_and_restarts_plugins_whose_config_changed() {
     );
     write_config(&srv, &config);
     srv.cmd(&["reload"]).expect("reload");
-    wait_until(|| !alive(fresh) && !alive(changing), WAIT).expect("stopped");
+    try_wait_until(|| !alive(fresh) && !alive(changing), WAIT).expect("stopped");
     assert_eq!(row(&srv, "fresh").state, "off");
     let again = running(&srv, "changing");
     assert_ne!(again, changing, "a changed env restarts");
@@ -491,7 +492,7 @@ fn reload_starts_stops_and_restarts_plugins_whose_config_changed() {
     );
     srv.cmd(&["reload"]).expect("reload");
     running(&srv, "fresh");
-    wait_until(|| !alive(again), WAIT).expect("changing removed");
+    try_wait_until(|| !alive(again), WAIT).expect("changing removed");
 }
 
 #[test]
@@ -502,7 +503,7 @@ fn reload_without_the_plugin_stops_it() {
     let pid = running(&srv, "p");
     write_config(&srv, "mouse = true\n");
     srv.cmd(&["reload"]).expect("reload");
-    wait_until(|| !alive(pid), WAIT).expect("plugin stopped");
+    try_wait_until(|| !alive(pid), WAIT).expect("plugin stopped");
     assert!(rows(&srv).is_empty());
 }
 
@@ -518,7 +519,8 @@ fn a_disabled_plugin_is_off_and_plugin_restart_refuses_it() {
     let srv = start_with(srv, &plugin_table("p", &p, "enabled = false"), None);
     let r = row(&srv, "p");
     assert_eq!((r.state.as_str(), r.pid, r.restarts), ("off", None, 0));
-    std::thread::sleep(Duration::from_millis(300));
+    // Negative wait: a disabled plugin must stay off.
+    common::quiet_period(Duration::from_millis(300));
     assert!(!started.exists(), "an off plugin is never started");
     let err = srv.cmd(&["plugin-restart", "p"]).expect_err("off");
     assert!(err.contains("off"), "{err}");
@@ -544,7 +546,7 @@ fn restart_policies_decide_what_an_exit_leads_to() {
         assert_eq!(row(&srv, name).pid, None);
     }
     // on-failure with a non-zero exit goes on to restart.
-    wait_until(|| row(&srv, "fail-bad").restarts >= 1, WAIT).expect("restarted");
+    try_wait_until(|| row(&srv, "fail-bad").restarts >= 1, WAIT).expect("restarted");
     // plugin-restart starts an exited plugin again.
     srv.cmd(&["plugin-restart", "never-ok"]).expect("restart");
     wait_state(&srv, "never-ok", "exited");
@@ -557,7 +559,7 @@ fn plugin_restart_replaces_the_process() {
     let srv = start_with(srv, &plugin_table("p", &p, ""), None);
     let pid = running(&srv, "p");
     srv.cmd(&["plugin-restart", "p"]).expect("plugin-restart");
-    wait_until(
+    try_wait_until(
         || {
             let r = row(&srv, "p");
             r.state == "running" && r.pid.is_some_and(|n| n != pid)
@@ -565,7 +567,7 @@ fn plugin_restart_replaces_the_process() {
         WAIT,
     )
     .expect("a new process");
-    wait_until(|| !alive(pid), WAIT).expect("the old one is gone");
+    try_wait_until(|| !alive(pid), WAIT).expect("the old one is gone");
 }
 
 #[test]
@@ -659,7 +661,7 @@ fn a_relative_cmd_runs_from_the_config_file_s_directory() {
     fs::set_permissions(&path, perms).expect("chmod");
     let srv = start_with(srv, "[plugins.p]\ncmd = [\"bin/p.sh\"]\n", None);
     running(&srv, "p");
-    wait_until(|| marker.exists(), WAIT).expect("the script ran");
+    try_wait_until(|| marker.exists(), WAIT).expect("the script ran");
 }
 
 // ---- config: schema, merge, resolution ----
@@ -679,7 +681,7 @@ fn a_plugin_inherits_only_stdio_from_the_server() {
     );
     let srv = start_with(srv, &plugin_table("p", &p, "restart = \"never\""), None);
     running(&srv, "p");
-    wait_until(
+    try_wait_until(
         // The list is whole only at its sentinel: a write can land
         // between two of its lines.
         || fs::read_to_string(&out).is_ok_and(|t| t.ends_with("end\n")),
@@ -745,12 +747,12 @@ fn a_plugin_re_added_by_reload_waits_for_the_old_process() {
     let table = plugin_table("p", &p, "");
     let srv = start_with(srv, &table, Some("0.5"));
     let first = running(&srv, "p");
-    wait_until(|| lines(&pids) == 1, WAIT).expect("first pid");
+    try_wait_until(|| lines(&pids) == 1, WAIT).expect("first pid");
     write_config(&srv, "mouse = true\n");
     srv.cmd(&["reload"]).expect("reload");
     write_config(&srv, &table);
     srv.cmd(&["reload"]).expect("reload");
-    wait_until(|| lines(&pids) == 2, WAIT).expect("second pid");
+    try_wait_until(|| lines(&pids) == 2, WAIT).expect("second pid");
     assert!(
         !alive(first),
         "the old process was still up at the new start"
@@ -766,7 +768,7 @@ fn a_stopped_plugin_stays_off_even_if_it_exits_as_it_is_stopped() {
     // Crashing in a loop at scale 0.01 puts the supervisor in after_exit
     // at every moment; the reload must still leave the state `off`.
     let srv = start_with(srv, &plugin_table("p", &p, ""), Some("0.01"));
-    wait_until(|| row(&srv, "p").restarts >= 1, WAIT).expect("crashing");
+    try_wait_until(|| row(&srv, "p").restarts >= 1, WAIT).expect("crashing");
     write_config(&srv, &plugin_table("p", &p, "enabled = false"));
     srv.cmd(&["reload"]).expect("reload");
     for _ in 0..40 {

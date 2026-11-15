@@ -18,7 +18,7 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{CMD_TIMEOUT, TestServer, run_bounded, wait_until};
+use common::{CMD_TIMEOUT, TestServer, run_bounded, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -142,11 +142,26 @@ fn force_frames(
 }
 
 /// The frame gap to hold a run to: the acceptance limit, or on a machine
-/// whose own baseline is already near it (a loaded CI VM), twice that. A
-/// frame that waited on the source would wait about its 2 s timeout, far
-/// past either.
+/// whose own baseline is already near it (a loaded CI VM), three times
+/// that, but never past a quarter of the source's 2 s timeout. Each gap is
+/// the one worst stall of its run, and a loaded host stalls a run with no
+/// source at all by 2x its quiet worst (77 ms against 35 ms), so a 2x bound
+/// failed on noise. A frame that waited on the source waits until the run
+/// is killed, about 2 s, past the cap whatever the baseline.
 fn frame_bound(baseline: Duration) -> Duration {
-    FRAME_LIMIT.max(baseline * 2)
+    FRAME_LIMIT
+        .max(baseline * 3)
+        .min(Duration::from_millis(500))
+}
+
+/// A loaded run once stalled 80 ms over a 35 ms baseline; a frame held by
+/// the source stalls about 2 s.
+#[test]
+fn the_frame_bound_passes_load_and_fails_a_frame_held_by_the_source() {
+    let ms = Duration::from_millis;
+    assert_eq!(frame_bound(ms(10)), FRAME_LIMIT);
+    assert!(frame_bound(ms(35)) > ms(80));
+    assert!(frame_bound(Duration::from_secs(5)) < ms(1500));
 }
 
 /// Whether any process in group `pgid` is alive (a zombie is not).
@@ -261,7 +276,7 @@ fn a_hung_source_never_delays_a_frame_and_is_killed_at_its_timeout() {
     let pidfile = path(&srv, "pid");
     let mut a = attach(&srv);
     let mut b = attach(&srv);
-    // As long as the measured run below, so both longest gaps sample alike.
+    // At least as long as the measured run below, which ends at the kill.
     let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(8), || false);
     load(
         &srv,
@@ -324,7 +339,7 @@ fn the_value_is_empty_until_the_run_ends_then_its_last_line() {
         ),
     );
     ok(&srv, &["new-session", "-d", "-s", "s", "cat"]);
-    wait_until(|| started.exists(), WAIT).expect("the source started");
+    try_wait_until(|| started.exists(), WAIT).expect("the source started");
     assert_eq!(display(&srv, "[#{@batt}]"), "[]");
     assert_eq!(ok(&srv, &["show-options", "-gqv", "@batt"]), "");
     assert_eq!(
@@ -332,7 +347,7 @@ fn the_value_is_empty_until_the_run_ends_then_its_last_line() {
         Err("invalid option: @batt\n".to_string())
     );
     fs::write(&gate, "").expect("open the gate");
-    wait_until(|| display(&srv, "#{@batt}") == "second", WAIT).expect("the last line arrives");
+    try_wait_until(|| display(&srv, "#{@batt}") == "second", WAIT).expect("the last line arrives");
     assert_eq!(ok(&srv, &["show-options", "-gv", "@batt"]), "second\n");
     assert_eq!(ok(&srv, &["show-options", "-gqv", "@batt"]), "second\n");
     assert_eq!(ok(&srv, &["show-options", "-g", "@batt"]), "@batt second\n");
@@ -352,7 +367,7 @@ fn two_registrations_of_one_command_share_one_run() {
         ),
     );
     ok(&srv, &["new-session", "-d", "-s", "s", "cat"]);
-    wait_until(|| display(&srv, "#{@a}/#{@b}") == "hi/hi", WAIT).expect("both values");
+    try_wait_until(|| display(&srv, "#{@a}/#{@b}") == "hi/hi", WAIT).expect("both values");
     assert_eq!(lines(&count), 1, "the command ran more than once");
 }
 
@@ -421,7 +436,7 @@ fn a_source_runs_with_the_server_environment() {
     );
     let pid = server_pid(&srv);
     let want = format!("yes/unset/unset/{socket},{pid},-1/{socket}");
-    wait_until(|| display(&srv, "#{@env}") == want, WAIT)
+    try_wait_until(|| display(&srv, "#{@env}") == want, WAIT)
         .unwrap_or_else(|_| panic!("got {:?}, want {want:?}", display(&srv, "#{@env}")));
 }
 
@@ -443,15 +458,17 @@ fn many_runs_leave_no_zombies_or_open_fds() {
         ));
     }
     load(&srv, &config);
-    wait_until(|| lines(&runs) >= 50, Duration::from_secs(20)).expect("50 runs");
+    try_wait_until(|| lines(&runs) >= 50, Duration::from_secs(20)).expect("50 runs");
     load(&srv, "");
-    wait_until(|| zombies_of(pid) == 0 && open_fds(pid) <= baseline, WAIT).unwrap_or_else(|_| {
-        panic!(
-            "{} zombies, {} fds (baseline {baseline})",
-            zombies_of(pid),
-            open_fds(pid)
-        )
-    });
+    try_wait_until(|| zombies_of(pid) == 0 && open_fds(pid) <= baseline, WAIT).unwrap_or_else(
+        |_| {
+            panic!(
+                "{} zombies, {} fds (baseline {baseline})",
+                zombies_of(pid),
+                open_fds(pid)
+            )
+        },
+    );
 }
 
 /// A source that spews output without a newline is cut at the line limit
@@ -470,8 +487,8 @@ fn a_source_that_spews_output_stays_bounded() {
             runs.display()
         ),
     );
-    wait_until(|| lines(&runs) >= 3, Duration::from_secs(20)).expect("three runs");
-    wait_until(|| display(&srv, "#{@spew}").len() == 4096, WAIT).expect("a capped value");
+    try_wait_until(|| lines(&runs) >= 3, Duration::from_secs(20)).expect("three runs");
+    try_wait_until(|| display(&srv, "#{@spew}").len() == 4096, WAIT).expect("a capped value");
     assert!(display(&srv, "#{@spew}").bytes().all(|b| b == b'y'));
     let after = rss_kib(pid);
     assert!(
@@ -604,7 +621,7 @@ fn a_huge_interval_is_refused_and_the_largest_one_does_not_crash() {
             count.display()
         ),
     );
-    wait_until(|| display(&srv, "#{@max}") == "ran", WAIT).expect("the source ran");
+    try_wait_until(|| display(&srv, "#{@max}") == "ran", WAIT).expect("the source ran");
     ok(&srv, &["reload"]);
     ok(&srv, &["set-option", "-g", "status-interval", "2147483647"]);
     assert_eq!(display(&srv, "#{session_name}"), "s");
@@ -626,10 +643,10 @@ fn a_source_resumes_when_status_interval_leaves_zero() {
             count.display()
         ),
     );
-    wait_until(|| lines(&count) == 1, WAIT).expect("the first run");
+    try_wait_until(|| lines(&count) == 1, WAIT).expect("the first run");
     // Parked: no second run while the interval stays 0 (the source looks
     // again every second, so 2.5 s would show one).
-    assert!(wait_until(|| lines(&count) > 1, Duration::from_millis(2500)).is_err());
+    assert!(try_wait_until(|| lines(&count) > 1, Duration::from_millis(2500)).is_err());
     ok(&srv, &["set-option", "-g", "status-interval", "1"]);
-    wait_until(|| lines(&count) >= 3, WAIT).expect("the source resumed");
+    try_wait_until(|| lines(&count) >= 3, WAIT).expect("the source resumed");
 }

@@ -533,6 +533,7 @@ fn race(srv: &TestServer, dir: &std::path::Path, groups: Vec<Vec<Vec<String>>>) 
     for i in 0..RACE_PANES {
         touch(&dir.join(format!("go{i}")));
     }
+    // Pacing inside the race the test provokes, not a wait for a state.
     thread::sleep(Duration::from_millis(40));
     for (c, group) in conns.iter_mut().zip(&groups) {
         for (id, req) in group.iter().enumerate() {
@@ -584,7 +585,7 @@ fn respawn_ignores_the_old_processes_exit() {
 
     // Every stale exit has been handled once a few more round trips went
     // through the actor.
-    thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     for id in &ids {
         let t = id.to_string();
         assert_eq!(display(&srv, &t, "#{pane_dead}"), "0", "{t} marked dead");
@@ -756,7 +757,7 @@ fn a_subscriber_keeps_an_empty_auto_started_server_until_it_closes() {
     // A first request that leaves no session arms the exit-when-empty rule.
     let out = srv.run(&["new-session", "-d", "-x", "not-a-width"]);
     assert!(!out.status.success(), "{out:?}");
-    thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert!(
         srv.is_running(),
         "exited under a subscriber; log:\n{}",

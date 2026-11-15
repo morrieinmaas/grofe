@@ -205,7 +205,7 @@ fn late_report_dropped() {
     report("working", "200");
     f.wait_list(&format!("{id}  working"));
     report("done", "100");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(f.list().trim(), format!("{id}  working"), "older dropped");
     report("done", "300");
     f.wait_list(&format!("{id}  done"));

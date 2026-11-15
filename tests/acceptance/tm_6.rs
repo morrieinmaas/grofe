@@ -18,7 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 use crate::harness::{Harness, require_tool};
 
@@ -178,7 +178,7 @@ fn replay(name: &str) {
                     (stdout, out.stderr, out.status.code().unwrap_or(-1))
                 };
                 if typed && reads_only(&args) {
-                    let _ = wait_until(|| run() == want, CMD_TIMEOUT);
+                    let _ = try_wait_until(|| run() == want, CMD_TIMEOUT);
                 } else {
                     typed = false;
                 }
@@ -186,7 +186,7 @@ fn replay(name: &str) {
             }
             Step::Client(cols, rows) => {
                 let a = Harness::spawn_attach_with_env(srv.command(), "main", &[], cols, rows);
-                wait_until(
+                try_wait_until(
                     || !srv.cmd(&["list-clients"]).unwrap_or_default().is_empty(),
                     CMD_TIMEOUT,
                 )
@@ -366,10 +366,10 @@ fn the_mouse_over_a_mode_never_reaches_the_app_below() {
     let tui = "stty -echo; printf '\\033[?1000h\\033[?1006hready'; exec cat -v";
     let srv = start(tui);
     let mut a = attach(&srv, 80, 24);
-    wait_until(|| srv.capture("main").contains("ready"), WAIT).expect("the fake TUI");
+    try_wait_until(|| srv.capture("main").contains("ready"), WAIT).expect("the fake TUI");
     for mode in ["choose-tree", "clock-mode"] {
         srv.cmd(&[mode]).expect(mode);
-        wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") != "0", WAIT).expect(mode);
+        try_wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") != "0", WAIT).expect(mode);
         a.send(sgr(WHEEL_UP, 10, 5, false));
         if mode == "choose-tree" {
             // A click leaves the clock (as tmux), so only a chooser holds it.
@@ -377,10 +377,10 @@ fn the_mouse_over_a_mode_never_reaches_the_app_below() {
             a.send(sgr(0, 10, 5, true));
         }
         a.send("q");
-        wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") == "0", WAIT).expect(mode);
+        try_wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") == "0", WAIT).expect(mode);
     }
     a.send("z\r");
-    wait_until(|| srv.capture("main").contains('z'), WAIT).expect("the z");
+    try_wait_until(|| srv.capture("main").contains('z'), WAIT).expect("the z");
     let text = srv.capture("main");
     assert!(!text.contains("^[[<"), "{text}");
 }
@@ -468,7 +468,7 @@ fn a_drag_release_runs_its_binding_with_the_text() {
     let want = "matched ( open bracket and ] stray close\n\
                 words    with    wide    gaps    between    them\n\
                 漢字 wide 文字 cells ";
-    wait_until(|| fs::read_to_string(&out).is_ok_and(|t| t == want), WAIT)
+    try_wait_until(|| fs::read_to_string(&out).is_ok_and(|t| t == want), WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", fs::read_to_string(&out)));
     assert_eq!(srv.cmd(&["show-buffer"]).as_deref(), Ok(want));
     assert_eq!(pane_var(&srv, "main", "#{pane_in_mode}"), "0");
@@ -485,7 +485,7 @@ fn a_drag_held_on_the_top_row_scrolls_up() {
     a.send(sgr(0, 3, 6, false));
     a.send(sgr(DRAG, 4, 6, false));
     a.send(sgr(DRAG, 4, 1, false));
-    wait_until(
+    try_wait_until(
         || {
             pane_var(&srv, "main", "#{scroll_position}")
                 .parse::<u32>()
@@ -495,7 +495,7 @@ fn a_drag_held_on_the_top_row_scrolls_up() {
     )
     .expect("the view scrolled up");
     a.send(sgr(0, 4, 1, true));
-    wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") == "0", WAIT)
+    try_wait_until(|| pane_var(&srv, "main", "#{pane_in_mode}") == "0", WAIT)
         .expect("the release copied and left");
     let copied = srv.cmd(&["show-buffer"]).expect("a buffer");
     assert!(copied.lines().count() >= 8, "{copied:?}");
@@ -521,7 +521,7 @@ fn a_click_in_copy_mode_focuses_and_keeps_it() {
     let (srv, left, right) = side_by_side(HISTORY, "cat");
     let mut a = attach(&srv, 80, 24);
     a.wait_until("both panes drawn", WAIT, |t| t.contains('│'));
-    wait_until(|| srv.capture(&left).contains("200"), WAIT).expect("history");
+    try_wait_until(|| srv.capture(&left).contains("200"), WAIT).expect("history");
     a.send(sgr(WHEEL_UP, 5, 5, false));
     a.send(sgr(WHEEL_UP, 5, 5, false));
     a.wait_until("copy mode on the left", WAIT, |t| {
@@ -537,12 +537,12 @@ fn a_click_in_copy_mode_focuses_and_keeps_it() {
 
     a.send(sgr(0, 5, 5, false));
     a.send(sgr(0, 5, 5, true));
-    wait_until(
+    try_wait_until(
         || pane_var(&srv, &left, "#{pane_active}") == "1",
         Duration::from_secs(5),
     )
     .unwrap_or_else(|e| panic!("the click did not focus {left}: {e}"));
-    wait_until(|| a.output().len() > drawn, WAIT).expect("a frame after the click");
+    try_wait_until(|| a.output().len() > drawn, WAIT).expect("a frame after the click");
     a.wait_until("the mode kept", WAIT, |t| {
         indicator(t).is_some_and(|i| i.starts_with("[5/"))
     });
@@ -576,7 +576,7 @@ fn output_does_not_move_copy_mode() {
         indicator(t).as_deref() == Some("[5/178]")
     });
     fs::write(&go, "").expect("start the output");
-    wait_until(|| pane_var(&srv, "main", "#{history_size}") == "181", WAIT)
+    try_wait_until(|| pane_var(&srv, "main", "#{history_size}") == "181", WAIT)
         .expect("the output arrived");
     // The view is the copy's: it neither scrolls nor grows.
     assert_eq!(
@@ -604,13 +604,13 @@ fn keys_in_copy_mode_from_the_wheel_follow_copy_mode_vi() {
     // it): it clears a selection, stays in the mode and never reaches the
     // pane.
     a.send(" ");
-    wait_until(
+    try_wait_until(
         || pane_var(&srv, "main", "#{selection_active}") == "1",
         WAIT,
     )
     .expect("Space began a selection");
     a.send("\x1b");
-    wait_until(
+    try_wait_until(
         || pane_var(&srv, "main", "#{selection_active}") == "0",
         WAIT,
     )
@@ -702,7 +702,7 @@ fn a_bindings_shell_and_its_hooks_shell_hold_the_client() {
     srv.cmd(&["bind-key", "-n", "F5", &f5]).expect("bind F5");
     let mut a = attach(&srv, 80, 24);
     a.send("\x1b[15~z\r");
-    wait_until(|| opt(&srv, "@log") == "A", WAIT).expect("the binding started");
+    try_wait_until(|| opt(&srv, "@log") == "A", WAIT).expect("the binding started");
     // Whatever the client sent next is behind the shell: a round trip
     // through the server shows it has not run.
     srv.cmd(&["refresh-client"]).ok();
@@ -713,8 +713,8 @@ fn a_bindings_shell_and_its_hooks_shell_hold_the_client() {
         srv.capture("main")
     );
     fs::write(&go, "").expect("go");
-    wait_until(|| opt(&srv, "@log") == "AB", WAIT).expect("the rest ran");
-    wait_until(|| srv.capture("main").contains('z'), WAIT).expect("then the text");
+    try_wait_until(|| opt(&srv, "@log") == "AB", WAIT).expect("the rest ran");
+    try_wait_until(|| srv.capture("main").contains('z'), WAIT).expect("then the text");
 
     srv.cmd(&["set", "-g", "@log", ""]).expect("set");
     let hook = format!("run-shell \"{}\" ; set -ga @log H", until(&go2));
@@ -723,7 +723,8 @@ fn a_bindings_shell_and_its_hooks_shell_hold_the_client() {
     srv.cmd(&["bind-key", "-n", "F6", "new-window -d ; set -ga @log C"])
         .expect("bind F6");
     a.send("\x1b[17~w\r");
-    wait_until(|| pane_var(&srv, "main", "#{session_windows}") == "2", WAIT).expect("the window");
+    try_wait_until(|| pane_var(&srv, "main", "#{session_windows}") == "2", WAIT)
+        .expect("the window");
     srv.cmd(&["refresh-client"]).ok();
     assert_eq!(opt(&srv, "@log"), "");
     assert!(
@@ -732,8 +733,8 @@ fn a_bindings_shell_and_its_hooks_shell_hold_the_client() {
         srv.capture("main")
     );
     fs::write(&go2, "").expect("go2");
-    wait_until(|| opt(&srv, "@log") == "HC", WAIT).expect("hook first, then C");
-    wait_until(|| srv.capture("main").contains('w'), WAIT).expect("then the text");
+    try_wait_until(|| opt(&srv, "@log") == "HC", WAIT).expect("hook first, then C");
+    try_wait_until(|| srv.capture("main").contains('w'), WAIT).expect("then the text");
 }
 
 /// While a binding's `run-shell` holds the client, a prompt (or menu, or
@@ -751,8 +752,8 @@ fn a_prompt_a_held_binding_opens_still_takes_the_keys() {
     a.send("\x1b[20~");
     a.wait_until("the prompt", WAIT, |t| t.contains("go"));
     a.send("x\r");
-    wait_until(|| opt(&srv, "@p") == "x", WAIT).expect("the prompt got the keys");
-    wait_until(|| opt(&srv, "@after") == "yes", WAIT).expect("then the rest ran");
+    try_wait_until(|| opt(&srv, "@p") == "x", WAIT).expect("the prompt got the keys");
+    try_wait_until(|| opt(&srv, "@after") == "yes", WAIT).expect("then the rest ran");
 }
 
 /// As tmux 3.7b's queue (the `tm_6/waits` golden): a binding's
@@ -776,7 +777,7 @@ fn a_count_prompt_passes_its_key_on_in_order() {
     let y = |srv: &TestServer| pane_var(srv, "main", "#{copy_cursor_y}");
     let before: u32 = y(&srv).parse().expect("cursor y");
     a.send("5k");
-    wait_until(|| y(&srv) == (before - 5).to_string(), WAIT)
+    try_wait_until(|| y(&srv) == (before - 5).to_string(), WAIT)
         .unwrap_or_else(|e| panic!("{e}: cursor at {}", y(&srv)));
 }
 
@@ -796,16 +797,16 @@ fn a_client_gone_mid_drag_stops_its_drag() {
             .parse::<u32>()
             .unwrap_or(0)
     };
-    wait_until(|| scrolled() >= 2, WAIT).expect("the drag timer scrolled");
+    try_wait_until(|| scrolled() >= 2, WAIT).expect("the drag timer scrolled");
     drop(a);
-    wait_until(
+    try_wait_until(
         || srv.cmd(&["list-clients"]).is_ok_and(|l| l.is_empty()),
         WAIT,
     )
     .expect("the client went");
     // Ten timer periods with no scroll, measured from here.
     let at = scrolled();
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(scrolled(), at, "the drag timer outlived its client");
     assert_eq!(pane_var(&srv, "main", "#{pane_in_mode}"), "1");
 }
@@ -899,14 +900,14 @@ fn a_middle_click_pastes_the_newest_buffer() {
     });
     a.send(sgr(0, 10, 5, false));
     a.send(sgr(0, 10, 5, true));
-    wait_until(|| pane_var(&srv, "main", "#{pane_id}") == left, WAIT)
+    try_wait_until(|| pane_var(&srv, "main", "#{pane_id}") == left, WAIT)
         .expect("the click focused the left pane");
 
     srv.cmd(&["set-buffer", "tp9b-middle\n"])
         .expect("set-buffer");
     a.send(sgr(1, 60, 5, false));
     a.send(sgr(1, 60, 5, true));
-    wait_until(|| srv.capture(&right).contains("tp9b-middle"), WAIT)
+    try_wait_until(|| srv.capture(&right).contains("tp9b-middle"), WAIT)
         .unwrap_or_else(|e| panic!("{e}: {}", srv.capture(&right)));
     assert_eq!(pane_var(&srv, "main", "#{pane_id}"), right);
     assert!(!srv.capture(&left).contains("tp9b-middle"));
