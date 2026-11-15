@@ -26,8 +26,6 @@ codebase-health review of 2026-11-15. Each item is one branch and one PR.
 
 - **Keys, targets, format variables and inert options** that scripts rely on
   and grofe lacks.
-- **`-f` through the `tmux` shim** loads a tmux.conf, as tmux does; the native
-  `grofe -f` keeps taking TOML.
 - **Control mode** (`-C` and `-CC`), the largest remaining gap for editor
   plugins and terminal integrations.
 
