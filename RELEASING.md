@@ -12,9 +12,31 @@ which builds everything and publishes it; nothing is uploaded by hand.
 | AUR `grofe-bin` | `packaging/render.sh` plus `makepkg --printsrcinfo` | `aur.archlinux.org/grofe-bin.git` |
 | Crate | `cargo publish` | crates.io |
 
-Every file on the release has a `.sha256` next to it. The Homebrew, AUR and
-crates.io jobs run only when their credential is configured, and are
-skipped (not failed) otherwise.
+Every file on the release has a `.sha256` next to it, `SHA256SUMS` lists
+them all, and each tarball, package and `SHA256SUMS` has a build provenance
+attestation made by `actions/attest-build-provenance` in the `publish` job.
+The Homebrew formula and the PKGBUILD pin the same sums: `render.sh` reads
+them from the release's `.sha256` files, which `publish` checks against the
+files before writing `SHA256SUMS`. The Homebrew, AUR and crates.io jobs run
+only when their credential is configured, and are skipped (not failed)
+otherwise.
+
+## Verify a download
+
+From v0.2.0 on, every release asset can be checked two ways. Download
+`SHA256SUMS` next to the files, then:
+
+```sh
+# The files are the ones the release lists (skips assets you did not download).
+sha256sum -c --ignore-missing SHA256SUMS      # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
+
+# The file was built by this repository's Release workflow, from the tag.
+gh attestation verify grofe-v0.2.0-x86_64-unknown-linux-musl.tar.gz --repo morrieinmaas/grofe
+```
+
+`gh attestation verify` works on any asset (tarball, `.deb`, `.rpm` or
+`SHA256SUMS`) and needs the GitHub CLI, logged in. Homebrew and the AUR
+check the sha256 themselves on install.
 
 ## Each release
 

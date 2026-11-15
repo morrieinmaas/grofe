@@ -96,7 +96,9 @@ From v0.2.0 on, each release is also packaged:
 | Fedora, RHEL | the release's `.rpm`: `sudo dnf install ./grofe-0.2.0-1.x86_64.rpm` |
 
 The `.deb` and `.rpm` come for amd64 and arm64 (`arm64.deb`,
-`aarch64.rpm`), each with a `.sha256` to check it against.
+`aarch64.rpm`). To check a download, run `sha256sum -c --ignore-missing
+SHA256SUMS` and `gh attestation verify <file> --repo morrieinmaas/grofe`
+(see [Verify a download](RELEASING.md#verify-a-download)).
 
 Or build it with Rust 1.88 or newer (get Rust from
 [rustup](https://rustup.rs)) from a checkout of this repository:

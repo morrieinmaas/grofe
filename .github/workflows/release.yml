@@ -2,9 +2,10 @@ name: Release
 
 # A `v*` tag builds grofe for Linux (static, musl) and macOS, on x86_64 and
 # arm64, plus .deb and .rpm packages for both Linux targets, and publishes
-# them with their SHA-256 sums as that tag's GitHub release (its notes are
-# the tag's CHANGELOG.md section), or adds them to a release already made
-# for it. The tag must match Cargo.toml's version. RELEASING.md has the
+# them as that tag's GitHub release (its notes are the tag's CHANGELOG.md
+# section), or adds them to a release already made for it. Every asset has
+# a .sha256, all of them are in one SHA256SUMS, and each has a build
+# provenance attestation (`gh attestation verify`). The tag must match Cargo.toml's version. RELEASING.md has the
 # steps and the one-time setup.
 #
 # Then, each only when its credential is configured (skipped otherwise):
@@ -87,6 +88,10 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -97,6 +102,24 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # Each build's own sums still match after the hand-over, and
+      # SHA256SUMS covers every asset in one file.
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum -c ./*.sha256
+          find . -maxdepth 1 -type f ! -name '*.sha256' -printf '%f\n' | sort |
+            xargs sha256sum > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          cat SHA256SUMS
+      # `gh attestation verify <file> --repo <owner>/grofe` checks these.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/SHA256SUMS
       - name: Release notes from CHANGELOG.md
         run: packaging/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
       # A release made by hand first (with the builds made elsewhere) gets
