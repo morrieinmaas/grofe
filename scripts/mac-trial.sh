@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # mac-trial.sh: try grofe as tmux, with your own setup, in one terminal
 # window, for a few days, without touching your live tmux, canopy or config.
-# docs/mac-trial.md is the guide.
+# docs/archive/mac-trial.md is the guide.
 #
 #   mac-trial.sh setup  [options]   build or copy grofe, make the trial root
 #   mac-trial.sh start  [options]   setup if needed, then start or attach

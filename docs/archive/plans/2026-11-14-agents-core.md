@@ -10,7 +10,7 @@
 ## Global constraints
 
 - CLAUDE.md applies: own files only, no `unwrap()`/`expect()` on socket or pty paths, `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, never real tmux, tests on private `-S` sockets via `tests/common`.
-- States: `idle working blocked done error`; canopy names `completed`=done, `exited`=clear. Kind charset `[A-Za-z0-9._-]{1,32}`; session id `[A-Za-z0-9._:-]{1,128}`; msg sanitised then cut to 200 chars (spec §2.7).
+- States: `idle working blocked done error`; the session manager names `completed`=done, `exited`=clear. Kind charset `[A-Za-z0-9._-]{1,32}`; session id `[A-Za-z0-9._:-]{1,128}`; msg sanitised then cut to 200 chars (spec §2.7).
 - Urgency rank order: Blocked < Error < Unseen < Working < Idle < Done (lower = more urgent).
 - Report ordering: drop a report whose `ts` (µs) is older than the record's `last_report`.
 - Hook mode exits 0 on everything; connect timeout 30 ms; never waits for a reply; never starts a server.
