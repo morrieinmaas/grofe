@@ -2,7 +2,9 @@
 //! may be combined (`-dP`), a flag's value may be attached (`-tfoo`) or a
 //! separate token (`-t foo`), and `--` ends flag parsing. `set`/`show` are
 //! recognised as aliases for `set-option`/`show-options`; a handful of
-//! other well-known tmux short names are recognised too.
+//! other well-known tmux short names are recognised too. Each verb is a row
+//! of the command table (`table.rs`); [`parse`] scans its flags, checks its
+//! arity and hands the result to the row's builder.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
@@ -266,7 +268,7 @@ pub(super) fn parse_new_session(flags: &Args) -> Result<Command, ParseError> {
         .get(&'y')
         .map(|s| parse_window_size(s, "height"))
         .transpose()?;
-    let env = env_values(&flags);
+    let env = env_values(flags);
     Ok(Command::NewSession(NewSession {
         detached: flags.on('d'),
         name: flags.val('s'),
@@ -317,7 +319,7 @@ pub(super) fn input_flag(flags: &ParsedFlags) -> Option<bool> {
 }
 
 pub(super) fn parse_new_window(flags: &Args) -> Result<Command, ParseError> {
-    let env = env_values(&flags);
+    let env = env_values(flags);
     Ok(Command::NewWindow(NewWindow {
         detached: flags.on('d'),
         target: flags.target('t')?,
@@ -393,9 +395,9 @@ fn split_window_of(flags: &ParsedFlags) -> Result<SplitWindow, ParseError> {
         (None, Some(c), _) => SplitSize::Cells(c),
         (None, None, None) => SplitSize::Half,
     };
-    let env = env_values(&flags);
+    let env = env_values(flags);
     Ok(SplitWindow {
-        setup: pane_setup(&flags),
+        setup: pane_setup(flags),
         dir,
         cwd: flags.val('c'),
         size,
@@ -433,7 +435,7 @@ pub(super) fn parse_select_pane(flags: &Args) -> Result<Command, ParseError> {
         last: flags.on('l'),
         keep_zoom: flags.on('Z'),
         title: flags.val('T'),
-        input: input_flag(&flags),
+        input: input_flag(flags),
         // tmux acts on -m and -M before anything else; -M wins.
         mark: if flags.on('M') {
             Mark::Clear
@@ -456,8 +458,8 @@ pub(super) fn parse_resize_pane(flags: &Args) -> Result<Command, ParseError> {
     .filter(|(c, _)| flags.present.contains(c))
     .map(|(_, edge)| edge)
     .collect();
-    let width = extent_value(&flags, 'x', 0, SizeWords::Trio("width"))?;
-    let height = extent_value(&flags, 'y', 0, SizeWords::Trio("height"))?;
+    let width = extent_value(flags, 'x', 0, SizeWords::Trio("width"))?;
+    let height = extent_value(flags, 'y', 0, SizeWords::Trio("height"))?;
     let zoom = flags.on('Z');
     if zoom && !edges.is_empty() {
         return Err(ParseError::Other(
@@ -610,7 +612,7 @@ fn parse_scope(flags: &ParsedFlags) -> Option<OptionScope> {
 }
 
 pub(super) fn parse_set_option(flags: &Args) -> Result<Command, ParseError> {
-    let scope = parse_scope(&flags);
+    let scope = parse_scope(flags);
     let mut positionals = flags.positionals.iter();
     let name = positionals
         .next()
@@ -638,7 +640,7 @@ pub(super) fn parse_set_option(flags: &Args) -> Result<Command, ParseError> {
 }
 
 pub(super) fn parse_show_options(flags: &Args) -> Result<Command, ParseError> {
-    let scope = parse_scope(&flags);
+    let scope = parse_scope(flags);
     let mut positionals = flags.positionals.iter();
     let name = positionals.next().cloned();
     if positionals.next().is_some() {
@@ -1009,7 +1011,7 @@ pub(super) fn parse_list_clients(flags: &Args) -> Result<Command, ParseError> {
         format: flags.val('F'),
         target,
         filter: flags.val('f'),
-        sort: sort_flags(&flags),
+        sort: sort_flags(flags),
     }))
 }
 
@@ -1069,7 +1071,7 @@ pub(super) fn parse_bind_key(flags: &Args) -> Result<Command, ParseError> {
         .split_first()
         .ok_or_else(|| ParseError::MissingArgument("bind-key".to_string()))?;
     Ok(Command::BindKey(BindKey {
-        table: key_table(&flags),
+        table: key_table(flags),
         repeat: flags.on('r'),
         note: flags.val('N'),
         group: flags.val('G'),
@@ -1090,7 +1092,7 @@ pub(super) fn parse_unbind_key(flags: &Args) -> Result<Command, ParseError> {
         _ => {}
     }
     Ok(Command::UnbindKey(UnbindKey {
-        table: key_table(&flags),
+        table: key_table(flags),
         all,
         key,
         quiet,
@@ -1106,7 +1108,7 @@ pub(super) fn parse_list_keys(flags: &Args) -> Result<Command, ParseError> {
         all: flags.on('a'),
         format: flags.val('F'),
         prefix: flags.val('P'),
-        sort: sort_flags(&flags),
+        sort: sort_flags(flags),
     }))
 }
 
@@ -1123,13 +1125,6 @@ fn one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<String, ParseEr
         .ok_or_else(|| ParseError::MissingArgument(cmd_name.to_string()))
 }
 
-fn at_least_one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<Vec<String>, ParseError> {
-    if flags.positionals.is_empty() {
-        return Err(ParseError::MissingArgument(cmd_name.to_string()));
-    }
-    Ok(flags.positionals.clone())
-}
-
 pub(super) fn parse_source_file(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SourceFile(SourceFile {
         quiet: flags.on('q'),
@@ -1137,7 +1132,7 @@ pub(super) fn parse_source_file(flags: &Args) -> Result<Command, ParseError> {
         parse_only: flags.on('n'),
         verbose: flags.on('v'),
         target: flags.target_opt('t')?,
-        paths: at_least_one_positional(&flags, "source-file")?,
+        paths: flags.command().ok_or_else(|| missing(flags))?,
     }))
 }
 
@@ -1215,7 +1210,7 @@ pub(super) fn parse_run_shell(flags: &Args) -> Result<Command, ParseError> {
 pub(super) fn parse_register_source(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::RegisterSource(RegisterSource {
         name: flags.val('n'),
-        command: one_positional(&flags, "__register-source")?,
+        command: flags.first().ok_or_else(|| missing(flags))?,
     }))
 }
 
@@ -1224,7 +1219,6 @@ pub(super) fn parse_select_layout(flags: &Args) -> Result<Command, ParseError> {
         (flags.on('n'), flags.on('p'), flags.on('o'), flags.on('E'));
     // A layout name is optional: tmux takes none to mean the last preset
     // used (`-o`: the layout before the last change).
-    no_extra_positionals(&flags, "select-layout", 1)?;
     let name = flags.first().unwrap_or_default();
     Ok(Command::SelectLayout(SelectLayout {
         target: flags.target('t')?,
@@ -1351,7 +1345,7 @@ pub(super) fn join_pane(flags: &Args) -> Result<JoinPane, ParseError> {
     let invalid = || ParseError::Other("size or position invalid tiled geometry".to_string());
     let size = match (flags.values.get(&'l'), flags.values.get(&'p')) {
         (Some(_), _) | (None, None) => extent_value(
-            &flags,
+            flags,
             'l',
             0,
             SizeWords::Fixed("size or position invalid tiled geometry"),
@@ -1667,8 +1661,8 @@ pub(super) fn parse_display_popup(flags: &Args) -> Result<Command, ParseError> {
         any_key: flags.on('k'),
         reset_flags: flags.on('N'),
         target: flags.target_opt('t')?,
-        width: extent_value(&flags, 'w', 1, SizeWords::Trio("width"))?,
-        height: extent_value(&flags, 'h', 1, SizeWords::Trio("height"))?,
+        width: extent_value(flags, 'w', 1, SizeWords::Trio("width"))?,
+        height: extent_value(flags, 'h', 1, SizeWords::Trio("height"))?,
         x: flags.val('x'),
         y: flags.val('y'),
         command: flags.command(),
@@ -1679,20 +1673,20 @@ pub(super) fn parse_new_pane(flags: &Args) -> Result<Command, ParseError> {
     if flags.on('L') {
         return split_window_of(flags).map(Command::SplitWindow);
     }
-    let env = env_values(&flags);
+    let env = env_values(flags);
     Ok(Command::NewPane(NewPane {
         print: flags.on('P'),
         format: flags.val('F'),
         target: flags.target('t')?,
         cwd: flags.val('c'),
-        width: extent_value(&flags, 'x', 0, NEW_PANE_WORDS)?,
-        height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
-        x: offset_value(&flags, 'X')?,
-        y: offset_value(&flags, 'Y')?,
+        width: extent_value(flags, 'x', 0, NEW_PANE_WORDS)?,
+        height: extent_value(flags, 'y', 0, NEW_PANE_WORDS)?,
+        x: offset_value(flags, 'X')?,
+        y: offset_value(flags, 'Y')?,
         env,
         zoom: flags.on('Z'),
         detached: flags.on('d'),
-        setup: pane_setup(&flags),
+        setup: pane_setup(flags),
         command: flags.command(),
     }))
 }
@@ -1700,10 +1694,10 @@ pub(super) fn parse_new_pane(flags: &Args) -> Result<Command, ParseError> {
 pub(super) fn parse_float_pane(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::FloatPane(FloatPane {
         target: flags.target('t')?,
-        width: extent_value(&flags, 'x', 0, NEW_PANE_WORDS)?,
-        height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
-        x: offset_value(&flags, 'X')?,
-        y: offset_value(&flags, 'Y')?,
+        width: extent_value(flags, 'x', 0, NEW_PANE_WORDS)?,
+        height: extent_value(flags, 'y', 0, NEW_PANE_WORDS)?,
+        x: offset_value(flags, 'X')?,
+        y: offset_value(flags, 'Y')?,
     }))
 }
 
@@ -1773,8 +1767,8 @@ pub(super) fn parse_drag_pane(flags: &Args) -> Result<Command, ParseError> {
 pub(super) fn parse_place_pane(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::PlacePane(PlacePane {
         target: flags.target('t')?,
-        x: offset_value(&flags, 'X')?,
-        y: offset_value(&flags, 'Y')?,
+        x: offset_value(flags, 'X')?,
+        y: offset_value(flags, 'Y')?,
     }))
 }
 

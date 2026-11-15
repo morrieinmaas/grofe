@@ -348,7 +348,7 @@ pub(super) static ROWS: &[Row] = &[
         "select-layout",
         "selectl",
         "t:Enop",
-        ANY,
+        1,
         parse::parse_select_layout,
     ),
     row("swap-pane", "", "s:t:UDdZ", 0, parse::parse_swap_pane),
@@ -559,3 +559,108 @@ pub(super) static ROWS: &[Row] = &[
     }),
     row("agent-sidebar", "", "", 1, parse::agent_sidebar),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compat::tmux::specs;
+
+    /// Flags tmux's usage leaves out but its args template takes, or that
+    /// grofe adds (`bind-key -G`).
+    const BEYOND_USAGE: &[(&str, char)] = &[
+        ("bind-key", 'G'),
+        ("select-pane", 'P'),
+        ("select-pane", 'g'),
+        ("join-pane", 'p'),
+        ("move-pane", 'p'),
+        ("refresh-client", 'F'),
+        ("run-shell", 's'),
+        ("load-buffer", 'w'),
+        ("choose-buffer", 'y'),
+        ("choose-client", 'y'),
+        ("choose-tree", 'y'),
+        ("customize-mode", 'y'),
+        ("list-buffers", 'r'),
+        ("list-clients", 'r'),
+        ("new-pane", 'E'),
+        ("new-pane", 'L'),
+        ("split-window", 'E'),
+        ("switch-client", 'F'),
+    ];
+
+    /// The flags of a tmux usage line: `[-dErx]` and `[-L|-S|-U]` are bool
+    /// flags, `[-c working-directory]` takes a value.
+    fn usage_flags(usage: &str) -> Vec<(char, bool)> {
+        let mut flags = Vec::new();
+        for part in usage.split("[-").skip(1) {
+            let group = part.split([']', ' ']).next().unwrap_or("");
+            let takes_value = part[group.len()..].starts_with(' ');
+            let letters: Vec<char> = group.chars().filter(|c| c.is_alphanumeric()).collect();
+            let last = letters.len().saturating_sub(1);
+            for (i, c) in letters.into_iter().enumerate() {
+                flags.push((c, takes_value && i == last));
+            }
+        }
+        flags
+    }
+
+    fn row_flags(row: &Row) -> Vec<(char, bool)> {
+        let mut flags: Vec<(char, bool)> = Vec::new();
+        let mut chars = row.flags.chars().peekable();
+        while let Some(c) = chars.next() {
+            flags.push((c, chars.next_if_eq(&':').is_some()));
+        }
+        flags
+    }
+
+    #[test]
+    fn every_row_matches_tmux_list_commands() {
+        let mut checked = 0;
+        for row in ROWS {
+            let Some(spec) = specs().iter().find(|s| s.name == row.name) else {
+                continue;
+            };
+            checked += 1;
+            if !row.alias.is_empty() {
+                assert_eq!(spec.alias, Some(row.alias), "{} alias", row.name);
+            }
+            let listed = usage_flags(spec.usage);
+            for (flag, takes_value) in row_flags(row) {
+                if BEYOND_USAGE.contains(&(row.name, flag)) {
+                    continue;
+                }
+                // tmux can list a flag twice (`split-window -l` is in the
+                // bool group and `[-l size]`).
+                assert!(
+                    listed.contains(&(flag, takes_value)),
+                    "{} -{flag} (value: {takes_value}) is not in tmux's `{}`",
+                    row.name,
+                    spec.usage
+                );
+            }
+            if row.min > 0 {
+                assert_eq!(row.min, spec.min_args(), "{} min", row.name);
+            }
+        }
+        assert!(checked > 60, "only {checked} rows are tmux verbs");
+    }
+
+    #[test]
+    fn names_and_aliases_are_unique() {
+        for (i, a) in ROWS.iter().enumerate() {
+            for b in &ROWS[i + 1..] {
+                assert_ne!(a.name, b.name);
+                assert!(a.alias.is_empty() || a.alias != b.alias && a.alias != b.name);
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_name_reads_the_table() {
+        assert_eq!(canonical_name("neww"), "new-window");
+        assert_eq!(canonical_name("attach"), "attach-session");
+        assert_eq!(canonical_name("new"), "new-session");
+        assert_eq!(canonical_name("new-window"), "new-window");
+        assert_eq!(canonical_name("no-such-verb"), "no-such-verb");
+    }
+}
