@@ -1,5 +1,5 @@
 #!/bin/sh
-# Vendored from canopy 4ecaa86711567fdbc60ff6b6a836d399b7e50fd9, test/fixtures/fake-agent, unchanged
+# Vendored from canopy 9c691b4c3c726797da4c4e6beea2160b3869edac, test/fixtures/fake-agent, unchanged
 # below this header. Re-vendor from canopy rather than editing here.
 #
 # A stand-in for a real coding agent, for tests that need one.
