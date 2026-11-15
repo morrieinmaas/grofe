@@ -44,6 +44,9 @@ for theme in dark light; do
         docs/tapes/grofe.tape > "$work/$theme.tape"
     vhs "$work/$theme.tape"
     "$bin" -S "$GROFE_SOCK" kill-server 2>/dev/null || true
-    test -s "$out/grofe-$theme.png"
+    # vhs can finish writing the screenshot just after it exits.
+    png="$out/grofe-$theme.png"
+    for _ in $(seq 50); do [ -s "$png" ] && break; sleep 0.2; done
+    [ -s "$png" ] || { echo "screenshots: vhs wrote no $png" >&2; exit 1; }
 done
 echo "screenshots: $out/grofe-dark.png $out/grofe-light.png"
