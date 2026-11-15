@@ -187,3 +187,14 @@ fn native_file_stays_toml_even_for_a_tmux_conf_name() {
     );
     let _ = common::wait_child(server, CMD_TIMEOUT);
 }
+
+#[test]
+fn f_relative_and_glob_named_paths_resolve_against_the_clients_cwd() {
+    let srv = TestServer::unstarted();
+    let dir = srv.home.join("we[i]rd *dir");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("x.conf"), "set -g @rel yes\n").unwrap();
+    ok(&srv, &["-f", "we[i]rd *dir/x.conf", "new-session", "-d"]);
+    assert_eq!(option(&srv, "@rel"), "yes");
+    kill(&srv);
+}
