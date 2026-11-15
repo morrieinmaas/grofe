@@ -255,3 +255,35 @@ fn display_message_a_lists_every_variable_tmux_does_but_the_documented_ones() {
         "provided now, drop from NOT_PROVIDED: {stale:?}"
     );
 }
+
+#[test]
+fn setting_an_inert_option_logs_once_that_it_has_no_effect() {
+    let srv = TestServer::unstarted();
+    ok(&srv, &["start-server"]);
+    ok(&srv, &["new-session", "-d", "-s", "a", "sleep 600"]);
+    let before = ok(&srv, &["show-messages"]);
+    assert!(!before.contains("has no effect"), "{before}");
+    ok(&srv, &["set-option", "-g", "cursor-style", "bar"]);
+    ok(&srv, &["set-option", "-g", "cursor-style", "block"]);
+    ok(&srv, &["set-option", "-g", "extended-keys", "on"]);
+    // An option that does something logs nothing.
+    ok(&srv, &["set-option", "-g", "escape-time", "5"]);
+    let log = ok(&srv, &["show-messages"]);
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|l| l.contains("has no effect"))
+        .collect();
+    assert_eq!(lines.len(), 2, "{log}");
+    for name in ["cursor-style", "extended-keys"] {
+        assert_eq!(
+            lines.iter().filter(|l| l.contains(name)).count(),
+            1,
+            "{log}"
+        );
+    }
+    // show-options stays as tmux prints it.
+    assert_eq!(
+        ok(&srv, &["show-options", "-gv", "cursor-style"]).trim(),
+        "block"
+    );
+}

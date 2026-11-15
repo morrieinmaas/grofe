@@ -1897,7 +1897,15 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
             {
                 c.value = Some(expand_value(state, ctx, &c.target, value));
             }
-            set_option(&mut state.model, &mut state.events, ctx, c)
+            let inert = split_index(&c.name)
+                .ok()
+                .map(|(base, _)| base.to_string())
+                .filter(|base| has_no_effect(base) && !c.unset);
+            let result = set_option(&mut state.model, &mut state.events, ctx, c);
+            if let (Ok(_), Some(name)) = (&result, inert) {
+                clients::warn_inert_option(state, &name);
+            }
+            result
         }
         // A hook is an option in tmux: asked for by name, its elements.
         Command::ShowOptions(c)
