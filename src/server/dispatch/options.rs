@@ -2702,6 +2702,11 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
         .flat_map(|c| c.cmds.iter().cloned())
         .collect();
     crate::server::hooks::run_at_load(state, cmds);
+    // Luau last: a fresh runtime, then the packs, then `init.luau`.
+    let config_dir = config_env().config_dir.unwrap_or_default();
+    crate::server::lua_host::reset(state);
+    crate::server::pack_load::load_all(state, &resolved.pack, &config_dir);
+    crate::server::lua_host::load_init(state, &config_dir);
 }
 
 /// `value` with `$NAME`, `${NAME}` and a leading `~` expanded from the
