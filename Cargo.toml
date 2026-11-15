@@ -6,7 +6,7 @@ edition = "2024"
 # alacritty_terminal).
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "A terminal multiplexer for people who like tmux and are tired of working around it"
+description = "An agent-native terminal multiplexer that speaks tmux"
 repository = "https://github.com/morrieinmaas/grofe"
 homepage = "https://morrieinmaas.github.io/grofe/"
 readme = "README.md"

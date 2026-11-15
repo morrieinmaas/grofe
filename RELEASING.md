@@ -12,14 +12,15 @@ which builds everything and publishes it; nothing is uploaded by hand.
 | AUR `grofe-bin` | `packaging/render.sh` plus `makepkg --printsrcinfo` | `aur.archlinux.org/grofe-bin.git` |
 | Crate | `cargo publish` | crates.io |
 
-Every file on the release has a `.sha256` next to it, `SHA256SUMS` lists
-them all, and each tarball, package and `SHA256SUMS` has a build provenance
+Every file on the release except `SHA256SUMS` has a `.sha256` next to it,
+`SHA256SUMS` lists them all, and each tarball, package and `SHA256SUMS` has a build provenance
 attestation made by `actions/attest-build-provenance` in the `publish` job.
 The Homebrew formula and the PKGBUILD pin the same sums: `render.sh` reads
 them from the release's `.sha256` files, which `publish` checks against the
 files before writing `SHA256SUMS`. The Homebrew, AUR and crates.io jobs run
 only when their credential is configured, and are skipped (not failed)
-otherwise.
+otherwise. The crates.io job also skips a version crates.io already has, so
+re-running a release stays green.
 
 ## Verify a download
 
@@ -82,11 +83,13 @@ Done once by the maintainer, in this order.
 
 ### Homebrew tap
 
-1. Create the public repository `morrieinmaas/homebrew-tap` with a
-   `Formula/` directory (a README is enough to start).
-2. Create a fine-grained personal access token limited to that repository,
-   with Contents read and write.
-3. In this repository add the secret `HOMEBREW_TAP_TOKEN` with that token.
+1. Create the public repository `morrieinmaas/homebrew-tap` (a README is
+   enough to start; the job creates `Formula/`).
+2. Make a key pair for it only: `ssh-keygen -t ed25519 -f homebrew-tap -N ""`.
+3. In the tap repository (Settings, Deploy keys) add `homebrew-tap.pub` with
+   "Allow write access".
+4. In this repository add the secret `HOMEBREW_TAP_DEPLOY_KEY` with the
+   private key `homebrew-tap`, then delete both files.
 
 Users then install with `brew install morrieinmaas/tap/grofe`.
 
@@ -106,6 +109,6 @@ it.
 
 | Kind | Name | Used by |
 | --- | --- | --- |
-| Secret | `HOMEBREW_TAP_TOKEN` | `homebrew` job |
+| Secret | `HOMEBREW_TAP_DEPLOY_KEY` (write deploy key of the tap) | `homebrew` job |
 | Secret | `AUR_SSH_PRIVATE_KEY` | `aur` job |
 | Variable | `CRATES_IO_TRUSTED` (`true`) | `crates` job |

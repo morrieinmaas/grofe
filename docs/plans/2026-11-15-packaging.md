@@ -22,8 +22,8 @@ runnable locally through a `just` recipe:
 5. **Homebrew tap**: `packaging/homebrew/grofe.rb.tmpl` rendered with the
    release's four tarball URLs and sha256s (macOS arm64/x86_64, Linux
    arm64/x86_64) and pushed as `Formula/grofe.rb` to
-   `morrieinmaas/homebrew-tap` by a `release.yml` job using secret
-   `HOMEBREW_TAP_TOKEN`. The job is skipped, not failed, when the secret
+   `morrieinmaas/homebrew-tap` by a `release.yml` job using the tap's
+   write deploy key, secret `HOMEBREW_TAP_DEPLOY_KEY`. The job is skipped, not failed, when the secret
    is absent.
 6. **AUR `grofe-bin`**: `packaging/aur/PKGBUILD.tmpl` rendered from the
    release (x86_64 and aarch64 tarballs, sha256s), `.SRCINFO` generated,

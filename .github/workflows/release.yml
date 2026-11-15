@@ -4,14 +4,15 @@ name: Release
 # arm64, plus .deb and .rpm packages for both Linux targets, and publishes
 # them as that tag's GitHub release (its notes are the tag's CHANGELOG.md
 # section), or adds them to a release already made for it. Every asset has
-# a .sha256, all of them are in one SHA256SUMS, and each has a build
-# provenance attestation (`gh attestation verify`). The tag must match Cargo.toml's version. RELEASING.md has the
-# steps and the one-time setup.
+# a .sha256, SHA256SUMS lists them all, and each has a build provenance
+# attestation (`gh attestation verify`). The tag must match Cargo.toml's
+# version. RELEASING.md has the steps and the one-time setup.
 #
 # Then, each only when its credential is configured (skipped otherwise):
-#   homebrew  Formula/grofe.rb to <owner>/homebrew-tap (secret HOMEBREW_TAP_TOKEN)
+#   homebrew  Formula/grofe.rb to <owner>/homebrew-tap (secret HOMEBREW_TAP_DEPLOY_KEY)
 #   aur       grofe-bin to the AUR (secret AUR_SSH_PRIVATE_KEY)
-#   crates    cargo publish by trusted publishing (variable CRATES_IO_TRUSTED)
+#   crates    cargo publish by trusted publishing (variable CRATES_IO_TRUSTED),
+#             skipped when crates.io already has the version
 
 on:
   push:
@@ -23,7 +24,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
@@ -44,6 +45,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
 
       - name: Check the tag matches Cargo.toml
         run: |
@@ -52,7 +54,7 @@ jobs:
 
       - name: cargo-deb and cargo-generate-rpm
         if: runner.os == 'Linux'
-        run: cargo install --locked cargo-deb cargo-generate-rpm
+        run: cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
 
       # Natively on Alpine (musl), which has the C++ compiler mlua's Luau
       # needs; musl-tools on Ubuntu has none. The result is static.
@@ -109,6 +111,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -131,15 +134,16 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/SHA256SUMS
-      - name: Release notes from CHANGELOG.md
-        run: packaging/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
-      # A release made by hand first (with the builds made elsewhere) gets
-      # these added, replacing any of the same name.
+      # A release made by hand first (with the builds made elsewhere), or by
+      # an earlier run, gets these added, replacing any of the same name, and
+      # keeps its notes. A new release's notes are the tag's CHANGELOG.md
+      # section.
       - name: Publish the release
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
           else
+            packaging/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "grofe $TAG" \
               --notes-file "$RUNNER_TEMP/notes.md" dist/*
           fi
@@ -154,10 +158,10 @@ jobs:
     steps:
       - id: check
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
-          echo "homebrew=${HOMEBREW_TAP_TOKEN:+true}" >> "$GITHUB_OUTPUT"
+          echo "homebrew=${HOMEBREW_TAP_DEPLOY_KEY:+true}" >> "$GITHUB_OUTPUT"
           echo "aur=${AUR_SSH_PRIVATE_KEY:+true}" >> "$GITHUB_OUTPUT"
 
   homebrew:
@@ -170,12 +174,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
       - name: Render the formula from the release's sha256 files
         run: packaging/render.sh "$TAG" target/pkg
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
       - name: Push Formula/grofe.rb
         working-directory: tap
@@ -199,6 +204,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
       - name: Render the PKGBUILD from the release's sha256 files
         run: packaging/render.sh "$TAG" target/pkg
       # makepkg refuses to run as root, and .SRCINFO is what it prints.
@@ -216,7 +222,9 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          # The Ed25519 key aur.archlinux.org publishes (fingerprint
+          # SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4), pinned.
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
           git clone ssh://aur@aur.archlinux.org/grofe-bin.git aur
           cp target/pkg/PKGBUILD target/pkg/.SRCINFO aur/
@@ -242,8 +250,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
+      # A re-run of a published release stays green: the sparse index lists
+      # every published version, one JSON object per line.
+      - name: Already on crates.io?
+        id: published
+        run: |
+          version="${TAG#v}"
+          if curl -fsSL https://index.crates.io/gr/of/grofe | jq -e --arg v "$version" 'select(.vers == $v)' >/dev/null; then
+            echo "grofe $version is already on crates.io"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.published.outputs.skip != 'true'
         id: auth
-      - run: cargo publish --locked
+      - if: steps.published.outputs.skip != 'true'
+        run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
