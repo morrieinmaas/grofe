@@ -58,12 +58,13 @@ fn from_tmux_program(program: &str, timeout: Duration) -> Result<Snapshot, Strin
     // Read on a thread, so a full pipe cannot stall the program the wait
     // below is timing.
     let mut stdout = child.stdout.take();
-    let reader = std::thread::spawn(move || {
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = Vec::new();
         if let Some(out) = stdout.as_mut() {
             let _ = out.read_to_end(&mut text);
         }
-        text
+        let _ = sent.send(text);
     });
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -81,7 +82,10 @@ fn from_tmux_program(program: &str, timeout: Duration) -> Result<Snapshot, Strin
             Err(e) => return Err(format!("tmux: {e}")),
         }
     };
-    let text = reader.join().unwrap_or_default();
+    // A grandchild that kept the pipe open must not hold the wait past it.
+    let Ok(text) = received.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
+        return Err("tmux did not answer in time".to_string());
+    };
     if !status.success() {
         return Err("no tmux server running".to_string());
     }
@@ -535,6 +539,19 @@ mod tests {
 
     /// A `tmux` that never answers is killed when the wait ends, and the
     /// error says so (the script's own `sleep` keeps the pipe open).
+    #[test]
+    fn a_tmux_that_exits_but_leaves_the_pipe_open_does_not_block() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("tmux");
+        std::fs::write(&fake, "#!/bin/sh\nsleep 30 &\nexit 0\n").expect("write");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let started = Instant::now();
+        let r = from_tmux_program(fake.to_str().expect("utf8"), Duration::from_millis(300));
+        assert_eq!(r.err().as_deref(), Some("tmux did not answer in time"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
     #[test]
     fn a_tmux_that_hangs_is_killed_at_the_timeout() {
         use std::os::unix::fs::PermissionsExt;
