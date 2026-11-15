@@ -515,6 +515,12 @@ pub const EVENTS: &[EventSpec] = &[
         tmux: "",
         kind: HookKind::Session,
     },
+    EventSpec {
+        name: "agent-changed",
+        fires: "a pane's agent state changed",
+        tmux: "",
+        kind: HookKind::WindowPane,
+    },
 ];
 
 /// The event named `name`.
@@ -1070,6 +1076,17 @@ pub fn session_created(state: &mut State, session: SessionId) {
 /// `resume-changed`: pane `pane`'s resume or expectation was set or
 /// cleared (T4.2). grofe's own hook, no tmux name; the `subscribe` stream
 /// carries it from T6.1.
+/// `agent-changed`: pane `pane`'s agent state changed (spec §10). grofe's own
+/// hook, no tmux name; the `subscribe` stream carries it too.
+pub fn agent_changed(state: &mut State, pane: PaneId) {
+    if !wanted(state, "agent-changed") {
+        return;
+    }
+    let mut f = Fired::new("agent-changed", Some(pane));
+    f.vars.hook_pane = Some(pane);
+    notify(state, f);
+}
+
 pub fn resume_changed(state: &mut State, pane: PaneId) {
     if !wanted(state, "resume-changed") {
         return;
@@ -2266,7 +2283,7 @@ mod tests {
             .filter(|e| e.tmux.is_empty())
             .map(|e| e.name)
             .collect();
-        assert_eq!(own, ["resume-changed", "restore-done"]);
+        assert_eq!(own, ["resume-changed", "restore-done", "agent-changed"]);
         let mut names: Vec<&str> = EVENTS.iter().map(|e| e.name).collect();
         names.sort();
         names.dedup();

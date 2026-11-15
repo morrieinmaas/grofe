@@ -616,11 +616,19 @@ pub struct BindKey {
     pub repeat: bool,
     /// `-N`: the binding's description.
     pub note: Option<String>,
+    /// `-G`: the group `list-keys -N` and the key menu file it under.
+    pub group: Option<String>,
     /// The key name, raw (parsed by the handler, which words the error).
     pub key: String,
     /// Everything after the key. One element is a command string (split
     /// with [`split_command_string`]); several are one command's argv.
     pub command: Vec<String>,
+}
+
+/// `key-menu` (`-T table`): the searchable key menu overlay.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct KeyMenu {
+    pub table: Option<String>,
 }
 
 /// `unbind-key` (`-n -T -a -q`, then a key unless `-a`).
@@ -697,6 +705,61 @@ pub struct PaneSetResume {
     pub expect: Option<String>,
     /// The resume; `argv[0]` is resolved to an absolute path by the server.
     pub argv: Vec<String>,
+}
+
+/// `agent report|list|next|seen` (grofe's own): native agent status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentCmd {
+    Report(AgentReport),
+    List { format: Option<String> },
+    Next,
+    Seen { target: Target, all: bool },
+    New(AgentNew),
+}
+
+/// `agent new <kind> [-p] [-c dir] [-n name] [-w|-W] [-b branch] [-d]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentNew {
+    pub kind: String,
+    pub split: bool,
+    pub cwd: Option<String>,
+    pub name: Option<String>,
+    /// `-w` is `Some(true)`, `-W` is `Some(false)`, neither is `None`.
+    pub worktree: Option<bool>,
+    pub branch: Option<String>,
+    pub detached: bool,
+}
+
+/// `agent-sidebar on|off|toggle|focus`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarOp {
+    On,
+    Off,
+    Toggle,
+    Focus,
+}
+
+/// `notify list|dismiss|clear|mute|unmute` (grofe's own): the notification tray.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyCmd {
+    List,
+    Dismiss(u64),
+    Clear,
+    Mute(Option<std::time::Duration>),
+    Unmute,
+}
+
+/// `agent report <state> [-t pane] [--kind k] [--msg text] [--blocked b]
+/// [--session-id id] [--ts N]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentReport {
+    pub state: String,
+    pub target: Target,
+    pub kind: Option<String>,
+    pub msg: Option<String>,
+    pub blocked: Option<String>,
+    pub session_id: Option<String>,
+    pub ts: Option<u64>,
 }
 
 /// `reboot-check` (grofe's own, T4.5, spec §6): each pane's verdict from
@@ -1684,6 +1747,7 @@ pub enum Command {
     PluginRestart(PluginRestart),
     // M4 (the stub edit adds them; T4.2 and T4.5 implement them).
     PaneSetResume(PaneSetResume),
+    Agent(AgentCmd),
     RebootCheck(RebootCheck),
     CommandPrompt(CommandPrompt),
     RunShell(RunShell),
@@ -1764,4 +1828,14 @@ pub enum Command {
     CustomizeMode(CustomizeMode),
     // M5: copy mode (TM.1).
     CopyMode(CopyMode),
+    /// `choose-agent`: the agent picker overlay.
+    ChooseAgent,
+    /// `agent-sidebar on|off|toggle|focus`.
+    AgentSidebar(SidebarOp),
+    /// `agent-grid`: the all-agents grid overlay.
+    AgentGrid,
+    /// `choose-notification`: the notification tray overlay.
+    ChooseNotification,
+    Notify(NotifyCmd),
+    KeyMenu(KeyMenu),
 }

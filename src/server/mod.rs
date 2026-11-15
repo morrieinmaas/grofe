@@ -11,6 +11,7 @@
 //! back. Commands run through the single [`dispatch`] seam.
 
 pub mod adopt;
+pub mod agents;
 pub mod alerts;
 pub mod borders;
 pub mod buffers;
@@ -24,19 +25,25 @@ pub mod drop;
 pub mod events;
 pub mod floating;
 pub mod graphics;
+pub(crate) mod grid;
 pub mod hooks;
 pub mod imgstore;
 pub mod input;
+pub(crate) mod keymenu;
 pub mod layout;
 pub mod links;
+pub(crate) mod listdraw;
+pub(crate) mod listview;
 pub mod lua_async;
 pub mod lua_host;
 pub mod menu;
 pub mod model;
 pub mod mouse;
+pub(crate) mod notify;
 pub mod pack_load;
 pub mod pane;
 pub mod passthrough;
+pub(crate) mod picker;
 pub mod plugins;
 pub mod popup;
 pub mod prompt;
@@ -45,10 +52,13 @@ pub mod restore;
 pub mod resume;
 pub mod screenimg;
 pub mod shell_jobs;
+pub(crate) mod sidebar;
 pub mod sixel;
 pub mod snapshot;
 pub mod sources;
 pub mod status;
+pub(crate) mod toast;
+pub(crate) mod tray;
 pub mod tree;
 pub mod x11;
 
@@ -237,6 +247,13 @@ pub struct State {
     pub menus: menu::Menus,
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
+    pub pickers: picker::Pickers,
+    pub sidebars: sidebar::Sidebars,
+    pub grids: grid::Grids,
+    pub notify: notify::Notifier,
+    pub notify_runner: notify::desktop::Runner,
+    pub trays: tray::Trays,
+    pub keymenus: keymenu::Menus,
     /// The paste buffers (TM.4).
     pub buffers: buffers::Buffers,
     /// The panes in copy mode (TM.1).
@@ -245,6 +262,17 @@ pub struct State {
     pub clocks: clock::Clocks,
     /// Each window's silence wait (`alerts`).
     pub alerts: alerts::Alerts,
+    /// The agent records, by pane (`agents`).
+    pub agents: agents::Agents,
+    /// The kinds agents are recognised by: the built-ins merged with `[agents.kinds]`.
+    pub agent_kinds: Vec<agents::kinds::Kind>,
+    /// `[agents] enabled`; off, reports and scans change nothing.
+    pub agents_enabled: bool,
+    /// `[agents.sidebar]`, `[agents.grid]`, `[agents.picker]` and `[agents.new]`.
+    pub agents_sidebar: crate::config::ConfigSidebar,
+    pub agents_grid: crate::config::ConfigGrid,
+    pub agents_picker: crate::config::ConfigPicker,
+    pub agents_new: crate::config::ConfigNew,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
     /// for who may wait); any task may hold a clone. The actor keeps this
     /// one, so the channel never closes while it runs.
@@ -362,6 +390,14 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
 /// (TC.7) comes next, then a popup (TC.6), so a prompt or menu a popup's
 /// command opens takes the keys and draws on top of it; then a chooser
 /// (TC.9) over its pane; then the mouse, and copy mode (TM.1).
+/// Copies the `[agents.*]` surface tables into the state.
+pub(crate) fn configure_surfaces(state: &mut State, r: &crate::config::Resolved) {
+    state.agents_sidebar = r.agents.sidebar.clone();
+    state.agents_grid = r.agents.grid.clone();
+    state.agents_picker = r.agents.picker.clone();
+    state.agents_new = r.agents.new.clone();
+}
+
 fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(prompt::PromptHook));
     register_overlay(state, Arc::new(prompt::PromptOverlay));
@@ -369,8 +405,23 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(menu::MenuOverlay));
     register_input_hook(state, Arc::new(popup::PopupHook));
     register_overlay(state, Arc::new(popup::PopupOverlay));
+    register_overlay(state, Arc::new(sidebar::SidebarOverlay));
+    register_input_hook(state, Arc::new(grid::GridHook));
+    register_overlay(state, Arc::new(grid::GridOverlay));
+    register_input_hook(state, Arc::new(picker::PickerHook));
+    register_overlay(state, Arc::new(picker::PickerOverlay));
+    register_input_hook(state, Arc::new(tray::TrayHook));
+    register_overlay(state, Arc::new(tray::TrayOverlay));
+    register_input_hook(state, Arc::new(toast::ToastHook));
+    register_overlay(state, Arc::new(toast::ToastOverlay));
+    register_input_hook(state, Arc::new(keymenu::KeyMenuHook));
+    register_overlay(state, Arc::new(keymenu::KeyMenuOverlay));
     register_input_hook(state, Arc::new(tree::TreeHook));
     register_overlay(state, Arc::new(tree::TreeOverlay));
+    // After every overlay hook, so a grid or picker keeps its keys and
+    // clicks while the strip is focused; before the mouse, so the strip's
+    // clicks never reach a pane.
+    register_input_hook(state, Arc::new(sidebar::SidebarHook));
     register_input_hook(state, Arc::new(mouse::MouseHook));
     clock::register(state);
     copy::register(state);
@@ -439,7 +490,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         | PaneEventKind::Clipboard { .. }
         | PaneEventKind::ClipboardQuery { .. }
         | PaneEventKind::Path(_)
-        | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
+        | PaneEventKind::Osc(_)
+        | PaneEventKind::AgentStatus(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
         // The reader handles sixel images; they never reach the actor.
         PaneEventKind::Sixel { .. } => {}
@@ -626,10 +678,24 @@ async fn serve(
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        pickers: picker::Pickers::default(),
+        sidebars: sidebar::Sidebars::default(),
+        grids: grid::Grids::default(),
+        notify: notify::Notifier::default(),
+        notify_runner: notify::desktop::Runner::default(),
+        trays: tray::Trays::default(),
+        keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
+        agents: agents::Agents::default(),
+        agent_kinds: agents::kinds::builtin(),
+        agents_enabled: true,
+        agents_sidebar: crate::config::ConfigAgents::default().sidebar,
+        agents_grid: crate::config::ConfigAgents::default().grid,
+        agents_picker: crate::config::ConfigAgents::default().picker,
+        agents_new: crate::config::ConfigAgents::default().new,
         jobs: jobs_tx,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
@@ -1349,10 +1415,24 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        pickers: picker::Pickers::default(),
+        sidebars: sidebar::Sidebars::default(),
+        grids: grid::Grids::default(),
+        notify: notify::Notifier::default(),
+        notify_runner: notify::desktop::Runner::default(),
+        trays: tray::Trays::default(),
+        keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
+        agents: agents::Agents::default(),
+        agent_kinds: agents::kinds::builtin(),
+        agents_enabled: true,
+        agents_sidebar: crate::config::ConfigAgents::default().sidebar,
+        agents_grid: crate::config::ConfigAgents::default().grid,
+        agents_picker: crate::config::ConfigAgents::default().picker,
+        agents_new: crate::config::ConfigAgents::default().new,
         jobs,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,

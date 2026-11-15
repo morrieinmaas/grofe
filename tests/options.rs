@@ -434,6 +434,9 @@ fn dash_c_with_a_missing_directory_falls_back_to_home() {
     .unwrap_or_else(|e| panic!("{e}: {}", display(&srv, "m:2", "#{pane_current_path}")));
 }
 
+/// grofe identity's `window-status-format` default: tmux's plus the agent glyph.
+const WINDOW_STATUS_DEFAULT: &str = "\"#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}\"";
+
 /// The M2 options, by tmux name: each shows its default, takes a value at
 /// its own scope and shows it back (tmux 3.7b bounds and choice words).
 #[test]
@@ -447,7 +450,7 @@ fn m2_options_set_and_show_by_tmux_name() {
         ("status-left", "\"[#{session_name}] \"", "-s", "L"),
         (
             "status-right",
-            "\"\\\"#{pane_title}\\\" %H:%M %d-%b-%y\"",
+            "\"\\\"#{pane_title}\\\" %H:%M %d-%b-%y#[range=user|agents]#{agents_badge}#[norange]\"",
             "-s",
             "R",
         ),
@@ -457,13 +460,13 @@ fn m2_options_set_and_show_by_tmux_name() {
         ("status-interval", "15", "-s", "2147483647"),
         (
             "window-status-format",
-            "\"#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }\"",
+            WINDOW_STATUS_DEFAULT,
             "-w",
             "#{window_index}",
         ),
         (
             "window-status-current-format",
-            "\"#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }\"",
+            WINDOW_STATUS_DEFAULT,
             "-w",
             "[#{window_index}]",
         ),

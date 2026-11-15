@@ -283,6 +283,9 @@ pub struct ClientEntry {
     held_full: bool,
     /// Needs a new frame.
     dirty: bool,
+    /// When the toast last shown here expires, as [`deadline`] last saw
+    /// it: the toast is gone by then, so [`tick`] cannot work it out.
+    toast_until: std::cell::Cell<Option<Instant>>,
     outbox: Outbox,
     exit: Option<oneshot::Sender<String>>,
 }
@@ -425,9 +428,25 @@ pub struct Registry {
     /// each may only read (uid, read-only). Root and the server's own user
     /// are always in it, as tmux's `server_acl_init`.
     acl: BTreeMap<u32, bool>,
+    /// When each pane was last scanned for an agent program.
+    // ponytail: never pruned except by `scan_agents` dropping gone panes,
+    // so it holds at most one instant per pane that has produced output.
+    agent_scans: BTreeMap<PaneId, Instant>,
+    /// `agents.scan-interval`; the config sets it with `set_scan_interval`.
+    scan_interval: Duration,
 }
 
 impl Registry {
+    #[cfg(test)]
+    pub(crate) fn scanned(&self, pane: PaneId) -> bool {
+        self.agent_scans.contains_key(&pane)
+    }
+
+    /// The next scan of `pane` is not throttled.
+    pub(crate) fn forget_scan(&mut self, pane: PaneId) {
+        self.agent_scans.remove(&pane);
+    }
+
     pub(crate) fn acl_contains(&self, uid: u32) -> bool {
         self.acl.contains_key(&uid)
     }
@@ -471,6 +490,8 @@ impl Default for Registry {
                 .into_iter()
                 .map(|uid| (uid, false))
                 .collect(),
+            agent_scans: BTreeMap::new(),
+            scan_interval: Duration::from_secs(1),
         }
     }
 }
@@ -577,6 +598,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             flags,
             mouse_modes: None,
             dirty: true,
+            toast_until: std::cell::Cell::new(None),
             outbox,
             exit: Some(exit_tx),
         },
@@ -1447,6 +1469,10 @@ fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     crate::server::menu::client_gone(state, id);
     crate::server::popup::client_gone(state, id);
     crate::server::tree::client_gone(state, id);
+    crate::server::picker::client_gone(state, id);
+    crate::server::sidebar::client_gone(state, id);
+    crate::server::grid::client_gone(state, id);
+    crate::server::keymenu::client_gone(state, id);
     crate::server::mouse::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);
@@ -1720,6 +1746,7 @@ pub fn wake(state: &mut State) {
         .map(|p| p.id)
         .collect();
     crate::server::alerts::output(state, &dirty);
+    scan_agents(state, &dirty);
     if !dirty.is_empty() {
         arm_names(state, Instant::now());
     }
@@ -1728,11 +1755,19 @@ pub fn wake(state: &mut State) {
     }
     let model = &state.model;
     let mut any = false;
-    for c in state.clients.values_mut() {
+    let ids: Vec<ClientId> = state.clients.keys().copied().collect();
+    for id in ids {
+        let preview = crate::server::picker::selected_pane(state, id);
+        let grid = crate::server::grid::visible_panes(state, id);
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
         let shown = model.sessions.get(&c.session).map(|s| s.active);
         if dirty
             .iter()
             .any(|p| model.panes.get(p).map(|p| p.window) == shown)
+            || preview.is_some_and(|p| dirty.contains(&p))
+            || grid.iter().any(|p| dirty.contains(p))
         {
             c.dirty = true;
             any = true;
@@ -1741,6 +1776,88 @@ pub fn wake(state: &mut State) {
     if any {
         request_render(state, Instant::now());
     }
+}
+
+/// Sets how often a busy pane is checked for an agent program.
+pub fn set_scan_interval(state: &mut State, interval: Duration) {
+    state.registry.scan_interval = interval;
+}
+
+/// A foreground leader's pid and argv.
+type Leader = (i32, Vec<String>);
+
+/// The foreground leader of `pane`: its pid and argv, read now.
+fn leader_argv(p: &crate::server::model::Pane) -> Option<Leader> {
+    let pgrp = p.handle.foreground_group()?;
+    let argv = crate::server::pane::procinfo::leader(pgrp).argv?;
+    Some((pgrp, argv))
+}
+
+/// Checks each of `panes` for an agent program (agents spec 3.1), at most
+/// once per `agents.scan-interval` per pane; a match with no record makes
+/// one, bound to the leader process.
+pub fn scan_agents(state: &mut State, panes: &BTreeSet<PaneId>) {
+    scan_agents_with(state, panes, Instant::now(), &mut leader_argv);
+}
+
+fn scan_agents_with(
+    state: &mut State,
+    panes: &BTreeSet<PaneId>,
+    now: Instant,
+    read: &mut dyn FnMut(&crate::server::model::Pane) -> Option<Leader>,
+) {
+    if !state.agents_enabled {
+        return;
+    }
+    let interval = state.registry.scan_interval;
+    let mut created = Vec::new();
+    for &id in panes {
+        let Some(p) = state.model.panes.get(&id).filter(|p| p.dead.is_none()) else {
+            continue;
+        };
+        let last = state.registry.agent_scans.get(&id);
+        if last.is_some_and(|&t| now.saturating_duration_since(t) < interval) {
+            continue;
+        }
+        state.registry.agent_scans.insert(id, now);
+        let Some((leader, argv)) = read(p) else {
+            continue;
+        };
+        let Some(kind) = crate::server::agents::kinds::match_argv(&state.agent_kinds, &argv) else {
+            continue;
+        };
+        let binding = crate::server::resume::Binding::of(leader);
+        if state.agents.ensure(id, kind, binding, now) {
+            created.push(id);
+        }
+    }
+    let model = &state.model;
+    state
+        .registry
+        .agent_scans
+        .retain(|id, _| model.panes.contains_key(id));
+    if !created.is_empty() {
+        crate::server::resume::watch(state);
+    }
+    for id in created {
+        let kind = state.agents.get(id).and_then(|a| a.kind.clone());
+        let change = crate::server::agents::Change {
+            old: None,
+            new: Some(crate::server::agents::AgentState::Idle),
+            kind,
+            session_changed: false,
+        };
+        crate::server::events::emit_agent_changed(state, id, &change);
+        redraw_all(state, now);
+    }
+}
+
+/// Every client redraws: an agent record appeared or went.
+pub(crate) fn redraw_all(state: &mut State, now: Instant) {
+    for c in state.clients.values_mut() {
+        c.dirty = true;
+    }
+    request_render(state, now);
 }
 
 /// Schedules a render of the dirty clients, at most once per
@@ -1770,12 +1887,33 @@ pub fn deadline(state: &State) -> Option<Instant> {
         r.status_at,
         r.names_at,
         dispatch::lock::deadline(state),
+        crate::server::picker::deadline(state),
+        crate::server::grid::deadline(state),
+        state.notify.mute_deadline(),
     ]
     .into_iter()
+    .chain(state.clients.iter().map(|(id, c)| {
+        let at = crate::server::toast::deadline(state, *id);
+        // Remembered: once it passes the toast is gone, and `tick` must
+        // still know to redraw.
+        if at.is_some() {
+            c.toast_until.set(at);
+        }
+        at
+    }))
     .chain(r.owners.values().map(SizeOwner::deadline))
     .chain(clients)
     .flatten()
     .min()
+}
+
+/// Reads and clears client `id`'s redraw flag, for tests in other modules.
+#[cfg(test)]
+pub(crate) fn take_dirty(state: &mut State, id: ClientId) -> bool {
+    state
+        .clients
+        .get_mut(&id)
+        .is_some_and(|c| std::mem::take(&mut c.dirty))
 }
 
 /// Runs whatever is due at `now` (see [`deadline`]).
@@ -1815,6 +1953,14 @@ pub fn tick(state: &mut State, now: Instant) {
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
+        if c.toast_until.get().is_some_and(|d| d <= now) {
+            c.toast_until.set(None);
+            c.dirty = true;
+            request_render(state, now);
+        }
+        let Some(c) = state.clients.get_mut(&id) else {
+            continue;
+        };
         if c.decoder.deadline(escape).is_some_and(|d| d <= now) {
             for input in c.decoder.flush(now, escape) {
                 deliver(state, id, input, now);
@@ -1832,6 +1978,13 @@ pub fn tick(state: &mut State, now: Instant) {
     }
     if switched {
         changed(state);
+    }
+
+    if state.notify.expire_mute(now) {
+        for c in state.clients.values_mut() {
+            c.dirty = true;
+        }
+        request_render(state, now);
     }
 
     if state.registry.status_at.is_some_and(|at| at <= now) {
@@ -1853,6 +2006,8 @@ pub fn tick(state: &mut State, now: Instant) {
         }
     }
     dispatch::lock::tick(state, now);
+    crate::server::picker::tick(state, now);
+    crate::server::grid::tick(state, now);
     arm_status_clock(state, now);
 }
 
@@ -1919,6 +2074,16 @@ const STATIC_STATUS_VARS: &[&str] = &[
     "window_panes",
     "host",
     "host_short",
+    // Agent state changes arrive as events and redraw. The plain words are
+    // the default formats' glyph option names and state names.
+    "window_agent_state",
+    "agents_badge",
+    "agent",
+    "glyph",
+    "blocked",
+    "error",
+    "unseen",
+    "working",
 ];
 
 /// Whether format `text` expands to the same thing at any time: no
@@ -2031,7 +2196,7 @@ fn render_dirty(state: &mut State) {
             continue;
         };
         let composed = compose_client(state, id, c);
-        let fits = window_fits(&state.model, c);
+        let fits = window_fits(state, id, c);
         let Some(c) = state.clients.get_mut(&id) else {
             continue;
         };
@@ -2085,17 +2250,29 @@ fn glob(pattern: &str, text: &str) -> bool {
 
 /// Client `c`'s current window, and whether it fits the client (then
 /// there is nothing to pan).
-fn window_fits(model: &Model, c: &ClientEntry) -> Option<(WindowId, bool)> {
+fn window_fits(state: &State, id: ClientId, c: &ClientEntry) -> Option<(WindowId, bool)> {
+    let model = &state.model;
     let w = model.windows.get(&model.sessions.get(&c.session)?.active)?;
-    let (cols, rows) = visible_size(model, c);
+    let (cols, rows) = visible_size(state, id, c);
     Some((w.id, w.cols <= cols && w.rows <= rows))
 }
 
 /// The part of client `c` that shows the window: its size less the
-/// status rows.
-fn visible_size(model: &Model, c: &ClientEntry) -> (u16, u16) {
-    let lines = status_geometry(model, c.session, c.size.1).lines;
-    (c.size.0, c.size.1.saturating_sub(lines))
+/// status rows and the columns the agent sidebar holds.
+fn visible_size(state: &State, id: ClientId, c: &ClientEntry) -> (u16, u16) {
+    let lines = status_geometry(&state.model, c.session, c.size.1).lines;
+    let reserved = crate::server::sidebar::reserved(state, id, c.size.0);
+    (
+        c.size.0.saturating_sub(reserved),
+        c.size.1.saturating_sub(lines),
+    )
+}
+
+/// The agent sidebar was shown or hidden for `client`: its window changes
+/// size, so size the windows again (the normal resize path, which gives the
+/// panes their new size) and redraw every client.
+pub(crate) fn resize_for_sidebar(state: &mut State, _client: ClientId) {
+    changed(state);
 }
 
 /// `refresh-client -c/-L/-R/-U/-D` (TC.9): moves the visible part of a
@@ -2113,7 +2290,7 @@ pub(crate) fn pan(state: &mut State, id: ClientId, pan: cmd::Pan, by: u16) {
     else {
         return;
     };
-    let (cols, rows) = visible_size(model, c);
+    let (cols, rows) = visible_size(state, id, c);
     let (wid, wcols, wrows) = (w.id, w.cols, w.rows);
     let Some(c) = state.clients.get_mut(&id) else {
         return;
@@ -2181,11 +2358,16 @@ pub(crate) fn status_geometry(model: &Model, session: SessionId, rows: u16) -> S
     }
 }
 
-/// The window size a client of `session` with `size` wants: its terminal
-/// less the status rows, never below 1x1.
-fn window_size(model: &Model, session: SessionId, (cols, rows): (u16, u16)) -> (u16, u16) {
-    let status = status_lines(model, session);
-    (cols.max(1), rows.saturating_sub(status).max(1))
+/// The window size the size-owning `client` of `session` wants: its terminal
+/// less the status rows and the sidebar's columns, never below 1x1.
+fn window_size(state: &State, client: ClientId, session: SessionId) -> (u16, u16) {
+    let (cols, rows) = state.clients.get(&client).map_or((1, 1), |c| c.size);
+    let status = status_lines(&state.model, session);
+    let reserved = crate::server::sidebar::reserved(state, client, cols);
+    (
+        cols.saturating_sub(reserved).max(1),
+        rows.saturating_sub(status).max(1),
+    )
 }
 
 /// One cell's size in pixels on the client `session`'s windows are sized
@@ -2205,7 +2387,7 @@ fn apply_sizes(state: &mut State) {
         .iter()
         .filter_map(|(s, o)| {
             let c = state.clients.get(&o.client)?;
-            Some((*s, window_size(&state.model, *s, c.size), c.activity))
+            Some((*s, window_size(state, o.client, *s), c.activity))
         })
         .collect();
     for &(session, size, activity) in &sizes {
@@ -2596,13 +2778,27 @@ fn pane_looks(
                 w.floating(*id).is_some(),
             )
         });
+        // A blocked agent's frame asks for attention, active or not.
+        let blocked = state
+            .agents
+            .get(*id)
+            .is_some_and(|a| a.state == crate::server::agents::AgentState::Blocked);
+        let (border, active_border) = if blocked {
+            let style = status::base_style(opt("agent-blocked-border-style"), &vars);
+            (style, style)
+        } else {
+            (
+                status::base_style(opt("pane-border-style"), &vars),
+                status::base_style(opt("pane-active-border-style"), &vars),
+            )
+        };
         looks.panes.insert(
             *id,
             render::PaneLook {
                 fg,
                 bg,
-                border: status::base_style(opt("pane-border-style"), &vars),
-                active_border: status::base_style(opt("pane-active-border-style"), &vars),
+                border,
+                active_border,
                 title,
                 tab,
                 index: order.iter().position(|p| p == id).unwrap_or(0) + base_index,
@@ -2693,7 +2889,7 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     let s = model.sessions.get(&c.session)?;
     let w = model.windows.get(&s.active)?;
     let geom = status_geometry(model, s.id, c.size.1);
-    let visible = (c.size.0, c.size.1 - geom.lines);
+    let visible = visible_size(state, id, c);
     let area = w.area();
     let rects = visible_panes(w);
     let borders = if w.zoomed {
@@ -2789,6 +2985,8 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     }
     // Floating panes cover what is under them, images included.
     screenimg::hide_covered(&mut window);
+    // The columns the sidebar holds stay blank here; its overlay draws them.
+    let window = widen(window, c.size.0);
     let (rows, message) = status_rows(state, c, s, geom.lines);
     let pill = c.message.as_ref().and_then(|(text, _, level)| {
         Some((
@@ -2839,6 +3037,21 @@ fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Option<Compos
     // Popups, menus, prompts and choosers cover images the same way.
     screenimg::hide_covered(&mut screen);
     Some((screen, viewport, rows, geom.first_row))
+}
+
+/// `window` with blank columns added on the right up to `cols`.
+fn widen(window: Screen, cols: u16) -> Screen {
+    if window.cols >= cols {
+        return window;
+    }
+    let mut wide = Screen::new(cols, window.rows);
+    let (old, new) = (usize::from(window.cols), usize::from(cols));
+    for (row, cells) in window.cells.chunks(old.max(1)).enumerate() {
+        wide.cells[row * new..row * new + old].clone_from_slice(cells);
+    }
+    wide.cursor = window.cursor;
+    wide.images = window.images;
+    wide
 }
 
 /// Client `c`'s `lines` status rows on session `s` (spec §4.10), and its
@@ -4075,6 +4288,134 @@ mod tests {
 
     use super::*;
 
+    fn pane_with_agents() -> (State, PaneId) {
+        let mut state = crate::server::test_state();
+        crate::server::dispatch::run(
+            &mut state,
+            &crate::server::test_ctx(),
+            &["new-session".into(), "-d".into(), "-s".into(), "m".into()],
+        )
+        .expect("new-session");
+        state.agents_enabled = true;
+        state.agent_kinds = crate::server::agents::kinds::builtin();
+        let id = *state.model.panes.keys().next().expect("pane");
+        (state, id)
+    }
+
+    /// A client whose picker previews a pane redraws when that pane
+    /// outputs, though it shows another window.
+    #[tokio::test]
+    async fn wake_redraws_picker_preview() {
+        let (mut state, id) = pane_with_agents();
+        let (outbox, _) = Outbox::new();
+        let mut entry = state_with_client()
+            .0
+            .clients
+            .remove(&ClientId(1))
+            .expect("client");
+        entry.outbox = outbox;
+        state.clients.insert(ClientId(1), entry);
+        let report = crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(crate::server::agents::AgentState::Idle),
+            kind: Some("claude".into()),
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        state.agents.apply(id, report, false, Instant::now());
+        crate::server::picker::open(&mut state, ClientId(1)).expect("open");
+        assert_eq!(
+            crate::server::picker::selected_pane(&state, ClientId(1)),
+            Some(id)
+        );
+        state.clients.get_mut(&ClientId(1)).expect("client").dirty = false;
+        state.model.panes[&id].handle.reset_state();
+        wake(&mut state);
+        assert!(state.clients[&ClientId(1)].dirty);
+    }
+
+    /// An open picker asks for a redraw when a shown time changes, and
+    /// stops asking once closed or its client is gone.
+    #[tokio::test]
+    async fn picker_times_tick() {
+        let (mut state, id) = pane_with_agents();
+        let (outbox, _) = Outbox::new();
+        let mut entry = state_with_client()
+            .0
+            .clients
+            .remove(&ClientId(1))
+            .expect("client");
+        entry.outbox = outbox;
+        state.clients.insert(ClientId(1), entry);
+        let report = crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(crate::server::agents::AgentState::Idle),
+            kind: Some("claude".into()),
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        let since = Instant::now();
+        state.agents.apply(id, report, false, since);
+        assert_eq!(crate::server::picker::deadline(&state), None);
+        crate::server::picker::open(&mut state, ClientId(1)).expect("open");
+        let at = crate::server::picker::deadline(&state).expect("a deadline");
+        assert!(at > since && at <= since + Duration::from_millis(1100));
+        state.clients.get_mut(&ClientId(1)).expect("client").dirty = false;
+        crate::server::picker::tick(&mut state, since + Duration::from_millis(500));
+        assert!(!state.clients[&ClientId(1)].dirty, "not yet");
+        crate::server::picker::tick(&mut state, at);
+        assert!(state.clients[&ClientId(1)].dirty, "the time changed");
+        assert!(crate::server::picker::deadline(&state).is_some_and(|next| next > at));
+        crate::server::picker::client_gone(&mut state, ClientId(1));
+        assert_eq!(crate::server::picker::deadline(&state), None);
+    }
+
+    /// Two outputs within the interval read the leader's argv once.
+    #[tokio::test]
+    async fn scan_throttled_per_pane() {
+        let (mut state, id) = pane_with_agents();
+        let reads = std::cell::Cell::new(0);
+        let mut read = |_: &crate::server::model::Pane| {
+            reads.set(reads.get() + 1);
+            Some((i32::MAX, vec!["claude".to_string()]))
+        };
+        let panes = BTreeSet::from([id]);
+        state.registry.forget_scan(id);
+        let t0 = Instant::now();
+        scan_agents_with(&mut state, &panes, t0, &mut read);
+        scan_agents_with(
+            &mut state,
+            &panes,
+            t0 + Duration::from_millis(900),
+            &mut read,
+        );
+        assert_eq!(reads.get(), 1);
+        scan_agents_with(
+            &mut state,
+            &panes,
+            t0 + Duration::from_millis(1100),
+            &mut read,
+        );
+        assert_eq!(reads.get(), 2);
+        assert_eq!(
+            state.agents.get(id).and_then(|a| a.kind.as_deref()),
+            Some("claude")
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_skips_when_disabled() {
+        let (mut state, id) = pane_with_agents();
+        state.agents_enabled = false;
+        let mut read = |_: &crate::server::model::Pane| -> Option<(i32, Vec<String>)> {
+            panic!("read while disabled")
+        };
+        scan_agents_with(&mut state, &BTreeSet::from([id]), Instant::now(), &mut read);
+        assert!(state.agents.get(id).is_none());
+    }
+
     /// A hello's tty names the client only if it is a device path: else
     /// it is taken as none and the client is `client-N`.
     #[tokio::test]
@@ -4236,6 +4577,7 @@ mod tests {
                 flags: ClientFlags::default(),
                 mouse_modes: None,
                 dirty: false,
+                toast_until: std::cell::Cell::new(None),
                 outbox,
                 exit: None,
             },
@@ -4264,6 +4606,78 @@ mod tests {
             .options
             .set(Owner::Session(session), name, value, false)
             .unwrap();
+    }
+
+    /// The client whose toast expires is redrawn when the deadline passes,
+    /// though the toast itself is already gone by then.
+    #[test]
+    fn toast_deadline_wakes() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        tick(&mut state, now);
+        state.clients.get_mut(&id).expect("client").dirty = false;
+        state.clients[&id]
+            .toast_until
+            .set(Some(now + Duration::from_secs(5)));
+        tick(&mut state, now + Duration::from_secs(1));
+        assert_ne!(
+            state.registry.last_render,
+            Some(now + Duration::from_secs(1))
+        );
+        tick(&mut state, now + Duration::from_secs(5));
+        // Marked dirty and rendered in the same tick.
+        assert_eq!(
+            state.registry.last_render,
+            Some(now + Duration::from_secs(5))
+        );
+        assert_eq!(state.clients[&id].toast_until.get(), None);
+    }
+
+    /// A blocked agent pane's frame takes `agent-blocked-border-style`,
+    /// active or not; a working one keeps the normal border styles.
+    #[tokio::test]
+    async fn blocked_pane_border_style() {
+        use crate::server::agents::{AgentState, Report, ReportState};
+        let (mut state, pane) = pane_with_agents();
+        let id = ClientId(1);
+        let entry = state_with_client().0.clients.remove(&id).expect("client");
+        state.clients.insert(id, entry);
+        state
+            .model
+            .options
+            .set(
+                Owner::Global,
+                "agent-blocked-border-style",
+                "fg=yellow",
+                false,
+            )
+            .unwrap();
+        let report = |s| Report {
+            state: ReportState::Set(s),
+            kind: None,
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        let look = |state: &State| {
+            let c = &state.clients[&id];
+            let w = state.model.windows.values().next().expect("window");
+            pane_looks(state, c, w, &[pane]).panes[&pane].clone()
+        };
+        let plain = look(&state);
+        let now = Instant::now();
+        let r = report(AgentState::Working);
+        state.agents.apply(pane, r, false, now);
+        assert_eq!(look(&state).border, plain.border);
+        let r = Report {
+            ts: 2,
+            ..report(AgentState::Blocked)
+        };
+        state.agents.apply(pane, r, false, now);
+        let blocked = look(&state);
+        assert_ne!(blocked.border, plain.border);
+        assert_eq!(blocked.active_border, blocked.border);
     }
 
     /// `lock-after-time` fires once per idle spell, as tmux's one-shot
@@ -4297,6 +4711,21 @@ mod tests {
         set_session_option(&mut state, "status-interval", "1");
         set_session_option(&mut state, "status-right", "#{session_name}");
         assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
+    }
+
+    /// A timed mute wakes the server once, when it ends, and redraws; a
+    /// permanent one needs no timer.
+    #[test]
+    fn a_timed_mute_wakes_once_at_its_end() {
+        let (mut state, id) = state_with_client();
+        let now = Instant::now();
+        state.notify.mute(None);
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
+        state.notify.mute(Some(now + Duration::from_secs(1)));
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 1);
+        assert!(!state.notify.muted(now + Duration::from_secs(2)));
+        assert!(state.notify.mute_deadline().is_none());
+        assert!(state.clients.contains_key(&id));
     }
 
     /// G2: a clock put into a static status line starts ticking again, and
@@ -4669,9 +5098,9 @@ mod tests {
     fn the_builtin_hooks_and_overlays_are_inert() {
         let (mut state, id) = state_with_client();
         crate::server::register_builtins(&mut state);
-        assert_eq!(state.registry.input_hooks.len(), 7);
+        assert_eq!(state.registry.input_hooks.len(), 13);
         // TM.6 removed the mouse's scrollback view overlay.
-        assert_eq!(state.registry.overlays.len(), 6);
+        assert_eq!(state.registry.overlays.len(), 12);
         let now = Instant::now();
         let inputs = [
             Input::Key(crate::server::input::parse_key("C-b").expect("key")),
@@ -4846,6 +5275,157 @@ mod tests {
         assert_eq!(flags(&state), [false, false], "the client left");
     }
 
+    /// The sidebar shown on `id` (width 32, so 33 columns), as `agent-sidebar on`.
+    fn show_sidebar(state: &mut State, id: ClientId) {
+        crate::server::sidebar::set(state, id, crate::server::sidebar::SidebarOp::On)
+            .expect("sidebar on");
+    }
+
+    /// A state with a real session and one client of `size` attached to it
+    /// (`sidebar::set` resizes through [`changed`], which drops a client
+    /// whose session is gone).
+    fn sidebar_state(size: (u16, u16)) -> (State, ClientId, SessionId) {
+        let (mut state, _) = pane_with_agents();
+        let session = *state.model.sessions.keys().next().expect("session");
+        let id = ClientId(1);
+        let mut entry = state_with_client().0.clients.remove(&id).expect("client");
+        entry.session = session;
+        entry.size = size;
+        state.clients.insert(id, entry);
+        (state, id, session)
+    }
+
+    /// Agents spec §3.1 and §5.1: with agent records (one blocked and
+    /// unseen), a read notification whose toast has expired and the sidebar
+    /// shown, but no picker, grid, live toast or timed mute, nothing arms a
+    /// timer, so a static status line keeps the server asleep.
+    #[tokio::test]
+    async fn agents_with_no_timed_surface_never_wake() {
+        use crate::server::agents::{AgentState, Report, ReportState};
+        let (mut state, id, _) = sidebar_state((160, 50));
+        let pane = *state.model.panes.keys().next().expect("pane");
+        let report = Report {
+            state: ReportState::Set(AgentState::Blocked),
+            kind: Some("claude".into()),
+            msg: Some("perm".into()),
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        state.agents.apply(pane, report, false, Instant::now());
+        let long_ago = Instant::now() - Duration::from_secs(60);
+        state.notify.on_change(
+            pane,
+            "u1",
+            Some("claude"),
+            Some("working"),
+            Some("blocked"),
+            Some("perm"),
+            Duration::from_secs(60),
+            false,
+            true,
+            long_ago,
+        );
+        show_sidebar(&mut state, id);
+        set_session_option(&mut state, "status-interval", "1");
+        set_session_option(&mut state, "status-right", "#{agents_badge}");
+        // The one `automatic-rename` check making the panes armed (not an
+        // agent timer) runs first.
+        idle_wakes(&mut state, NAME_INTERVAL * 2);
+        assert!(crate::server::sidebar::reserved(&state, id, 160) > 0);
+        assert_eq!(crate::server::picker::deadline(&state), None);
+        assert_eq!(crate::server::grid::deadline(&state), None);
+        assert_eq!(crate::server::toast::deadline(&state, id), None);
+        assert_eq!(state.notify.mute_deadline(), None);
+        assert_eq!(idle_wakes(&mut state, Duration::from_secs(3)), 0);
+    }
+
+    /// The scan throttle is kept per pane: one pane's scan does not hold
+    /// back another's.
+    #[tokio::test]
+    async fn scan_throttle_is_per_pane() {
+        let (mut state, a) = pane_with_agents();
+        crate::server::dispatch::run(
+            &mut state,
+            &crate::server::test_ctx(),
+            &["new-window".into(), "-t".into(), "m".into()],
+        )
+        .expect("new-window");
+        let b = *state.model.panes.keys().find(|p| **p != a).expect("pane b");
+        let reads = std::cell::RefCell::new(Vec::new());
+        let mut read = |p: &crate::server::model::Pane| {
+            reads.borrow_mut().push(p.id);
+            None
+        };
+        // Spawning scanned both; start from no scan.
+        state.registry.forget_scan(a);
+        state.registry.forget_scan(b);
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        scan_agents_with(&mut state, &BTreeSet::from([a]), t0, &mut read);
+        scan_agents_with(&mut state, &BTreeSet::from([b]), t0 + ms(500), &mut read);
+        scan_agents_with(
+            &mut state,
+            &BTreeSet::from([a, b]),
+            t0 + ms(1100),
+            &mut read,
+        );
+        assert_eq!(*reads.borrow(), [a, b, a]);
+    }
+
+    #[tokio::test]
+    async fn window_shrinks_by_reserved() {
+        let (mut state, id, session) = sidebar_state((160, 50));
+        let status = status_lines(&state.model, session);
+        show_sidebar(&mut state, id);
+        let reserved = crate::server::sidebar::reserved(&state, id, 160);
+        assert_eq!(reserved, 33);
+        assert_eq!(window_size(&state, id, session), (127, 50 - status));
+        let c = state.clients.get(&id).expect("client");
+        assert_eq!(visible_size(&state, id, c), (127, 50 - status));
+    }
+
+    #[tokio::test]
+    async fn no_sidebar_sizes_unchanged() {
+        let (state, id, session) = sidebar_state((160, 50));
+        let status = status_lines(&state.model, session);
+        assert_eq!(window_size(&state, id, session), (160, 50 - status));
+        let c = state.clients.get(&id).expect("client");
+        assert_eq!(visible_size(&state, id, c), (160, 50 - status));
+    }
+
+    #[tokio::test]
+    async fn other_client_cropped() {
+        let (mut state, id, _session) = sidebar_state((160, 50));
+        show_sidebar(&mut state, id);
+        // A client the sidebar is not shown on keeps its whole width.
+        let c = state.clients.get(&id).expect("client");
+        let other = ClientId(2);
+        assert_eq!(visible_size(&state, other, c).0, 160);
+        assert_eq!(visible_size(&state, id, c).0, 127);
+    }
+
+    #[tokio::test]
+    async fn toggle_off_restores() {
+        let (mut state, id, session) = sidebar_state((160, 50));
+        let status = status_lines(&state.model, session);
+        show_sidebar(&mut state, id);
+        assert_eq!(window_size(&state, id, session).0, 127);
+        crate::server::sidebar::set(&mut state, id, crate::server::sidebar::SidebarOp::Off)
+            .expect("sidebar off");
+        assert_eq!(window_size(&state, id, session), (160, 50 - status));
+    }
+
+    #[test]
+    fn widening_keeps_cells_and_leaves_blank_columns() {
+        let mut s = Screen::new(2, 2);
+        s.cells[2].c = 'x';
+        let w = widen(s, 4);
+        assert_eq!((w.cols, w.rows), (4, 2));
+        assert_eq!(w.cells[4].c, 'x');
+        assert_eq!(w.cells[2].c, ' ');
+    }
+
     #[test]
     fn a_new_client_takes_the_size_only_after_the_debounce() {
         let (a, b) = (ClientId(1), ClientId(2));
@@ -4937,5 +5517,19 @@ mod tests {
         // Unchanged: nothing is sent.
         assert!(outbox.offer(screen_with('b'), &caps));
         assert!(rx.try_recv().is_err());
+    }
+
+    /// A removed client takes its sidebar and grid state with it.
+    #[tokio::test]
+    async fn remove_drops_sidebar_and_grid_state() {
+        let (mut state, id, _session) = sidebar_state((160, 50));
+        show_sidebar(&mut state, id);
+        crate::server::grid::open(&mut state, id).expect("grid");
+        assert!(state.grids.is_open(id));
+        remove(&mut state, id, None);
+        assert!(!state.grids.is_open(id));
+        assert_eq!(crate::server::grid::deadline(&state), None);
+        assert!(!crate::server::sidebar::is_focused(&state, id));
+        assert!(!state.sidebars.has(id));
     }
 }

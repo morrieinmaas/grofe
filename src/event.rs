@@ -94,6 +94,15 @@ pub enum Event {
         name: String,
         value: Option<String>,
     },
+    /// A pane's agent state changed; `old` is null for a new record, `new`
+    /// null once the record is gone.
+    AgentChanged {
+        pane: PaneId,
+        uid: String,
+        kind: Option<String>,
+        old: Option<String>,
+        new: Option<String>,
+    },
     EventsDropped {
         count: u64,
     },
@@ -119,6 +128,7 @@ impl Event {
             Event::AlertActivity { .. } => "alert-activity",
             Event::AlertSilence { .. } => "alert-silence",
             Event::OptionChanged { .. } => "option-changed",
+            Event::AgentChanged { .. } => "agent-changed",
             Event::EventsDropped { .. } => "events-dropped",
         }
     }
@@ -130,7 +140,9 @@ impl Event {
     pub fn subject(&self) -> Subject {
         let mut s = Subject::default();
         match self {
-            Event::PaneExited { pane, .. } | Event::PaneOutput { pane, .. } => s.pane = Some(*pane),
+            Event::PaneExited { pane, .. }
+            | Event::PaneOutput { pane, .. }
+            | Event::AgentChanged { pane, .. } => s.pane = Some(*pane),
             Event::PaneDied { pane, window, .. } | Event::PaneResized { pane, window } => {
                 s.pane = Some(*pane);
                 s.window = Some(*window);
