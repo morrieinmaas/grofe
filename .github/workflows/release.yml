@@ -50,13 +50,24 @@ jobs:
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           [ "v$version" = "$TAG" ] || { echo "tag $TAG but Cargo.toml says $version" >&2; exit 1; }
 
-      - name: musl tools, cargo-deb and cargo-generate-rpm
+      - name: cargo-deb and cargo-generate-rpm
+        if: runner.os == 'Linux'
+        run: cargo install --locked cargo-deb cargo-generate-rpm
+
+      # Natively on Alpine (musl), which has the C++ compiler mlua's Luau
+      # needs; musl-tools on Ubuntu has none. The result is static.
+      - name: Build (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
-          cargo install --locked cargo-deb cargo-generate-rpm
+          docker run --rm -v "$PWD:/src" -w /src rust:1-alpine sh -euc '
+            apk add --no-cache g++ musl-dev
+            rustup toolchain install
+            rustup target add ${{ matrix.target }}
+            cargo build --release --locked --target ${{ matrix.target }}'
+          sudo chown -R "$(id -u):$(id -g)" target
 
-      - name: Build
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
         run: |
           rustup target add ${{ matrix.target }}
           cargo build --release --locked --target ${{ matrix.target }}
