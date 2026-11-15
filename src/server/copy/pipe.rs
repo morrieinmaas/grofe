@@ -29,7 +29,8 @@ use super::{Action, Ctx, Mode};
 use crate::cmd;
 use crate::server::dispatch::options::{FormatCtx, ServerVars};
 use crate::server::shell_jobs::ShellJobs;
-use crate::server::{State, hooks, pane};
+use crate::server::spawn;
+use crate::server::{State, hooks};
 use crate::types::PaneId;
 
 /// Each pipe command and the copy command it copies as.
@@ -206,21 +207,12 @@ pub async fn run(
     timeout: Duration,
     jobs: &ShellJobs,
 ) -> Option<ExitStatus> {
-    let child = {
-        let _lock = pane::spawn_lock();
-        tokio::process::Command::new("/bin/sh")
-            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
-            .arg0("sh")
-            .arg("-c")
-            .arg(command)
-            .env_clear()
-            .envs(env)
+    let child = spawn::spawn(
+        spawn::sh(command, Some(env))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-    };
+            .process_group(0),
+    );
     let mut child = match child {
         Ok(child) => child,
         Err(e) => {

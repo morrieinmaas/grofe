@@ -11,6 +11,8 @@
 //! `-F`, `display-message -p` and `-c` expand against that pane, its
 //! window and its session.
 
+use crate::cmd::NoVars;
+use crate::util::quote;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -68,20 +70,20 @@ struct Builtin {
     default: &'static str,
 }
 
-// ponytail: only the options M1 to M3 need. `history-limit`, `base-index`
-// and `pane-base-index` take effect through the model (T3.5).
+// ponytail: only the options grofe has a use for. `history-limit`,
+// `base-index` and `pane-base-index` take effect through the model.
 //
-// M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
-// tmux's except where grofe differs on purpose or M2 formats cannot yet say
-// the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
+// The window, status and key rows use tmux's names and scopes (tmux 3.7b
+// bounds). Their defaults are tmux's except where grofe differs on purpose or
+// the native formats cannot say the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
 // `#{b:pane_current_path}` (spec §4.5), and `status-right`'s pane title
 // untrimmed (tmux's is `#{=21:pane_title}`; the native language has no `=`
 // trim, so a title over 21 columns shows whole). The window formats are
 // tmux's, `#I:#W` spelled out (TC.11, D8). tmux's escape-time is a server
 // option; grofe's server scope is global.
 //
-// M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
-// where grofe differs: `mouse` on (tmux off), `focus-events` on (tmux
+// The mouse, focus and border rows use tmux's names and scopes with spec
+// §5.3's defaults where grofe differs: `mouse` on (tmux off), `focus-events` on (tmux
 // off), `pane-active-border-style`
 // `fg=green` (tmux's is a format that also colours copy mode and
 // synchronized panes). `status-position` takes `top` from TC.11.
@@ -145,6 +147,36 @@ const GROFE_ONLY: &[&str] = &[
     "prompt-position",
 ];
 
+/// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
+/// `BUILTINS` rows) and treated the same: tmux's CLI calls them invalid.
+const GROFE_ONLY_LISTS: &[&str] = &["copy-hint-patterns"];
+
+/// `copy-hint-patterns`' default: regular expressions, tried in order, for
+/// copy mode's hints (`copy-mode -h`). A pattern with a capture group
+/// hints that group, so a leading boundary can stay out of the match.
+const HINT_PATTERNS: &[&str] = &[
+    // URLs, less trailing punctuation.
+    r#"(?:https?|ftp|file|ssh|git)://[^\s<>"'`()\[\]{}]*[^\s<>"'`()\[\]{}.,;:!?]"#,
+    // Absolute, home and dot paths.
+    r#"(?:^|[\s"'(=:])((?:~|\.{1,2})?(?:/[\w.@%+~-]+)+/?)"#,
+    // Relative paths with a slash.
+    r#"(?:^|[\s"'(=])((?:[\w.@%+~-]+/)+[\w.@%+~-]+/?)"#,
+    // IPv6.
+    r"(?:^|[\s\[(])((?:(?:[0-9a-fA-F]{1,4}:){1,6}|:):[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5}|(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4})\b",
+    // IPv4.
+    r"\b\d{1,3}(?:\.\d{1,3}){3}\b",
+    // Git hashes.
+    r"\b[0-9a-f]{7,40}\b",
+    // Numbers of four or more digits.
+    r"\b\d{4,}\b",
+];
+
+/// [`HINT_PATTERNS`], for the tests of copy mode's hints.
+#[cfg(test)]
+pub fn default_hint_patterns() -> &'static [&'static str] {
+    HINT_PATTERNS
+}
+
 /// `pane-border-format`'s default, tmux 3.7b's: its `[z]` and `[x]`
 /// buttons are `control|8` and `control|9`.
 pub const PANE_BORDER_FORMAT: &str = "#{?pane_active,#[reverse],}#{pane_index}#[default] \
@@ -169,7 +201,7 @@ pub fn frame_title_format(ends: &str) -> String {
 
 /// Whether `name` is a built-in tmux's CLI must not see ([`GROFE_ONLY`]).
 pub fn is_grofe_only(name: &str) -> bool {
-    GROFE_ONLY.contains(&name)
+    GROFE_ONLY.contains(&name) || GROFE_ONLY_LISTS.contains(&name)
 }
 
 /// `bell-action`, `activity-action` and `silence-action`'s choices.
@@ -208,7 +240,7 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "50",
     },
-    // M5 stub: copy mode's options, with tmux 3.7b's scopes and defaults
+    // Copy mode's options, with tmux 3.7b's scopes and defaults
     // (`copy-command` is a server option there, global here).
     Builtin {
         name: "word-separators",
@@ -742,8 +774,7 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "off",
     },
-    // M3.6 (the stub edit): the server's identity override (spec D12).
-    // TC.1 reads it once at start; until then nothing does.
+    // The server's identity override (spec D12), read once at start.
     Builtin {
         name: "compat-identity",
         doc: "Whether the server behaves as grofe or as tmux; auto decides by the name it was started under. Fixed when the server starts.",
@@ -751,9 +782,8 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "auto",
     },
-    // M4 (the stub edit; spec §6): whether a starting server restores the
-    // snapshot, and the spread of resumed panes' start delays. grofe's own
-    // names; T4.3 and T4.4 read them, nothing does until then.
+    // Spec §6: whether a starting server restores the snapshot, and the
+    // spread of resumed panes' start delays. grofe's own names.
     Builtin {
         name: "restore-on-start",
         doc: "Bring back the last snapshot's sessions when the server starts.",
@@ -845,7 +875,7 @@ const BUILTINS: &[Builtin] = &[
     // (`Model::default_command`, `Model::default_shell`);
     // its default is the server's shell, as tmux's `getshell` picks it
     // (`compat::server_started`).
-    // Copy mode reads `mode-keys` (M5).
+    // Copy mode reads `mode-keys`.
     Builtin {
         name: "aggressive-resize",
         doc: "Resize a window to the clients that show it rather than to every client attached to the session.",
@@ -1524,7 +1554,7 @@ pub enum Owner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub value: String,
-    /// Set with `--persist`: M4 includes it in the snapshot.
+    /// Set with `--persist`: the snapshot includes it.
     pub persist: bool,
 }
 
@@ -2270,15 +2300,6 @@ fn is_text(name: &str) -> bool {
     name.starts_with('@') || builtin(name).is_some_and(|b| b.kind == Kind::String)
 }
 
-/// No format variables: `-F` with no pane to expand against.
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
-    }
-}
-
 /// `option-changed`, emitted only for a real change (spec §4.2).
 fn option_changed(model: &mut Model, events: &mut Events, owner: Owner, name: &str) {
     if name == "graphics" {
@@ -2377,7 +2398,7 @@ fn show_options(model: &Model, ctx: &ClientCtx, c: ShowOptions) -> Result<String
             let shown = if colour {
                 value.to_string()
             } else {
-                quote(value)
+                quote::tmux_arg(value)
             };
             let star = if inherited { "*" } else { "" };
             format!("{name}{star} {shown}\n")
@@ -2507,7 +2528,7 @@ fn line_raw(name: &str, value: &str, value_only: bool) -> String {
     if value_only {
         format!("{value}\n")
     } else {
-        format!("{name} {}\n", quote(value))
+        format!("{name} {}\n", quote::tmux_arg(value))
     }
 }
 
@@ -2577,7 +2598,7 @@ fn tmux_inherited_listing(model: &Model, owner: Owner, value_only: bool) -> Stri
     let parents = &owner_chain(model, owner)[1..];
     let star = |name: &str, text: &str| match value_only {
         true => format!("{text}\n"),
-        false => format!("{name}* {}\n", quote(text)),
+        false => format!("{name}* {}\n", quote::tmux_arg(text)),
     };
     let mut out = String::new();
     for (name, e) in o.at(owner) {
@@ -2669,63 +2690,6 @@ fn tmux_listing(model: &Model, owner: Owner, value_only: bool) -> String {
     out
 }
 
-/// A value as `show-options` prints it, as tmux 3.7b's `args_escape` does:
-/// `''` when empty; double quotes when it holds any of `` #';${}%`` (with
-/// `"`, `$` and `\` escaped inside); else single quotes when it holds `"`;
-/// a lone special character or `~` backslash-escaped; a leading `~`
-/// escaped; control characters C-style or octal.
-pub(crate) fn quote(value: &str) -> String {
-    const DOUBLE: &str = " #';${}%";
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    let quotes = if value.contains(|c| DOUBLE.contains(c)) {
-        Some('"')
-    } else if value.contains('"') {
-        Some('\'')
-    } else {
-        None
-    };
-    let mut chars = value.chars();
-    if let (Some(c), None) = (chars.next(), chars.next())
-        && c != ' '
-        && (quotes.is_some() || c == '~')
-    {
-        return format!("\\{c}");
-    }
-    let mut escaped = String::new();
-    let mut it = value.chars().peekable();
-    while let Some(c) = it.next() {
-        match c {
-            // As tmux's `utf8_stravis`: `$` only before a name (M5: the
-            // `word-separators` default holds `$%`).
-            '$' if quotes == Some('"')
-                && !it
-                    .peek()
-                    .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{') =>
-            {
-                escaped.push('$');
-            }
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\t' => escaped.push_str("\\t"),
-            '\r' => escaped.push_str("\\r"),
-            '"' | '$' if quotes == Some('"') => {
-                escaped.push('\\');
-                escaped.push(c);
-            }
-            c if c.is_ascii_control() => escaped.push_str(&format!("\\{:03o}", c as u32)),
-            c => escaped.push(c),
-        }
-    }
-    let tilde = if escaped.starts_with('~') { "\\" } else { "" };
-    match quotes {
-        Some('"') => format!("\"{tilde}{escaped}\""),
-        Some(_) => format!("'{escaped}'"),
-        None => format!("{tilde}{escaped}"),
-    }
-}
-
 /// Where the server reads its config: the process environment (R5). Unit
 /// tests never read the real config dir.
 fn config_env() -> config::Env {
@@ -2752,9 +2716,47 @@ fn load_config() -> Result<Resolved, Vec<config::ConfigError>> {
             };
             let files: Vec<PathBuf> = files
                 .into_iter()
-                .filter(|f| f != Path::new("/dev/null") && f.exists())
+                .filter(|f| f != Path::new("/dev/null") && f.exists() && !is_tmux_conf(f))
                 .collect();
             config::load_with_file(&only, &files)
+        }
+    }
+}
+
+/// A `tmux -f` file is tmux config (not grofe TOML) when a CLI run as
+/// `tmux` started the server, as `source-file` reads a file by dialect;
+/// a `.toml` stays grofe's.
+fn is_tmux_conf(file: &Path) -> bool {
+    crate::compat::started_as_tmux() && file.extension().is_none_or(|e| e != "toml")
+}
+
+/// Sources the `tmux -f` files that are tmux config, in order, after the
+/// server took tmux's defaults. A missing file or `/dev/null` is no
+/// config; an error is logged and the next file still loads.
+pub fn source_start_files(state: &mut State) {
+    let files = crate::compat::start_config().unwrap_or_default();
+    for file in files {
+        if file == Path::new("/dev/null") || !file.exists() || !is_tmux_conf(&file) {
+            continue;
+        }
+        let ctx = ClientCtx {
+            cwd: PathBuf::from("/"),
+            pane: None,
+            env: Vec::new(),
+            client: None,
+            dialect: Dialect::Tmux,
+        };
+        let c = SourceFile {
+            quiet: false,
+            format: false,
+            parse_only: false,
+            verbose: false,
+            target: None,
+            paths: vec![glob_escape(&file)],
+        };
+        match source_file(state, &ctx, c) {
+            Ok(_) => {}
+            Err(e) => eprintln!("grofe config: {}: {e}", file.display()),
         }
     }
 }
@@ -3424,14 +3426,13 @@ pub(crate) fn tmux_command_line(cmds: &[Vec<String>]) -> String {
 }
 
 fn tmux_command(argv: &[String]) -> String {
-    use crate::cmd::parse::escape_arg;
     let Some((name, args)) = argv.split_first() else {
         return String::new();
     };
     let Ok(spec) = crate::compat::tmux::resolve(name) else {
         // A native-only verb: as it is.
         let mut out = vec![name.clone()];
-        out.extend(args.iter().map(|a| escape_arg(a)));
+        out.extend(args.iter().map(|a| quote::tmux_arg(a)));
         return out.join(" ");
     };
     // Flags taking a value: `[-c word]` in the usage (and `select-pane
@@ -3486,12 +3487,12 @@ fn tmux_command(argv: &[String]) -> String {
     }
     for (flag, vals) in &values {
         for v in vals {
-            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+            out.push_str(&format!(" -{flag} {}", quote::tmux_arg(v)));
         }
     }
     for a in &args[i.min(args.len())..] {
         out.push(' ');
-        out.push_str(&escape_arg(a));
+        out.push_str(&quote::tmux_arg(a));
     }
     out
 }
@@ -3501,7 +3502,12 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     let cmds: Vec<String> = b
         .cmds
         .iter()
-        .map(|argv| argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "))
+        .map(|argv| {
+            argv.iter()
+                .map(|a| quote::tmux_arg(a))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
         .collect();
     let source = match &b.source {
         BindingSource::Default => "default".to_string(),
@@ -3511,7 +3517,7 @@ fn binding_line(table: &str, key: &Key, b: &Binding, home: Option<&Path>) -> Str
     };
     let mut line = format!(
         "bind-key {repeat}-T {table} {} {}  # {source}",
-        quote(&key.to_string()),
+        quote::tmux_arg(&key.to_string()),
         cmds.join(" \\; ")
     );
     if let Some(desc) = &b.desc {
@@ -5151,8 +5157,7 @@ impl FormatVars for FormatCtx<'_> {
                 let since = m.started?.duration_since(std::time::UNIX_EPOCH).ok()?;
                 return Some(since.as_secs().to_string());
             }
-            // ponytail: stubs until the features exist: copy mode (M5),
-            // and the status range under
+            // ponytail: stubs until the features exist: the status range under
             // the mouse, which only a mouse-bound command sees (TC.10).
             // `client_tty` is a client's (`ClientVars`), empty with none.
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "client_tty"
@@ -5282,7 +5287,7 @@ impl FormatVars for FormatCtx<'_> {
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
-            // M4 (spec §6): the pane's resume argv, quoted as
+            // Spec §6: the pane's resume argv, quoted as
             // `pane_start_command`; the reason a resume is expected and
             // none is known; whether the pane came from a snapshot.
             "pane_resume" => p
@@ -5290,7 +5295,7 @@ impl FormatVars for FormatCtx<'_> {
                 .as_deref()
                 .map(|argv| {
                     argv.iter()
-                        .map(|a| escape_arg(a))
+                        .map(|a| quote::tmux_arg(a))
                         .collect::<Vec<_>>()
                         .join(" ")
                 })
@@ -5307,7 +5312,7 @@ impl FormatVars for FormatCtx<'_> {
                 .as_deref()
                 .map(|argv| {
                     argv.iter()
-                        .map(|a| escape_arg(a))
+                        .map(|a| quote::tmux_arg(a))
                         .collect::<Vec<_>>()
                         .join(" ")
                 })
@@ -5432,8 +5437,8 @@ impl FormatVars for FormatCtx<'_> {
             "pane_start_path" => p.cwd.display().to_string(),
             "window_linked" => flag(w.links.len() > 1),
             "window_linked_sessions" => m.linked_units(w.id).to_string(),
-            // ponytail: `client_width`/`client_height` need clients (M2);
-            // `host` and `host_short` are `ServerVars`' (TC.11).
+            // `client_width`/`client_height` are `ClientVars`', `host` and
+            // `host_short` are `ServerVars`'.
             // The emulator's screen state (`cursor_x`, `wrap_flag`, ...).
             _ => return p.handle.term_var(name),
         })
@@ -5579,8 +5584,6 @@ fn window_flags(
     format!("{activity}{rest}")
 }
 
-pub(crate) use crate::cmd::format::escape_arg;
-
 /// A pane's top-left cell in its window: the layout's, or the window's
 /// origin for a zoomed window's active pane.
 fn pane_origin(w: &crate::server::model::Window, pane: PaneId) -> Option<(u16, u16)> {
@@ -5709,6 +5712,13 @@ const LISTS: &[ListBuiltin] = &[
         scope: OptionScope::Global,
         default: &[],
     },
+    // grofe's own (`GROFE_ONLY`): copy mode's hints.
+    ListBuiltin {
+        name: "copy-hint-patterns",
+        doc: "Regular expressions copy-mode -h labels on screen, tried in order.",
+        scope: OptionScope::Global,
+        default: HINT_PATTERNS,
+    },
 ];
 
 /// The separator tmux 3.7b splits a list option's value on when it is set
@@ -5746,9 +5756,17 @@ fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
     LISTS.iter().find(|l| l.name == name)
 }
 
-/// Every built-in list option's name, in table order.
+/// Every built-in list option tmux knows, in table order.
 pub fn list_names() -> impl Iterator<Item = &'static str> {
-    LISTS.iter().map(|l| l.name)
+    LISTS
+        .iter()
+        .map(|l| l.name)
+        .filter(|n| !GROFE_ONLY_LISTS.contains(n))
+}
+
+/// The list options only grofe's own CLI and config know ([`GROFE_ONLY_LISTS`]).
+pub fn grofe_only_list_names() -> impl Iterator<Item = &'static str> {
+    GROFE_ONLY_LISTS.iter().copied()
 }
 
 /// Options grofe accepts and stores but never reads (spec §4.5, "Options
@@ -6014,6 +6032,11 @@ impl Options {
         persist: bool,
     ) -> Result<bool, String> {
         let l = list_builtin(name).ok_or_else(|| format!("invalid option: {name}"))?;
+        if name == "copy-hint-patterns" {
+            for p in op_values(&op) {
+                regex::Regex::new(p).map_err(|e| format!("bad hint pattern {p}: {e}"))?;
+            }
+        }
         // As tmux: removing from a list this owner doesn't have changes
         // nothing, and must not create an empty one that hides the parent's.
         if matches!(op, ListOp::Remove(_)) && self.list(owner, name).is_none() {
@@ -6324,7 +6347,7 @@ fn list_lines(name: &str, l: &ListEntry, value_only: bool) -> String {
             if value_only {
                 format!("{v}\n")
             } else {
-                format!("{name}[{i}] {}\n", quote(v))
+                format!("{name}[{i}] {}\n", quote::tmux_arg(v))
             }
         })
         .collect()
@@ -6354,7 +6377,7 @@ fn show_list(
         if c.value_only {
             format!("{value}\n")
         } else {
-            format!("{full} {}\n", quote(value))
+            format!("{full} {}\n", quote::tmux_arg(value))
         }
     };
     if list_builtin(base).is_none() {
@@ -7099,7 +7122,7 @@ mod tests {
     }
 
     /// The rows T3.0 adds (R4): tmux's names and scopes, spec §5.3's
-    /// defaults (`set-clipboard` `external` as tmux's, an M5 ruling), and
+    /// defaults (`set-clipboard` `external` as tmux's, a ruling), and
     /// tmux's value checks.
     #[test]
     fn m3_rows_have_grofe_defaults_and_tmux_scopes() {
@@ -7246,13 +7269,6 @@ mod tests {
         assert!(list_names().all(|n| builtin(n).is_none()));
     }
 
-    #[test]
-    fn show_quotes_values_with_spaces() {
-        assert_eq!(quote("a"), "a");
-        assert_eq!(quote("a b"), "\"a b\"");
-        assert_eq!(quote(""), "''");
-    }
-
     /// Each case recorded from tmux 3.7b (`set -g @t <value>; show -g @t`)
     /// on a private socket.
     /// Recorded on tmux 3.7b (`set -g prefix X; show -gv prefix`).
@@ -7272,39 +7288,6 @@ mod tests {
             assert_eq!(validate("prefix", given), Ok(stored.to_string()), "{given}");
         }
         assert_eq!(validate("prefix", "foo"), Err("bad key: foo".to_string()));
-    }
-
-    #[test]
-    fn show_quotes_like_tmux() {
-        for (value, shown) in [
-            ("a#b", "\"a#b\""),
-            ("a{b", "\"a{b\""),
-            ("#{x}", "\"#{x}\""),
-            ("a}b", "\"a}b\""),
-            ("ab", "ab"),
-            ("a\"b", "'a\"b'"),
-            ("a'b", "\"a'b\""),
-            ("a$b", "\"a\\$b\""),
-            ("a;b", "\"a;b\""),
-            ("a\\b", "a\\\\b"),
-            ("~a", "\\~a"),
-            ("a~", "a~"),
-            ("#", "\\#"),
-            ("~", "\\~"),
-            (" ", "\" \""),
-            ("~a b", "\"\\~a b\""),
-            ("a \"b", "\"a \\\"b\""),
-            ("a `b", "\"a `b\""),
-            ("a\tb", "a\\tb"),
-            ("a\nb", "a\\nb"),
-            ("a\u{1}b", "a\\001b"),
-            ("a \\b", "\"a \\\\b\""),
-            ("a,b", "a,b"),
-            ("[a]", "[a]"),
-            ("a%b", "\"a%b\""),
-        ] {
-            assert_eq!(quote(value), shown, "{value:?}");
-        }
     }
 
     #[test]

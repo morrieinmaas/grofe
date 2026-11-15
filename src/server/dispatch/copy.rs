@@ -30,13 +30,17 @@ pub fn copy_mode(state: &mut State, ctx: &ClientCtx, c: CopyMode) -> Result<Stri
         Some(t) => state.model.resolve_pane(t, ctx)?,
         None => pane,
     };
-    if copy::enter(state, pane, source, c.scroll_exit) {
+    let entered = copy::enter(state, pane, source, c.scroll_exit);
+    if entered {
         if let Some(mode) = state.copy.get_mut(pane) {
             mode.hide_position = c.hide_position;
         }
         if c.mouse {
             mouse::start_drag(state);
         }
+    }
+    if c.hints {
+        copy::start_hints(state, pane, entered);
     }
     if c.page_up {
         copy::page_up(state, pane);

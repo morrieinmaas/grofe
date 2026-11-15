@@ -38,6 +38,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use serde::{Deserialize, Serialize};
 
 use crate::paths::{self, Env};
@@ -500,7 +501,10 @@ impl Writer {
 static TERMINATING: AtomicBool = AtomicBool::new(false);
 
 /// The handlers [`on_termination`] replaced (the runtime's), by signal.
-static PREVIOUS: OnceLock<Vec<(nix::libc::c_int, nix::libc::sigaction)>> = OnceLock::new();
+static PREVIOUS: [OnceLock<SigAction>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+
+/// The signals [`on_termination`] watches, in [`PREVIOUS`] order.
+const WATCHED: [Signal; 3] = [Signal::SIGTERM, Signal::SIGHUP, Signal::SIGINT];
 
 /// Whether a termination signal has reached this process. It is set in
 /// the signal handler itself: the runtime hands a signal to its listeners
@@ -517,58 +521,57 @@ extern "C" fn on_termination(
     info: *mut nix::libc::siginfo_t,
     ctx: *mut std::ffi::c_void,
 ) {
-    use nix::libc;
     TERMINATING.store(true, Ordering::SeqCst);
-    let Some(prev) = PREVIOUS.get() else {
-        return;
-    };
-    for (s, act) in prev {
-        if *s != sig {
-            continue;
+    for (s, prev) in WATCHED.iter().zip(&PREVIOUS) {
+        if *s as nix::libc::c_int == sig
+            && let Some(act) = prev.get()
+        {
+            chain(act, sig, info, ctx);
         }
-        let h = act.sa_sigaction;
-        // SAFETY: `h` is the handler `sigaction` reported for `sig`, of
-        // the kind its flags name; only real handlers are replaced.
-        if act.sa_flags & libc::SA_SIGINFO != 0 {
-            let f: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut std::ffi::c_void) =
-                unsafe { std::mem::transmute(h) };
-            f(sig, info, ctx);
-        } else {
-            let f: extern "C" fn(libc::c_int) = unsafe { std::mem::transmute(h) };
-            f(sig);
-        }
+    }
+}
+
+/// Calls the handler `act` holds, the kind its `SA_SIGINFO` flag names
+/// (`SigAction::handler` reads the flag); the default and ignore actions
+/// are never stored.
+fn chain(
+    act: &SigAction,
+    sig: nix::libc::c_int,
+    info: *mut nix::libc::siginfo_t,
+    ctx: *mut std::ffi::c_void,
+) {
+    match act.handler() {
+        SigHandler::Handler(f) => f(sig),
+        SigHandler::SigAction(f) => f(sig, info, ctx),
+        SigHandler::SigDfl | SigHandler::SigIgn => {}
     }
 }
 
 /// Puts [`on_termination`] in front of the runtime's handlers of SIGTERM,
 /// SIGHUP and SIGINT (installed by `serve` and [`spawn_signals`]).
 fn watch_termination() {
-    use nix::libc;
-    let mut prev = Vec::new();
-    for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
-        // SAFETY: a query; `old` is a valid out pointer.
-        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
-        if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } != 0 {
-            continue;
-        }
-        if old.sa_sigaction == libc::SIG_DFL || old.sa_sigaction == libc::SIG_IGN {
-            continue;
-        }
-        prev.push((sig, old));
-    }
-    // Recorded before any is installed, so the handler always finds them.
-    if PREVIOUS.set(prev).is_err() {
-        return;
-    }
-    for (sig, old) in PREVIOUS.get().into_iter().flatten() {
-        let mut new = *old;
-        new.sa_sigaction = on_termination as *const () as usize;
-        new.sa_flags = old.sa_flags | libc::SA_SIGINFO;
-        // SAFETY: `new` is a valid action whose handler is async-signal
-        // safe: an atomic store and the handler it replaced.
-        if unsafe { libc::sigaction(*sig, &new, std::ptr::null_mut()) } != 0 {
+    for (sig, slot) in WATCHED.into_iter().zip(&PREVIOUS) {
+        let new = SigAction::new(
+            SigHandler::SigAction(on_termination),
+            SaFlags::SA_SIGINFO | SaFlags::SA_RESTART,
+            SigSet::empty(),
+        );
+        // SAFETY: `on_termination` is async-signal safe: an atomic store
+        // and the handler it replaced.
+        let Ok(old) = (unsafe { sigaction(sig, &new) }) else {
             eprintln!("grofe server: snapshot writer: cannot watch signal {sig}");
+            continue;
+        };
+        if matches!(old.handler(), SigHandler::SigDfl | SigHandler::SigIgn) {
+            // Nothing to chain to; the default is not ours to replace.
+            // SAFETY: restoring the action just replaced.
+            let _ = unsafe { sigaction(sig, &old) };
+            continue;
         }
+        // ponytail: a signal between the install and this `set` sets the
+        // flag but does not run the runtime's handler (its stream sees the
+        // signal only on a later poll, as before).
+        let _ = slot.set(old);
     }
 }
 
@@ -711,6 +714,35 @@ pub fn pending_panes(model: &Model) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+
+    static PLAIN: AtomicBool = AtomicBool::new(false);
+    static INFO: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn plain(_: nix::libc::c_int) {
+        PLAIN.store(true, Ordering::SeqCst);
+    }
+
+    extern "C" fn info(
+        _: nix::libc::c_int,
+        _: *mut nix::libc::siginfo_t,
+        _: *mut std::ffi::c_void,
+    ) {
+        INFO.store(true, Ordering::SeqCst);
+    }
+
+    /// The previous handler runs, of the kind its `SA_SIGINFO` flag names.
+    /// Calls `chain` directly: raising a real signal would set the
+    /// process-wide termination flag the other tests read.
+    #[test]
+    fn chain_calls_the_previous_handler_of_either_kind() {
+        let none = SigSet::empty();
+        let a = SigAction::new(SigHandler::Handler(plain), SaFlags::empty(), none);
+        chain(&a, 15, std::ptr::null_mut(), std::ptr::null_mut());
+        assert!(PLAIN.load(Ordering::SeqCst) && !INFO.load(Ordering::SeqCst));
+        let b = SigAction::new(SigHandler::SigAction(info), SaFlags::SA_SIGINFO, none);
+        chain(&b, 15, std::ptr::null_mut(), std::ptr::null_mut());
+        assert!(INFO.load(Ordering::SeqCst));
+    }
     use super::*;
 
     fn sample() -> Snapshot {

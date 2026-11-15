@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use grofe::compat::tmux;
 use grofe::protocol::{ClientCtx, Dialect};
-use nix::pty::{Winsize, openpty};
+use nix::pty::Winsize;
 
 use crate::fe_1::grofe_cli;
 use crate::normalize::{Normalizer, fixtures_dir};
@@ -392,7 +392,7 @@ impl Attached {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let pty = openpty(&size, None).expect("openpty");
+        let (pty, _) = grofe::server::pane::open_pty(&size).expect("openpty");
         let slave = |fd: &OwnedFd| Stdio::from(fd.try_clone().expect("dup pty slave"));
         let mut cmd = cli.command(&words(&["attach", "-t", session]));
         cmd.stdin(slave(&pty.slave))
@@ -642,6 +642,7 @@ fn a_tmux_binding_s_prompt_and_confirm_run_in_tmux_s_dialect() {
     });
     client.press(b"\x02u");
     client.press(b"n");
+    // Negative wait: "n" must not confirm.
     thread::sleep(Duration::from_millis(300));
     assert!(!names().contains("confirmed"), "n cancels: {}", names());
     client.press(b"\x02u");

@@ -14,7 +14,7 @@
 //! to *validate* the command strings this module builds, exactly as
 //! `config/load.rs`'s loader will read them back.
 //!
-//! M3.6 (TP.0): every command string (a binding, a hook, an alias, a
+//! Every command string (a binding, a hook, an alias, a
 //! stored `if-shell` branch or menu item) and every option value goes
 //! through the tmux front end's own table ([`tmux::spell`]), so the
 //! converter and the live front end share one mapping: `#(cmd)` becomes a
@@ -30,12 +30,14 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::cmd::format::fnmatch;
 use crate::cmd::{self, Command, RegisterSource};
 use crate::compat::tmux;
 use crate::config::provenance::tilde;
 use crate::config::{self, ConfigError, Ty, toml_type};
 use crate::server::dispatch::options::{ListOp, Options, Owner, by_separator, split_index};
 use crate::server::input::{Key, KeyCode, parse_key};
+use crate::util::quote;
 
 const USAGE: &str = "usage: import-tmux [<tmux.conf>] [-o <path>]";
 
@@ -278,7 +280,7 @@ struct Line {
     /// when more than one command shares it).
     text: String,
     words: Vec<Word>,
-    /// A `{ ... }` command block (spec 5.5, M3.6): reported once, as a
+    /// A `{ ... }` command block (spec 5.5): reported once, as a
     /// whole, never tokenized into `words`.
     is_block: bool,
 }
@@ -787,7 +789,7 @@ impl Importer {
 
     fn dispatch(&mut self, file: &Path, l: &Line) {
         if l.is_block {
-            // Reported once, as a whole (spec 5.5, M3.6): grofe does not
+            // Reported once, as a whole (spec 5.5): grofe does not
             // evaluate `{ ... }` command blocks yet.
             return self.report(file, l.line, "command block", &l.text);
         }
@@ -872,7 +874,7 @@ impl Importer {
             return self.report(
                 file,
                 line,
-                "format-expanded, pane or targeted option (not config in M3.5)",
+                "format-expanded, pane or targeted option (not config)",
                 text,
             );
         }
@@ -1469,12 +1471,12 @@ impl Importer {
     /// superseded line so it is still accounted for.
     fn upsert_key(&mut self, new: BindingEntry) {
         if self.tpm_ran {
-            let (table, key) = (single_quote(&new.table), single_quote(&new.key.to_string()));
+            let (table, key) = (quote::sh(&new.table), quote::sh(&new.key.to_string()));
             let text = match new.command.as_str() {
                 "" => format!("unbind-key -T {table} {key}"),
                 cmd => {
                     let r = if new.repeat { "-r " } else { "" };
-                    format!("bind-key {r}-T {table} {key} {}", single_quote(cmd))
+                    format!("bind-key {r}-T {table} {key} {}", quote::sh(cmd))
                 }
             };
             self.load_commands.push(RuntimeEntry {
@@ -1572,7 +1574,7 @@ impl Importer {
     }
 
     /// A `source-file <path>` sub-command whose path resolves to a file
-    /// currently on the inclusion chain becomes `reload` (M3 ledger).
+    /// currently on the inclusion chain becomes `reload`.
     fn try_reload_rewrite(&self, file: &Path, group: &[&Word]) -> Option<String> {
         let first = group.first()?;
         if !matches!(first.value.as_str(), "source-file" | "source") {
@@ -1976,7 +1978,7 @@ impl Importer {
                 // ponytail: a plugin path with a space in it is not quoted for sh.
                 let path = tilde(&p, self.home.as_deref());
                 self.load_commands.push(RuntimeEntry {
-                    text: format!("run-shell {}", single_quote(&path)),
+                    text: format!("run-shell {}", quote::sh(&path)),
                     file: file.to_path_buf(),
                     line,
                 });
@@ -2109,7 +2111,7 @@ impl Importer {
     /// prompt template, menu items) translated the same way. A command the
     /// front end leaves as sent keeps its source text (quotes and `$VAR`
     /// as written). `mouse` when the binding is a mouse key's, where a bare
-    /// `=` target is the pointer's (M36-R3) in either grammar.
+    /// `=` target is the pointer's in either grammar.
     fn native_command(
         &mut self,
         file: &Path,
@@ -2301,7 +2303,7 @@ impl Importer {
                     tilde(&entry.file, self.home.as_deref()),
                     entry.line,
                     local_key(toml_key),
-                    literal(toml_key, &entry.value)
+                    config::literal(toml_key, &entry.value)
                 ),
             ));
         }
@@ -2332,7 +2334,7 @@ impl Importer {
                     "# {}:{}\n{},\n",
                     tilde(&c.file, self.home.as_deref()),
                     c.line,
-                    quote(&c.text)
+                    quote::toml_str(&c.text)
                 ));
             }
             text.push_str("]\n");
@@ -2386,7 +2388,7 @@ impl Importer {
                 "\n[status.sources.{name}]\n# {}:{}\ncmd = {}\n",
                 tilde(&s.file, self.home.as_deref()),
                 s.line,
-                quote(&s.cmd)
+                quote::toml_str(&s.cmd)
             ));
         }
 
@@ -2408,7 +2410,7 @@ impl Importer {
                     tilde(&e.file, self.home.as_deref()),
                     e.line,
                     key_toml(name),
-                    quote(&e.value)
+                    quote::toml_str(&e.value)
                 ));
             }
         }
@@ -2421,7 +2423,7 @@ impl Importer {
                     tilde(&h.file, self.home.as_deref()),
                     h.line,
                     h.event,
-                    quote(&h.command)
+                    quote::toml_str(&h.command)
                 ));
             }
         }
@@ -2449,7 +2451,7 @@ impl Importer {
                 out.push_str(&format!(
                     "{} = {}\n",
                     key_toml(&b.key.to_string()),
-                    binding_value(b)
+                    quote::toml_binding(&b.command, &[("desc", b.desc.as_deref())], b.repeat)
                 ));
             }
         }
@@ -2521,7 +2523,7 @@ fn validate_command(s: &str, aliases: &[String]) -> Result<(), String> {
 /// and the native parser reads it exactly as the front end would, so no
 /// tmux-only target (an offset, a bare `=`) is left. An exact `=name` is
 /// the same in both grammars, so it is written as it is. In a mouse key's
-/// commands a bare `=` is the pointer's target in both grammars (M36-R3),
+/// commands a bare `=` is the pointer's target in both grammars,
 /// checked with a pane id in its place. `SetOption::shown` only records
 /// what a tmux-dialect `show` prints, so it is not compared.
 fn spelled_as(spelled: &[String], command: &Command, mouse: bool) -> Option<Vec<String>> {
@@ -2675,61 +2677,13 @@ fn glob_sorted(resolved: &str) -> Vec<PathBuf> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.file_name())
-        .filter(|name| glob_match(pattern, &name.to_string_lossy()))
+        // As glob(3): a leading `.` is matched only by a `.` in the pattern.
+        .filter(|name| pattern.starts_with('.') || !name.to_string_lossy().starts_with('.'))
+        .filter(|name| fnmatch(pattern.as_bytes(), name.to_string_lossy().as_bytes()))
         .map(|name| dir.join(name))
         .collect();
     out.sort();
     out
-}
-
-/// A small shell-style glob matcher: `*` any run of characters, `?` one
-/// character, `[abc]`/`[a-z]`/`[!abc]` a character class (canopy's
-/// `[1-9]*.conf`). No `**`, no brace expansion: tmux's own globbing for
-/// `source-file` is this small too.
-fn glob_match(pattern: &str, name: &str) -> bool {
-    fn go(pat: &[char], s: &[char]) -> bool {
-        match pat.first() {
-            None => s.is_empty(),
-            Some('*') => go(&pat[1..], s) || (!s.is_empty() && go(pat, &s[1..])),
-            Some('?') => !s.is_empty() && go(&pat[1..], &s[1..]),
-            Some('[') => {
-                let Some(close) = pat.iter().position(|c| *c == ']').filter(|&i| i > 0) else {
-                    return !s.is_empty() && s[0] == '[' && go(&pat[1..], &s[1..]);
-                };
-                let Some(&c) = s.first() else {
-                    return false;
-                };
-                let mut class = &pat[1..close];
-                let negate = class.first() == Some(&'!');
-                if negate {
-                    class = &class[1..];
-                }
-                let mut matched = false;
-                let mut i = 0;
-                while i < class.len() {
-                    if i + 2 < class.len() && class[i + 1] == '-' {
-                        if class[i] <= c && c <= class[i + 2] {
-                            matched = true;
-                        }
-                        i += 3;
-                    } else {
-                        if class[i] == c {
-                            matched = true;
-                        }
-                        i += 1;
-                    }
-                }
-                if matched == negate {
-                    return false;
-                }
-                go(&pat[close + 1..], &s[1..])
-            }
-            Some(&pc) => s.first() == Some(&pc) && go(&pat[1..], &s[1..]),
-        }
-    }
-    let pat: Vec<char> = pattern.chars().collect();
-    let s: Vec<char> = name.chars().collect();
-    go(&pat, &s)
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -2791,65 +2745,39 @@ fn local_key(toml_key: &str) -> &str {
     toml_key.rsplit_once('.').map_or(toml_key, |(_, k)| k)
 }
 
-/// A value in its config literal form, the way `show-config`'s private
-/// `literal()` in `config/cli.rs` renders it (the same few lines, copied
-/// here rather than exposed: `cli.rs` stays untouched).
-fn literal(toml: &str, value: &str) -> String {
-    match (toml_type(toml), toml, value) {
-        (Ty::Bool, _, v) => (v == "on").to_string(),
-        (Ty::Int, "status.lines", "off") => "0".to_string(),
-        (Ty::Int, "status.lines", "on") => "1".to_string(),
-        (Ty::Int, _, v) => v.to_string(),
-        (Ty::Str, _, v) => quote(v),
-    }
-}
-
-fn quote(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
-}
-
-/// One word in grofe's command grammar: in single quotes, a `'` as `'\''`.
-fn single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
-
-fn bare_or_quoted(s: &str) -> String {
-    let bare = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if bare { s.to_string() } else { quote(s) }
-}
-
-/// A binding's key, as a TOML key: [`bare_or_quoted`], except a lone `-`
+/// A binding's key, as a TOML key: [`quote::toml_key`], except a lone `-`
 /// is always quoted too. The brief lists it alongside `|`, `(` and `"` as
-/// needing quotes; `bare_or_quoted` alone (copied from `config/cli.rs`,
-/// which never renders a lone `-` key) would leave it bare, since a
+/// needing quotes; `toml_key` alone (which `show-config` uses, and which
+/// never renders a lone `-` key) would leave it bare, since a
 /// single dash is technically a legal bare TOML key.
 fn key_toml(s: &str) -> String {
     if s == "-" {
-        quote(s)
+        quote::toml_str(s)
     } else {
-        bare_or_quoted(s)
+        quote::toml_key(s)
     }
-}
-
-fn binding_value(b: &BindingEntry) -> String {
-    if b.desc.is_none() && !b.repeat {
-        return quote(&b.command);
-    }
-    let mut fields = vec![format!("cmd = {}", quote(&b.command))];
-    if let Some(d) = &b.desc {
-        fields.push(format!("desc = {}", quote(d)));
-    }
-    if b.repeat {
-        fields.push("repeat = true".to_string());
-    }
-    format!("{{ {} }}", fields.join(", "))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_file_globs_skip_dotfiles_like_glob3() {
+        let dir = tempfile::tempdir().expect("tmp");
+        for f in ["a.conf", ".h.conf", "[x].conf"] {
+            fs::write(dir.path().join(f), "").expect("write");
+        }
+        let at = |p: &str| glob_sorted(&format!("{}/{p}", dir.path().display()));
+        let names = |v: Vec<PathBuf>| -> Vec<String> {
+            v.iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(names(at("*.conf")), ["[x].conf", "a.conf"]);
+        assert_eq!(names(at(".*.conf")), [".h.conf"]);
+        assert_eq!(names(at("?.conf")), ["a.conf"]);
+    }
 
     fn words(s: &str) -> Vec<String> {
         tokenize_words(s).into_iter().map(|w| w.value).collect()
@@ -3108,12 +3036,6 @@ mod tests {
             env_refs_outside_single_quotes(r#"run-shell "$A/b" '$B'"#),
             vec!["A".to_string()]
         );
-    }
-
-    #[test]
-    fn glob_matches_leading_digit_class() {
-        assert!(glob_match("[1-9]*.conf", "20-status.conf"));
-        assert!(!glob_match("[1-9]*.conf", "00-core.conf"));
     }
 
     #[test]

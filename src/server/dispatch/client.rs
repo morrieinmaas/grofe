@@ -67,7 +67,12 @@ pub fn show_messages(
     }
     Ok(clients::messages(state)
         .rev()
-        .map(|(time, text)| format!("{}: {text}\n", clients::pretty_time(*time)))
+        .map(|(time, text)| {
+            let secs = time
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+            format!("{}: {text}\n", crate::cmd::format::time::pretty_time(secs))
+        })
         .collect())
 }
 

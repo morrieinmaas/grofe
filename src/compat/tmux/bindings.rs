@@ -2,11 +2,11 @@
 //! menu flags, `new-pane` and `wait-for` (fzf's `--tmux`, M36-R1), the mouse
 //! argv forms.
 //!
-//! Rows and rewrites only: the schema, the dispatcher and the helpers a
+//! Rows only: the schema, the dispatcher and the helpers a
 //! translation uses ([`super::Invocation`]) are `mod.rs`'s. The most
 //! specific matching row decides, and between rows as specific this
 //! file's come before the core rows, so a row here naming a core form
-//! takes it over. Rewrites ([`super::Rewrite`]) apply before any row.
+//! takes it over.
 //!
 //! Every verb here has a native verb of the same name and flag letters
 //! (TC.6, TC.7, TC.9, TC.10), so most rows pass through. A translation
@@ -15,36 +15,31 @@
 //! `if-shell` branch, a menu item, a `confirm-before` command) keep the
 //! request's dialect, so a tmux branch such as `neww` runs as tmux's.
 
-use super::{FlagMark, GrofeTarget, Invocation, MappingKind, Rewrite, Row, TmuxError};
+use super::{FlagMark, GrofeTarget, Invocation, Row, TmuxError};
 use crate::cmd::Command;
 
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
 
+#[cfg_attr(not(test), allow(unused_variables))]
 const fn row(
     tmux_form: &'static str,
-    kind: MappingKind,
     target: GrofeTarget,
     flags: &'static [FlagMark],
     golden_id: &'static str,
 ) -> Row {
     Row {
         tmux_form,
-        kind,
         target,
+        #[cfg(test)]
         flags,
         milestone: "M3.6",
+        #[cfg(test)]
         golden_id,
     }
 }
 
 const fn pass(verb: &'static str, golden_id: &'static str) -> Row {
-    row(
-        verb,
-        MappingKind::PassThrough,
-        GrofeTarget::Native(verb),
-        &[],
-        golden_id,
-    )
+    row(verb, GrofeTarget::Native(verb), &[], golden_id)
 }
 
 /// `inv`'s arguments without the flags in `cosmetic`, each one given noted
@@ -92,21 +87,18 @@ fn new_pane(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
     use GrofeTarget::Translate;
-    use MappingKind::{Behaviour, PassThrough};
     vec![
         // The conditional (TC.10): the format form on the actor, the shell
         // form off it; the branch runs in the request's dialect. A bare
         // `=` target is the pointer's inside a mouse key (M36-R3).
         row(
             "if-shell",
-            Behaviour,
             GrofeTarget::Native("if-shell"),
             &[],
             "fe_4/if-format",
         ),
         row(
             "if-shell -F",
-            Behaviour,
             GrofeTarget::Native("if-shell"),
             SEMANTIC,
             "fe_4/if-format",
@@ -115,7 +107,6 @@ pub(crate) fn rows() -> Vec<Row> {
         // dispatcher expands them before any dialect parses the request.
         row(
             "set-option command-alias",
-            Behaviour,
             Translate(|inv| super::option_command(inv, "set-option", false)),
             &[],
             "fe_4/aliases",
@@ -123,63 +114,36 @@ pub(crate) fn rows() -> Vec<Row> {
         // Popups and floating panes (TC.6).
         row(
             "display-popup",
-            PassThrough,
             Translate(display_popup),
             &[],
             "fe_4/popup-env",
         ),
         row(
             "display-popup -s",
-            PassThrough,
             Translate(display_popup),
             SEMANTIC,
             "fe_4/popup-styles",
         ),
         row(
             "display-popup -S",
-            PassThrough,
             Translate(display_popup),
             SEMANTIC,
             "fe_4/popup-styles",
         ),
-        row(
-            "new-pane",
-            PassThrough,
-            Translate(new_pane),
-            &[],
-            "tc_6/new-pane-fzf",
-        ),
+        row("new-pane", Translate(new_pane), &[], "tc_6/new-pane-fzf"),
         pass("wait-for", "fe_4/fzf"),
         // Menus, prompts and the pane labels (TC.7).
         row(
             "display-menu",
-            PassThrough,
             Translate(display_menu),
             &[],
             "fe_4/menu-over-popup",
         ),
-        row(
-            "display-menu -b",
-            PassThrough,
-            Translate(display_menu),
-            SEMANTIC,
-            "",
-        ),
-        row(
-            "display-menu -O",
-            PassThrough,
-            Translate(display_menu),
-            SEMANTIC,
-            "",
-        ),
+        row("display-menu -b", Translate(display_menu), SEMANTIC, ""),
+        row("display-menu -O", Translate(display_menu), SEMANTIC, ""),
         pass("display-panes", ""),
         pass("confirm-before", "tc_7/confirm-before"),
         pass("choose-tree", ""),
         pass("customize-mode", ""),
     ]
-}
-
-/// This area's argument rewrites, applied before any row matches.
-pub(crate) fn rewrites() -> Vec<Rewrite> {
-    Vec::new()
 }

@@ -40,7 +40,7 @@ done
 ? 0
 $ pipe-pane -t main
 ? 0
-$ pipe-pane -IO -t main 'while read l; do case "$l" in ping*) echo pong;; esac; done'
+$ pipe-pane -IO -t main 'n=0; while read l; do case "$l" in ping*) n=$((n+1)); [ $n = 2 ] && echo pong;; esac; done'
 ? 0
 $ send-keys -t main ping Enter
 ? 0
@@ -55,8 +55,8 @@ ping
 ping
 pong
 pong
-pong
-pong
+
+
 
 
 

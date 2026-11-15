@@ -13,10 +13,14 @@ against send, but some things are not there yet or never will be:
   has tmux identity.
 - **Copy mode and paste buffers** work, with tmux 3.7b's stock `copy-mode-vi`
   and `copy-mode` (emacs) tables.
-- **`tmux -f` takes a grofe TOML file**, not a `tmux.conf`. Convert your
-  config with `grofe import-tmux` first.
-- **Out of scope:** tmux's control mode (`-C` and `-CC`). A window linked
-  twice into one session is refused.
+- **`tmux -f file` takes a `tmux.conf`** through the `tmux` name, in place
+  of the usual config, when the call starts the server. A file named
+  `*.toml` stays grofe's own config, and `grofe`'s own server start reads
+  TOML only (`grofe import-tmux` converts a `tmux.conf`).
+- **Control mode** (`tmux -C` and `-CC`) works as a client-side bridge, for
+  `attach` and `new-session`. Subscriptions and auto-pause are still
+  missing.
+- **Out of scope:** a window linked twice into one session is refused.
 
 Keep real tmux reachable by its full path while you try grofe.
 

@@ -120,7 +120,7 @@ mod env_map {
 }
 
 /// Per-client rendering/input capabilities, probed once against the outer
-/// terminal before the hello (spec §4.4; M2 fills in the probing). Every
+/// terminal before the hello (spec §4.4). Every
 /// field defaults to `false`, and the struct-level `default` means a caps
 /// object missing some (or all) fields, from an older or newer client,
 /// still parses instead of failing the whole hello.

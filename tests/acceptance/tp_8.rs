@@ -32,7 +32,7 @@ use std::process::Command;
 
 use crate::harness::{Harness, require_tool};
 use crate::plugin_rig::{
-    PREFIX, Rig, WAIT, host_tool, private_tmp, read_golden, recording_tmux, wait_until,
+    PREFIX, Rig, WAIT, host_tool, private_tmp, read_golden, recording_tmux, try_wait_until,
     write_golden,
 };
 
@@ -104,7 +104,7 @@ fn show(rig: &Rig, text: &str) {
         "clear; cat text; echo done-$((1))",
         "Enter",
     ]);
-    let shown = wait_until(
+    let shown = try_wait_until(
         || {
             rig.t(&["capture-pane", "-p", "-t", "main:urls"])
                 .lines()

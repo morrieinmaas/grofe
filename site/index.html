@@ -649,8 +649,8 @@ src = <span class="s">"github:tmux-plugins/tmux-yank"</span>
           <h3>Know the gaps first</h3>
           <ul class="gaps">
             <li>TPM itself does not run: <code>grofe pack</code> replaces it. You do not need resurrect or continuum; grofe restores sessions itself.</li>
-            <li><code>tmux -f</code> takes a grofe TOML file, not a <code>tmux.conf</code>.</li>
-            <li>tmux's control mode (<code>-C</code>, <code>-CC</code>) is out of scope, and grofe does not run on Windows.</li>
+            <li>Control mode (<code>-C</code>, <code>-CC</code>) works, but without subscriptions or auto-pause yet.</li>
+            <li>grofe does not run on Windows.</li>
             <li>Keep real tmux installed while you try it. <a href="docs/switching-from-tmux.html">Switching from tmux</a></li>
           </ul>
         </div>

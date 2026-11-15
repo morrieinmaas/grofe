@@ -297,6 +297,28 @@ A shell command that copy mode's copy-pipe commands send the copied text to when
 
 Default: empty
 
+## copy-hint-patterns
+
+Regular expressions copy-mode -h labels on screen, tried in order.
+
+- **TOML key**: `copy-hint-patterns` (array of strings)
+- **Scope**: global
+- **Values**: a list of text, element N at index N
+
+Default:
+
+```text
+[0] (?:https?|ftp|file|ssh|git)://[^\s<>"'`()\[\]{}]*[^\s<>"'`()\[\]{}.,;:!?]
+[1] (?:^|[\s"'(=:])((?:~|\.{1,2})?(?:/[\w.@%+~-]+)+/?)
+[2] (?:^|[\s"'(=])((?:[\w.@%+~-]+/)+[\w.@%+~-]+/?)
+[3] (?:^|[\s\[(])((?:(?:[0-9a-fA-F]{1,4}:){1,6}|:):[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5}|(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4})\b
+[4] \b\d{1,3}(?:\.\d{1,3}){3}\b
+[5] \b[0-9a-f]{7,40}\b
+[6] \b\d{4,}\b
+```
+
+grofe only: tmux does not have this option.
+
 ## copy-mode-current-line-number-style
 
 Style of the current line's number in copy mode.

@@ -814,7 +814,9 @@ fn inline_chunks(
 /// transmit's data, as the server user, honouring `S=` and `O=`. A temp
 /// file kitty would delete, and a shared memory object, are removed once
 /// read. Errors are kitty's `ECODE:message`.
-// ponytail: the read runs on the actor; a slow filesystem stalls it.
+// ponytail: the read runs on the actor (moving it would reorder the reply
+// against the forwarded output the tests pin); it is bounded by `cap`, but a
+// slow filesystem still stalls it.
 fn read_medium(medium: u8, cmd: &Cmd, cap: usize) -> Result<Vec<u8>, String> {
     let name = STANDARD_PAD_INDIFFERENT
         .decode(cmd.payload)
@@ -924,7 +926,13 @@ fn read_shm(name: &str, size: u64, offset: u64, cap: usize) -> Result<Vec<u8>, S
         if want == 0 {
             return Ok(Vec::new());
         }
-        let map_len = (offset as usize) + want;
+        // `span` bounds `want` by `len - offset`; checked again so the
+        // slice below can never reach past the mapping.
+        let map_len = usize::try_from(offset)
+            .ok()
+            .and_then(|o| o.checked_add(want))
+            .filter(|m| *m as u64 <= len)
+            .ok_or_else(|| "EINVAL:offset and size past the end".to_string())?;
         // SAFETY: mapping `map_len` bytes, within the object's size, of a
         // valid fd, read only; unmapped before returning.
         let ptr = unsafe {
@@ -1798,6 +1806,43 @@ mod tests {
         // SAFETY: a valid C string.
         let again = unsafe { libc::shm_open(cname.as_ptr(), libc::O_RDONLY, 0) };
         assert!(again < 0, "the object was unlinked");
+    }
+
+    /// A short object or file, an offset past its end, and an offset plus
+    /// size that overflows are refused, never read out of bounds.
+    #[test]
+    fn media_reads_check_offset_and_size_against_the_length() {
+        let name = format!("/grofe-ws5-{}", std::process::id());
+        let cname = CString::new(name.clone()).expect("name");
+        // SAFETY: a valid C string; the fd is owned right after.
+        let fd = unsafe {
+            libc::shm_open(
+                cname.as_ptr(),
+                libc::O_CREAT | libc::O_RDWR | libc::O_EXCL,
+                0o600,
+            )
+        };
+        assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+        // SAFETY: shm_open returned a fresh fd.
+        let file = File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+        file.set_len(4).expect("ftruncate");
+        // Page-rounded on macOS, so the offsets here are far past any length.
+        for (size, offset) in [(0, 1 << 30), (0, u64::MAX), (u64::MAX, u64::MAX)] {
+            assert!(read_shm(&name, size, offset, 1 << 20).is_err());
+            // Each read unlinks the object; make it again.
+            // SAFETY: a valid C string; the fd is owned right after.
+            let again =
+                unsafe { libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600) };
+            assert!(again >= 0);
+            // SAFETY: shm_open returned a fresh fd.
+            let f = File::from(unsafe { OwnedFd::from_raw_fd(again) });
+            f.set_len(4).expect("ftruncate");
+        }
+        assert!(read_shm(&name, u64::MAX, 2, 1 << 20).is_ok());
+        assert!(span(4, 0, 5, 1 << 20).is_err());
+        assert!(span(4, u64::MAX, u64::MAX, 1 << 20).is_err());
+        assert_eq!(span(4, u64::MAX, 2, 1 << 20), Ok(2));
+        assert!(span(4, 0, 0, 2).is_err(), "over the cap");
     }
 
     /// Case 8: queries are answered for supported media and formats while
