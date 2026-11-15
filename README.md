@@ -262,6 +262,19 @@ The commands are `new-scratchpad`, `toggle-scratchpad`,
 scratchpad-history = 10     # hidden scratchpads kept; the oldest closes past this, 0 closes on hide
 ```
 
+## Coding agents
+
+grofe sees which panes run a coding agent (Claude Code, Codex, Gemini CLI,
+opencode, pi, aider) and which of them are waiting for you. It shows that in
+the status line and window tabs, and tells you through a tray, toasts and
+desktop notifications. No plugin or helper script is needed.
+`grofe agent setup claude` installs the hooks that report an agent's state.
+The keys are `prefix u` (jump to the agent that needs you), `prefix U` (the
+agent picker), `prefix b` (sidebar), `prefix O` (grid of every agent),
+`prefix y` (notification tray) and `prefix Space` (a menu of your key
+bindings; `next-layout` moves to `prefix M-Space`). See
+[docs/agents.md](docs/agents.md) for the full guide.
+
 ## Messages and the prompt
 
 A message (`display-message`, or an error such as `Can't find window`) is a
