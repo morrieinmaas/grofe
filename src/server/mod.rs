@@ -304,6 +304,8 @@ pub struct State {
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
     /// The resume binding sampling timer, while one runs (`resume::watch`).
+    /// The snapshot writer, started by the first [`snapshot::track`].
+    pub(crate) snapshot_writer: Option<snapshot::Writer>,
     pub(crate) resume_timer: Option<tokio::task::AbortHandle>,
     /// Restored panes whose process runs their saved resume, by pane and
     /// spawn generation (`restore`).
@@ -709,6 +711,7 @@ async fn serve(
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        snapshot_writer: None,
         resume_timer: None,
         from_resume: Vec::new(),
         exit: false,
@@ -1449,6 +1452,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        snapshot_writer: None,
         resume_timer: None,
         from_resume: Vec::new(),
         exit: false,

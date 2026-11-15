@@ -434,8 +434,8 @@ impl Io {
     }
 }
 
-/// The actor's side of the writer.
-struct Writer {
+/// The actor's side of the writer, kept in `State::snapshot_writer`.
+pub(crate) struct Writer {
     io: Arc<Io>,
     /// Each pane's cwd at the last sample.
     cwds: HashMap<PaneId, PathBuf>,
@@ -444,10 +444,6 @@ struct Writer {
     had_sessions: bool,
     thread: mpsc::Sender<Snapshot>,
 }
-
-// ponytail: one writer per process, as one server is; a second actor in
-// the same process would share it.
-static WRITER: Mutex<Option<Writer>> = Mutex::new(None);
 
 impl Writer {
     fn start(state: &State) -> Writer {
@@ -621,8 +617,7 @@ fn spawn_signals(io: Arc<Io>) {
 /// Every [`DEBOUNCE`]: samples the panes' cwds, builds, and hands the
 /// snapshot to the writer thread, which writes it if it changed.
 fn tick(state: &mut State) {
-    let mut guard = lock(&WRITER);
-    let Some(w) = guard.as_mut() else {
+    let Some(w) = state.snapshot_writer.as_mut() else {
         return;
     };
     if w.io.frozen.load(Ordering::SeqCst) || terminating() {
@@ -646,8 +641,12 @@ fn tick(state: &mut State) {
 /// state a signal would write; once the server is exiting it writes the
 /// final state synchronously and freezes.
 pub fn track(state: &mut State, output: bool) {
-    let mut guard = lock(&WRITER);
-    let w = guard.get_or_insert_with(|| Writer::start(state));
+    if state.snapshot_writer.is_none() {
+        state.snapshot_writer = Some(Writer::start(state));
+    }
+    let Some(w) = state.snapshot_writer.as_mut() else {
+        return;
+    };
     if w.io.frozen.load(Ordering::SeqCst) {
         return;
     }
@@ -680,10 +679,10 @@ pub fn track(state: &mut State, output: bool) {
 /// disk that disagrees with it. Empty once the writer is frozen or the
 /// server is terminating (nothing more is written); every pane before the
 /// first write.
-pub fn pending_panes(model: &Model) -> HashSet<String> {
+pub fn pending_panes(state: &State) -> HashSet<String> {
+    let model = &state.model;
     let all = || model.panes.values().map(|p| p.uid.clone()).collect();
-    let guard = lock(&WRITER);
-    let Some(w) = guard.as_ref() else {
+    let Some(w) = state.snapshot_writer.as_ref() else {
         return all();
     };
     if w.io.frozen.load(Ordering::SeqCst) || terminating() {
