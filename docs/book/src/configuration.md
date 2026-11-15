@@ -72,3 +72,18 @@ The status line never forks on redraw. `#(...)` commands in it run on a
 timer (`status.interval`, in seconds), one at a time, and their output is
 cached. Anything else dynamic, such as a build result, is pushed in by
 whatever knows the value, so redraws stay instant.
+
+## The look in the screenshots
+
+The screenshots use this config: a pill status bar on top in the Gruvbox
+palette, with the agents badge, and frames whose number and controls get the
+same rounded caps. It ships as
+[`examples/pills.toml`](https://github.com/morrieinmaas/grofe/blob/main/examples/pills.toml);
+copy it into `~/.config/grofe/conf.d/` (it needs a Nerd font), and on a dark
+terminal add
+[`examples/pills-dark.toml`](https://github.com/morrieinmaas/grofe/blob/main/examples/pills-dark.toml)
+after it. The colours are user options, so changing one repaints the bar.
+
+```toml
+{{#include ../../../examples/pills.toml}}
+```
