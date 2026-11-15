@@ -95,6 +95,9 @@ pub enum PaneEventKind {
     /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
     /// the `ESC ]` and terminator.
     Osc(Vec<u8>),
+    /// An OSC 7501 agent status report from the scanner, its body after
+    /// `7501;`. Never relayed to the outer terminal.
+    AgentStatus(Vec<u8>),
 }
 
 /// What to spawn in a new pane.

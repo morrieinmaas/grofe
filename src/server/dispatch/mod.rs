@@ -22,6 +22,9 @@
 //! Shared helpers for handlers that spawn panes live here too:
 //! [`spawn_pane`] and [`resolve_cwd`].
 
+pub(crate) mod agent;
+mod agent_cmd;
+pub(crate) mod agent_new;
 pub mod bindings;
 pub mod buffers;
 pub mod client;
@@ -29,6 +32,7 @@ pub mod copy;
 pub mod hooks;
 pub mod lock;
 pub mod menu;
+pub(crate) mod notify;
 pub mod options;
 pub mod pane;
 pub mod persist;
@@ -49,7 +53,7 @@ use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
-use crate::server::{State, clients, graphics, prompt};
+use crate::server::{State, clients, graphics, grid, keymenu, picker, prompt, sidebar, tray};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
 
@@ -252,6 +256,7 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::ShowBuffer(_)
                 | Command::SaveBuffer(_)
                 | Command::ListBuffers(_)
+                | Command::Agent(cmd::AgentCmd::List { .. })
                 | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
         )
     })
@@ -441,6 +446,31 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::CustomizeMode(c) => client::customize_mode(state, ctx, c),
         // M5: copy mode (TM.1).
         Command::CopyMode(c) => copy::copy_mode(state, ctx, c),
+        Command::Agent(c) => agent_cmd::run(state, ctx, c),
+        Command::ChooseAgent => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            picker::open(state, client).map(|()| String::new())
+        }
+        Command::AgentSidebar(op) => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            sidebar::set(state, client, op)?;
+            clients::resize_for_sidebar(state, client);
+            Ok(String::new())
+        }
+        Command::AgentGrid => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            grid::open(state, client).map(|()| String::new())
+        }
+        Command::ChooseNotification => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            tray::open(state, client).map(|()| String::new())
+        }
+        Command::Notify(c) => notify::run(state, ctx, c),
+        Command::KeyMenu(k) => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            let table = k.table.as_deref().unwrap_or("prefix");
+            keymenu::open(state, client, table).map(|()| String::new())
+        }
     }
 }
 
@@ -613,6 +643,36 @@ mod tests {
             &[],
         ] {
             assert!(!read_only(&argv(words)), "{words:?}");
+        }
+    }
+
+    #[test]
+    fn sidebar_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let r = run(&mut state, &ctx, &argv(&["agent-sidebar", "toggle"]));
+        assert_eq!(r.err().as_deref(), Some("no client"));
+    }
+
+    #[test]
+    fn grid_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let r = run(&mut state, &ctx, &argv(&["agent-grid"]));
+        assert_eq!(r.err().as_deref(), Some("no client"));
+    }
+
+    #[test]
+    fn choose_agent_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        for words in [
+            &["choose-agent"][..],
+            &["key-menu"],
+            &["key-menu", "-T", "root"],
+        ] {
+            let r = run(&mut state, &ctx, &argv(words));
+            assert_eq!(r.err().as_deref(), Some("no client"), "{words:?}");
         }
     }
 }

@@ -95,6 +95,9 @@ pub fn spawned(state: &mut State, pane: PaneId, before: (Option<Vec<String>>, Op
     if (p.resume.as_ref(), p.expect.as_ref()) != (before.0.as_ref(), before.1.as_ref()) {
         raise_changed(state, pane);
     }
+    // A respawned pane is checked at once, whatever the last scan was.
+    state.registry.forget_scan(pane);
+    crate::server::clients::scan_agents(state, &std::collections::BTreeSet::from([pane]));
     watch(state);
 }
 
@@ -199,6 +202,12 @@ fn search_paths(state: &State, ctx: &ClientCtx, p: &Pane, leader: i32) -> Vec<St
             .map(|(_, v)| v.clone())
             .collect();
     }
+    pane_paths(state, p, Some(leader))
+}
+
+/// The `PATH`s of the pane itself: its foreground process's (when known),
+/// then its spawn environment's.
+fn pane_paths(state: &State, p: &Pane, leader: Option<i32>) -> Vec<String> {
     let session = state.model.windows.get(&p.window).map(|w| w.session);
     // The spawn environment: what the server gave the root process, not
     // its environ read back (macOS 27 hides that of Apple's binaries, the
@@ -212,10 +221,32 @@ fn search_paths(state: &State, ctx: &ClientCtx, p: &Pane, leader: i32) -> Vec<St
             .find(|(k, _)| k == "PATH")
             .map(|(_, v)| v)
     });
-    procinfo::env_var(leader, "PATH")
+    leader
+        .and_then(|l| procinfo::env_var(l, "PATH"))
         .into_iter()
         .chain(spawn)
         .collect()
+}
+
+/// `argv` with a plain `argv[0]` name made absolute against the `PATH` of
+/// `pane`'s foreground process, then its spawn environment (a restore under a
+/// minimal `PATH` can then still run it). Best effort: when the name is not
+/// found, or is not a bare name, `argv` is returned as it was.
+pub fn resolve_for_pane(state: &State, pane: PaneId, mut argv: Vec<String>) -> Vec<String> {
+    let (Some(p), Some(name)) = (state.model.panes.get(&pane), argv.first()) else {
+        return argv;
+    };
+    if name.contains('/') {
+        return argv;
+    }
+    let leader = p.handle.foreground_group();
+    if let Some(found) = pane_paths(state, p, leader)
+        .iter()
+        .find_map(|path| lookup(name, path))
+    {
+        argv[0] = found.display().to_string();
+    }
+    argv
 }
 
 /// A shell word that means the same quoted or not: nothing the shell
@@ -268,8 +299,35 @@ fn raise_changed(state: &mut State, pane: PaneId) {
     hooks::resume_changed(state, pane);
 }
 
+/// Removes the agent records of panes that are gone and of agents whose
+/// bound process has exited, each as an `agent-changed` with no new state.
+fn sweep_agents(state: &mut State) {
+    let gone: Vec<PaneId> = state
+        .agents
+        .iter()
+        .filter(|(pane, a)| {
+            !state.model.panes.contains_key(pane) || a.binding.is_some_and(|b| !b.alive())
+        })
+        .map(|(pane, _)| pane)
+        .collect();
+    for pane in gone {
+        let Some(old) = state.agents.remove(pane) else {
+            continue;
+        };
+        let change = crate::server::agents::Change {
+            old: Some(old.state),
+            new: None,
+            kind: old.kind,
+            session_changed: false,
+        };
+        crate::server::events::emit_agent_changed(state, pane, &change);
+        crate::server::clients::redraw_all(state, std::time::Instant::now());
+    }
+}
+
 /// Clears every binding whose process is gone; whether any remain.
 pub fn sweep(state: &mut State) -> bool {
+    sweep_agents(state);
     let gone: Vec<PaneId> = state
         .model
         .panes
@@ -285,6 +343,7 @@ pub fn sweep(state: &mut State) -> bool {
         .panes
         .values()
         .any(|p| p.resume_binding.is_some())
+        || state.agents.iter().any(|(_, a)| a.binding.is_some())
 }
 
 /// `pane`'s process exited: its binding is checked now rather than at the
@@ -337,5 +396,117 @@ fn stop() {
     let mut timer = TIMER.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(t) = timer.take() {
         t.abort();
+    }
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+    use crate::server::agents::AgentState;
+
+    async fn state_with_pane() -> (State, PaneId) {
+        let mut state = crate::server::test_state();
+        crate::server::dispatch::run(
+            &mut state,
+            &crate::server::test_ctx(),
+            &["new-session".into(), "-d".into(), "-s".into(), "m".into()],
+        )
+        .expect("new-session");
+        state.agents_enabled = true;
+        let id = *state.model.panes.keys().next().expect("pane");
+        (state, id)
+    }
+
+    fn dead() -> Option<Binding> {
+        Some(Binding {
+            pid: i32::MAX,
+            start_time: 1,
+        })
+    }
+
+    #[tokio::test]
+    async fn agent_resume_resolves_against_the_pane_path() {
+        let (state, id) = state_with_pane().await;
+        let argv = |n: &str| vec![n.to_string(), "--resume".into(), "s1".into()];
+        let found = resolve_for_pane(&state, id, argv("sh"));
+        assert!(
+            found[0].starts_with('/') && found[0].ends_with("/sh"),
+            "{found:?}"
+        );
+        assert_eq!(&found[1..], ["--resume", "s1"]);
+        let bare = resolve_for_pane(&state, id, argv("no-such-agent-xyz"));
+        assert_eq!(bare, argv("no-such-agent-xyz"));
+        let slashed = resolve_for_pane(&state, id, argv("./claude"));
+        assert_eq!(slashed, argv("./claude"));
+    }
+
+    #[tokio::test]
+    async fn dead_binding_swept() {
+        let (mut state, id) = state_with_pane().await;
+        state
+            .agents
+            .ensure(id, "claude", dead(), std::time::Instant::now());
+        assert!(!sweep(&mut state));
+        assert!(state.agents.get(id).is_none());
+    }
+
+    #[tokio::test]
+    async fn swept_record_event_keeps_its_kind() {
+        let (mut state, id) = state_with_pane().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let names = vec!["agent-changed".to_string()];
+        state.events.subscribe(names, None, tx).expect("subscribe");
+        state
+            .agents
+            .ensure(id, "claude", dead(), std::time::Instant::now());
+        sweep(&mut state);
+        state.events.flush(&state.model);
+        let event = rx.try_recv().expect("event");
+        assert!(matches!(
+            event,
+            crate::event::Event::AgentChanged { kind: Some(k), new: None, .. } if k == "claude"
+        ));
+    }
+
+    #[tokio::test]
+    async fn sweep_timer_runs_while_agents() {
+        let (mut state, id) = state_with_pane().await;
+        let live = Binding::of(std::process::id() as i32);
+        assert!(live.is_some());
+        state
+            .agents
+            .ensure(id, "claude", live, std::time::Instant::now());
+        assert!(sweep(&mut state));
+        assert!(state.agents.get(id).is_some());
+    }
+
+    #[tokio::test]
+    async fn closed_pane_record_removed() {
+        let (mut state, id) = state_with_pane().await;
+        let live = Binding::of(std::process::id() as i32);
+        let gone = PaneId(id.0 + 100);
+        state
+            .agents
+            .ensure(gone, "claude", live, std::time::Instant::now());
+        state
+            .agents
+            .ensure(id, "claude", live, std::time::Instant::now());
+        sweep(&mut state);
+        assert!(state.agents.get(gone).is_none());
+        assert!(
+            state
+                .agents
+                .get(id)
+                .is_some_and(|a| a.state == AgentState::Idle)
+        );
+    }
+
+    /// A spawn scans the pane at once (a plain shell is no agent).
+    #[tokio::test]
+    async fn scan_on_spawn() {
+        let (mut state, id) = state_with_pane().await;
+        state.registry.forget_scan(id);
+        spawned(&mut state, id, (None, None));
+        assert!(state.registry.scanned(id));
     }
 }

@@ -248,6 +248,13 @@ fn event_samples() -> Vec<Event> {
             name: "status".into(),
             value: Some("on".into()),
         },
+        Event::AgentChanged {
+            pane: p,
+            uid: "01JABCDEFGHJKMNPQRSTVWXYZ0".into(),
+            kind: Some("claude".into()),
+            old: Some("working".into()),
+            new: Some("blocked".into()),
+        },
         Event::EventsDropped { count: 3 },
     ]
 }
@@ -272,7 +279,8 @@ fn index(event: &Event) -> usize {
         Event::AlertActivity { .. } => 13,
         Event::AlertSilence { .. } => 14,
         Event::OptionChanged { .. } => 15,
-        Event::EventsDropped { .. } => 16,
+        Event::AgentChanged { .. } => 16,
+        Event::EventsDropped { .. } => 17,
     }
 }
 

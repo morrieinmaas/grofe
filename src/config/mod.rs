@@ -21,11 +21,15 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use cli::show_config;
+pub use load::agents::{
+    ConfigAgents, ConfigGrid, ConfigKind, ConfigNew, ConfigPicker, ConfigSidebar,
+};
 pub use load::plugins::{ConfigPlugin, Restart};
 pub use load::{load, load_one, load_with_file};
 pub use provenance::{Layer, Provenance, Source};
 
 use crate::server::input::Key;
+use crate::server::notify::NotifyConfig;
 
 /// TOML key (spec §5.2) to tmux option name (R4), for every built-in
 /// option. Shared with `import-tmux` (TI.1) and the tmux front end (FE.1).
@@ -87,6 +91,12 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("scratchpad-history", "scratchpad-history"),
     ("pane-frame-title", "pane-frame-title"),
     ("pane-frame-tab-ends", "pane-frame-tab-ends"),
+    ("agent-glyph-blocked", "agent-glyph-blocked"),
+    ("agent-glyph-error", "agent-glyph-error"),
+    ("agent-glyph-unseen", "agent-glyph-unseen"),
+    ("agent-glyph-working", "agent-glyph-working"),
+    ("notify-muted-glyph", "notify-muted-glyph"),
+    ("agent-blocked-border-style", "agent-blocked-border-style"),
     ("prompt-position", "prompt-position"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
@@ -477,7 +487,7 @@ pub struct ConfigCommand {
 }
 
 /// A fully loaded and validated config.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Resolved {
     /// Every option by TOML key, in tmux's value form (`on`, `50000`,
     /// `C-b`), already normalized by the option store's validation.
@@ -490,6 +500,10 @@ pub struct Resolved {
     pub sources: BTreeMap<String, ConfigSource>,
     /// `[plugins.<name>]` (T6.3), merged key by key across the layers.
     pub plugins: BTreeMap<String, ConfigPlugin>,
+    /// `[agents]` and `[agents.kinds.<name>]`, merged key by key.
+    pub agents: ConfigAgents,
+    /// `[notify]`, key by key over the defaults.
+    pub notify: NotifyConfig,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
     /// `[user-options]` (TP.0): global user options by name, `@` included,

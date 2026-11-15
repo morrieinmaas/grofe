@@ -110,6 +110,15 @@ const TMUX_DEFAULTS: &[(&str, &str)] = &[
     ("pane-frames", "off"),
     ("pane-gap", "0"),
     ("pane-border-lines", "single"),
+    ("status-right", "\"#{pane_title}\" %H:%M %d-%b-%y"),
+    (
+        "window-status-format",
+        "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+    ),
+    (
+        "window-status-current-format",
+        "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+    ),
     // tmux's full-width message bar.
     ("message-pill", "off"),
 ];
@@ -123,6 +132,12 @@ const GROFE_ONLY: &[&str] = &[
     "pane-gap",
     "pane-frame-title",
     "pane-frame-tab-ends",
+    "agent-glyph-blocked",
+    "agent-glyph-error",
+    "agent-glyph-unseen",
+    "agent-glyph-working",
+    "notify-muted-glyph",
+    "agent-blocked-border-style",
     "scratchpad-history",
     "message-pill",
     "prompt-position",
@@ -260,7 +275,7 @@ const BUILTINS: &[Builtin] = &[
         name: "status-right",
         kind: Kind::String,
         scope: OptionScope::Session,
-        default: "\"#{pane_title}\" %H:%M %d-%b-%y",
+        default: "\"#{pane_title}\" %H:%M %d-%b-%y#[range=user|agents]#{agents_badge}#[norange]",
     },
     Builtin {
         name: "status-left-length",
@@ -296,13 +311,49 @@ const BUILTINS: &[Builtin] = &[
         name: "window-status-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
     },
     Builtin {
         name: "window-status-current-format",
         kind: Kind::String,
         scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
+    },
+    Builtin {
+        name: "agent-glyph-blocked",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "⏸",
+    },
+    Builtin {
+        name: "agent-glyph-error",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "✗",
+    },
+    Builtin {
+        name: "agent-glyph-unseen",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "✓",
+    },
+    Builtin {
+        name: "agent-glyph-working",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "●",
+    },
+    Builtin {
+        name: "notify-muted-glyph",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "🔕",
+    },
+    Builtin {
+        name: "agent-blocked-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "fg=yellow",
     },
     // TC.11: tmux 3.7b's names, scopes, choices and defaults for the rest
     // of the status line (spec §4.5's status-line row).
@@ -2638,6 +2689,9 @@ fn apply_config(state: &mut State, resolved: &Resolved) {
     crate::server::plugins::configure(state, resolved);
     crate::server::hooks::configure(state, resolved);
     crate::server::menu::configure(state, resolved);
+    crate::server::dispatch::agent::configure(state, resolved);
+    crate::server::configure_surfaces(state, resolved);
+    crate::server::clients::set_scan_interval(state, resolved.agents.scan_interval);
     // `[environment]`, then `load-commands` (TP.0), as tmux runs a config
     // file's `set-environment` and other commands each time it reads it.
     for (name, value) in &resolved.environment {
@@ -2709,6 +2763,7 @@ pub fn bind_key(state: &mut State, ctx: &ClientCtx, c: BindKey) -> Result<String
     }
     let mut b = Binding::new(cmds, c.repeat, BindingSource::Runtime);
     b.desc = c.note;
+    b.group = c.group;
     b.dialect = ctx.dialect;
     state.registry.key_tables.insert(&c.table, key, b);
     Ok(String::new())
@@ -2831,13 +2886,17 @@ fn list_notes(
             if only.is_some_and(|k| !k.matches(&key)) {
                 continue;
             }
-            let Some(note) = tables.exact(table, &key).and_then(|b| b.desc.as_deref()) else {
+            let Some(b) = tables.exact(table, &key) else {
                 continue;
             };
-            if note.is_empty() {
+            let Some(note) = b.desc.as_deref().filter(|n| !n.is_empty()) else {
                 continue;
-            }
-            notes.push((format!("{start}{key}"), note.to_string()));
+            };
+            let group = b
+                .group
+                .as_deref()
+                .map_or(String::new(), |g| format!(" [{g}]"));
+            notes.push((format!("{start}{key}{group}"), note.to_string()));
         }
     }
     if c.first {
@@ -4638,6 +4697,21 @@ impl FormatVars for ServerVars<'_> {
                     .or_else(|| self.inner.vars().get(name))
             }
             "session_attached_list" => self.attached_list(),
+            "agent_kind"
+            | "agent_state"
+            | "agent_msg"
+            | "agent_blocked_kind"
+            | "agent_since"
+            | "agent_unseen"
+            | "agent_attention"
+            | "window_agent_state"
+            | "session_agent_state"
+            | "agents_total"
+            | "agents_blocked"
+            | "agents_working"
+            | "agents_attention"
+            | "agents_badge" => Some(self.agent_var(name)),
+            "notifications_unread" => Some(self.state.notify.unread().to_string()),
             "session_group_attached"
             | "session_group_attached_list"
             | "session_group_many_attached" => {
@@ -4715,6 +4789,88 @@ impl<'a> ServerVars<'a> {
             .map(|c| c.name.as_str())
             .collect();
         Some(names.join(","))
+    }
+
+    /// The agent variables of spec §4.1; empty, not missing, when there is
+    /// nothing to show.
+    fn agent_var(&self, name: &str) -> String {
+        use crate::server::agents::{self, AgentState, Rank};
+        let agents = &self.state.agents;
+        let needs_you = |a: &agents::Agent| agents::rank(a) <= Rank::Unseen;
+        let counts = |keep: &dyn Fn(&agents::Agent) -> bool| {
+            agents.iter().filter(|(_, a)| keep(a)).count().to_string()
+        };
+        match name {
+            "agents_total" => return counts(&|_| true),
+            "agents_blocked" => return counts(&|a| a.state == AgentState::Blocked),
+            "agents_working" => return counts(&|a| a.state == AgentState::Working),
+            "agents_attention" => return counts(&needs_you),
+            "agents_badge" => {
+                let glyph = |n: &str| self.inner.vars().get(n).unwrap_or_default();
+                let mut parts: Vec<String> = [
+                    (Rank::Blocked, "agent-glyph-blocked"),
+                    (Rank::Error, "agent-glyph-error"),
+                    (Rank::Unseen, "agent-glyph-unseen"),
+                ]
+                .iter()
+                .filter_map(|(rank, option)| {
+                    let n = agents
+                        .iter()
+                        .filter(|(_, a)| agents::rank(a) == *rank)
+                        .count();
+                    (n > 0).then(|| format!("{}{n}", glyph(option)))
+                })
+                .collect();
+                if self.state.notify.muted(std::time::Instant::now()) {
+                    parts.push(glyph("notify-muted-glyph"));
+                }
+                return parts.join(" ");
+            }
+            "window_agent_state" | "session_agent_state" => {
+                let model = &self.state.model;
+                let Some(window) = model.panes.get(&self.pane).map(|p| p.window) else {
+                    return String::new();
+                };
+                let windows = if name == "window_agent_state" {
+                    vec![window]
+                } else {
+                    let session = self
+                        .session_id()
+                        .or_else(|| model.windows.get(&window).map(|w| w.session));
+                    match session.and_then(|s| model.sessions.get(&s)) {
+                        Some(s) => s.windows.clone(),
+                        None => vec![window],
+                    }
+                };
+                let best = agents
+                    .iter()
+                    .filter(|(p, _)| {
+                        model
+                            .panes
+                            .get(p)
+                            .is_some_and(|pane| windows.contains(&pane.window))
+                    })
+                    .map(|(_, a)| agents::rank(a))
+                    .min();
+                return best.map(|r| r.as_str().to_string()).unwrap_or_default();
+            }
+            _ => {}
+        }
+        let Some(a) = agents.get(self.pane) else {
+            return String::new();
+        };
+        match name {
+            "agent_kind" => a.kind.clone().unwrap_or_default(),
+            "agent_state" => a.state.as_str().to_string(),
+            "agent_msg" => a.msg.clone().unwrap_or_default(),
+            "agent_blocked_kind" => a.blocked.clone().unwrap_or_default(),
+            "agent_since" => std::time::Instant::now()
+                .saturating_duration_since(a.since)
+                .as_secs()
+                .to_string(),
+            "agent_unseen" => flag(a.unseen),
+            _ => flag(needs_you(a)),
+        }
     }
 
     /// The session the formats are for (`#{session_id}`).
@@ -6102,6 +6258,176 @@ mod tests {
         );
     }
 
+    /// A server with two windows in one session; returns their panes.
+    fn two_window_state() -> (State, PaneId, PaneId) {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        for words in [
+            &["new-session", "-d", "-s", "a"][..],
+            &["new-window", "-d"][..],
+        ] {
+            let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            crate::server::dispatch::run(&mut state, &ctx, &argv).expect("setup");
+        }
+        let mut panes: Vec<PaneId> = state.model.panes.keys().copied().collect();
+        panes.sort();
+        (state, panes[0], panes[1])
+    }
+
+    fn report(s: crate::server::agents::AgentState, ts: u64) -> crate::server::agents::Report {
+        crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(s),
+            kind: Some("claude".into()),
+            msg: Some("hi".into()),
+            blocked: None,
+            session_id: None,
+            ts,
+        }
+    }
+
+    fn var(state: &State, pane: PaneId, name: &str) -> Option<String> {
+        let ctx = FormatCtx::new(&state.model, pane);
+        ServerVars::new(state, pane, &ctx).get(name)
+    }
+
+    #[tokio::test]
+    async fn no_record_empty() {
+        let (state, a, _) = two_window_state();
+        for name in [
+            "agent_kind",
+            "agent_state",
+            "agent_msg",
+            "agent_blocked_kind",
+            "agent_since",
+            "window_agent_state",
+            "session_agent_state",
+        ] {
+            assert_eq!(var(&state, a, name), Some(String::new()), "{name}");
+        }
+        assert_eq!(var(&state, a, "agents_total"), Some("0".into()));
+    }
+
+    #[tokio::test]
+    async fn window_rollup_unseen() {
+        use crate::server::agents::AgentState;
+        let (mut state, a, b) = two_window_state();
+        state.agents.apply(
+            a,
+            report(AgentState::Done, 1),
+            false,
+            std::time::Instant::now(),
+        );
+        assert_eq!(var(&state, a, "agent_state"), Some("done".into()));
+        assert_eq!(var(&state, a, "agent_unseen"), Some("1".into()));
+        assert_eq!(var(&state, a, "window_agent_state"), Some("unseen".into()));
+        assert_eq!(var(&state, b, "window_agent_state"), Some(String::new()));
+        assert_eq!(var(&state, b, "session_agent_state"), Some("unseen".into()));
+    }
+
+    #[tokio::test]
+    async fn counts() {
+        use crate::server::agents::AgentState;
+        let (mut state, a, b) = two_window_state();
+        let now = std::time::Instant::now();
+        state
+            .agents
+            .apply(a, report(AgentState::Blocked, 1), true, now);
+        state
+            .agents
+            .apply(b, report(AgentState::Working, 1), true, now);
+        let get = |n: &str| var(&state, a, n);
+        assert_eq!(get("agents_total"), Some("2".into()));
+        assert_eq!(get("agents_blocked"), Some("1".into()));
+        assert_eq!(get("agents_working"), Some("1".into()));
+        assert_eq!(get("agents_attention"), Some("1".into()));
+        assert_eq!(get("agent_attention"), Some("1".into()));
+        assert_eq!(get("session_agent_state"), Some("blocked".into()));
+    }
+
+    fn blocked_error_unseen(state: &mut State, a: PaneId, b: PaneId) {
+        use crate::server::agents::AgentState;
+        let now = std::time::Instant::now();
+        state
+            .agents
+            .apply(a, report(AgentState::Blocked, 1), true, now);
+        state
+            .agents
+            .apply(b, report(AgentState::Done, 1), false, now);
+    }
+
+    #[tokio::test]
+    async fn badge_empty_when_quiet() {
+        let (state, a, _) = two_window_state();
+        assert_eq!(var(&state, a, "agents_badge"), Some(String::new()));
+        assert_eq!(var(&state, a, "notifications_unread"), Some("0".into()));
+    }
+
+    #[tokio::test]
+    async fn badge_counts_and_glyphs() {
+        let (mut state, a, b) = two_window_state();
+        blocked_error_unseen(&mut state, a, b);
+        assert_eq!(var(&state, a, "agents_badge"), Some("⏸1 ✓1".into()));
+    }
+
+    #[tokio::test]
+    async fn badge_muted_glyph() {
+        let (mut state, a, b) = two_window_state();
+        state.notify.mute(None);
+        assert_eq!(var(&state, a, "agents_badge"), Some("🔕".into()));
+        blocked_error_unseen(&mut state, a, b);
+        assert_eq!(var(&state, a, "agents_badge"), Some("⏸1 ✓1 🔕".into()));
+    }
+
+    #[tokio::test]
+    async fn default_window_format_shows_glyph() {
+        let (mut state, a, b) = two_window_state();
+        blocked_error_unseen(&mut state, a, b);
+        let fmt = state
+            .model
+            .options
+            .lookup("window-status-format", &[])
+            .unwrap()
+            .to_string();
+        let out = |pane| {
+            let ctx = FormatCtx::new(&state.model, pane);
+            expand(&fmt, &ServerVars::new(&state, pane, &ctx))
+        };
+        assert!(out(a).ends_with('⏸'), "{}", out(a));
+        assert!(out(b).ends_with('✓'), "{}", out(b));
+    }
+
+    #[test]
+    fn tmux_identity_formats_unchanged() {
+        let mut tmux = Options::new(false);
+        tmux.use_tmux_defaults(None);
+        let tmux_format = "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }";
+        for name in ["window-status-format", "window-status-current-format"] {
+            assert_eq!(tmux.lookup(name, &[]), Some(tmux_format), "{name}");
+        }
+        assert_eq!(
+            tmux.lookup("status-right", &[]),
+            Some("\"#{pane_title}\" %H:%M %d-%b-%y")
+        );
+        let grofe = Options::new(false);
+        let right = grofe.lookup("status-right", &[]).unwrap();
+        assert!(right.ends_with("#[range=user|agents]#{agents_badge}#[norange]"));
+    }
+
+    #[tokio::test]
+    async fn agent_since_seconds() {
+        use crate::server::agents::AgentState;
+        let (mut state, a, _) = two_window_state();
+        let Some(then) = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(90))
+        else {
+            return;
+        };
+        state
+            .agents
+            .apply(a, report(AgentState::Working, 1), true, then);
+        let secs: u64 = var(&state, a, "agent_since").unwrap().parse().unwrap();
+        assert!((90..95).contains(&secs), "{secs}");
+    }
+
     /// FE.1 ruling: under tmux identity each built-in default that differs
     /// is tmux 3.7b's (recorded); under grofe identity grofe's stays.
     #[test]
@@ -6158,6 +6484,7 @@ mod tests {
             note: None,
             key: key.to_string(),
             command: vec!["list-sessions".to_string()],
+            group: None,
         };
         let grofe_ctx = crate::server::test_ctx;
         let grofe = grofe_ctx();
@@ -6180,6 +6507,90 @@ mod tests {
         assert_eq!(b.dialect, Dialect::Tmux);
         let err = bind_key(&mut state, &grofe_ctx(), ls("F7")).unwrap_err();
         assert_eq!(err, "unknown command: ls");
+    }
+
+    fn grouped_bind(key: &str, group: Option<&str>) -> BindKey {
+        BindKey {
+            table: "prefix".to_string(),
+            repeat: false,
+            note: Some("A note".to_string()),
+            key: key.to_string(),
+            command: vec!["list-sessions".to_string()],
+            group: group.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn bind_g_stored() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        bind_key(&mut state, &ctx, grouped_bind("F5", Some("agents"))).expect("bind");
+        let k = parse_key("F5").expect("key");
+        let b = state
+            .registry
+            .key_tables
+            .exact("prefix", &k)
+            .expect("bound");
+        assert_eq!(b.group.as_deref(), Some("agents"));
+    }
+
+    #[test]
+    fn list_keys_n_shows_group() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let argv: Vec<String> = ["unbind-key", "-a", "-T", "prefix"]
+            .map(String::from)
+            .to_vec();
+        crate::server::dispatch::run(&mut state, &ctx, &argv).expect("unbind");
+        bind_key(&mut state, &ctx, grouped_bind("F5", Some("agents"))).expect("bind");
+        let got = list_keys(
+            &mut state,
+            &ctx,
+            ListKeys {
+                table: Some("prefix".to_string()),
+                first: false,
+                notes: true,
+                key: None,
+                all: false,
+                format: None,
+                prefix: None,
+                sort: Default::default(),
+            },
+        )
+        .expect("list");
+        assert_eq!(got, "F5 [agents] A note\n");
+    }
+
+    #[test]
+    fn tmux_dialect_list_keys_unchanged() {
+        let mut state = crate::server::test_state();
+        let grofe = crate::server::test_ctx();
+        let tmux = ClientCtx {
+            dialect: Dialect::Tmux,
+            ..crate::server::test_ctx()
+        };
+        let list = |state: &mut State| {
+            list_keys(
+                state,
+                &tmux,
+                ListKeys {
+                    table: Some("prefix".to_string()),
+                    first: false,
+                    notes: true,
+                    key: Some("F5".to_string()),
+                    all: false,
+                    format: None,
+                    prefix: Some("C-b".to_string()),
+                    sort: Default::default(),
+                },
+            )
+            .expect("list")
+        };
+        bind_key(&mut state, &grofe, grouped_bind("F5", None)).expect("bind");
+        let plain = list(&mut state);
+        bind_key(&mut state, &grofe, grouped_bind("F5", Some("agents"))).expect("bind");
+        assert_eq!(list(&mut state), plain);
+        assert!(!plain.contains("agents"), "{plain}");
     }
 
     /// TP.12: `#{start_time}` is when the server started, in Unix seconds,
@@ -6510,5 +6921,18 @@ mod tests {
         ] {
             assert_eq!(quote(value), shown, "{value:?}");
         }
+    }
+
+    #[test]
+    fn apply_config_copies_agent_surface_tables() {
+        let mut state = crate::server::test_state();
+        let mut resolved = Resolved::default();
+        resolved.agents.sidebar.width = 40;
+        resolved.agents.picker.width_pct = 55;
+        resolved.agents.grid.tile_width = 33;
+        apply_config(&mut state, &resolved);
+        assert_eq!(state.agents_sidebar.width, 40);
+        assert_eq!(state.agents_picker.width_pct, 55);
+        assert_eq!(state.agents_grid.tile_width, 33);
     }
 }
