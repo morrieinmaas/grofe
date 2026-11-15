@@ -16,6 +16,7 @@
 //! [`dispatch::defer_reply`] once the command exits (R23).
 
 use crate::cmd::NoVars;
+use crate::server::spawn;
 use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -2317,29 +2318,21 @@ pub(crate) async fn shell_with(
     } else {
         Stdio::null()
     };
-    let child = {
-        let _lock = pane::spawn_lock();
-        tokio::process::Command::new("/bin/sh")
-            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
-            .arg0("sh")
-            .arg("-c")
-            // `-E`: tmux's job writes stderr to the pipe stdout goes to.
-            .arg(if merge_stderr && capture {
-                format!("exec 2>&1\n{script}")
-            } else {
-                script.to_string()
-            })
+    // `-E`: tmux's job writes stderr to the pipe stdout goes to.
+    let text = if merge_stderr && capture {
+        format!("exec 2>&1\n{script}")
+    } else {
+        script.to_string()
+    };
+    let child = spawn::spawn(
+        spawn::sh(&text, Some(env))
             .current_dir(cwd)
-            .env_clear()
-            .envs(env)
             // As a pane: a `grofe` run inside talks to this server.
             .env("GROFE", socket)
             .env_remove("GROFE_PANE")
             .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(Stdio::null())
-            .spawn()
-    };
+            .stdout(stdout),
+    );
     let child = child.map_err(|e| format!("failed to run command: {e}"))?;
     let tracked = jobs.track(&child);
     let out = child.wait_with_output().await;

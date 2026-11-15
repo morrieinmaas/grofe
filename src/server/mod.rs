@@ -56,6 +56,7 @@ pub(crate) mod sidebar;
 pub mod sixel;
 pub mod snapshot;
 pub mod sources;
+pub mod spawn;
 pub mod status;
 pub(crate) mod toast;
 pub(crate) mod tray;
