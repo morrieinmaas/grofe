@@ -26,8 +26,6 @@ codebase-health review of 2026-11-15. Each item is one branch and one PR.
 
 - **Keys, targets, format variables and inert options** that scripts rely on
   and grofe lacks.
-- **`-f` through the `tmux` shim** loads a tmux.conf, as tmux does; the native
-  `grofe -f` keeps taking TOML.
 - **Control mode, the rest.** `-C` and `-CC` work as a client-side bridge
   (`docs/specs/2026-11-15-control-mode.md`); left are subscriptions
   (`refresh-client -B`), the auto-pause of `pause-after`, a server-side client

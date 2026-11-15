@@ -1,6 +1,5 @@
-//! `#{...}` format expansion (spec §4.5). M1 supports a bare variable
-//! reference, `#{name}`, and a ternary, `#{?cond,then,else}`. M2 adds
-//! nesting, `##` escaping, `#{==:a,b}` and the `#{b:var}` modifier.
+//! `#{...}` format expansion (spec §4.5): a bare variable
+//! reference, `#{name}`, a ternary, `#{?cond,then,else}`, nesting, `##` escaping, `#{==:a,b}` and the `#{b:var}` modifier.
 //!
 //! Format-bearing flag values (`-c`, `-F`, `display-message` text) stay
 //! raw strings on the parsed `Command`; dispatch calls [`expand`] against
@@ -919,7 +918,7 @@ impl<'a> Expander<'a> {
     /// text that may itself contain nested `#{...}` (mixed-text, like a
     /// `then`/`else` branch), not a bare variable lookup -- so
     /// `#{==:#{window_name},bash}` compares the window's name against the
-    /// literal word `bash`. With no comma, `==:` (M2) passes through and
+    /// literal word `bash`. With no comma, `==:` passes through and
     /// the rest give nothing.
     // ponytail: tmux also drops the rest of the format after a comparison
     // with no comma; grofe drops only that piece.
@@ -1310,7 +1309,7 @@ mod tests {
         );
     }
 
-    // --- M2: nesting, escaping, ==:, b: ---
+    // --- nesting, escaping, ==:, b: ---
 
     /// tmux keeps its time flag for the whole status expansion: a format
     /// `#{E:}` expands again is through strftime too, while the outer one,
@@ -1469,7 +1468,7 @@ mod tests {
         }
     }
 
-    /// tmux 3.7b gives nothing for these with no comma; `==:` (M2) keeps
+    /// tmux 3.7b gives nothing for these with no comma; `==:` keeps
     /// passing through (`equality_missing_comma_passes_through`).
     #[test]
     fn comparison_missing_comma_gives_nothing() {

@@ -501,8 +501,8 @@ pub const EVENTS: &[EventSpec] = &[
         tmux: "window-resized",
         kind: HookKind::Window,
     },
-    // M4 (the stub edit adds them, raised by nobody yet): grofe's own, with
-    // no tmux hook. T4.2 raises `resume-changed`, T4.3 `restore-done`.
+    // grofe's own, with no tmux hook: `resume-changed` (`resume::set_expectation`
+    // and the agent verbs), `restore-done` (`restore`), `agent-changed` (`events`).
     EventSpec {
         name: "resume-changed",
         fires: "a pane's resume or expectation was set or cleared",

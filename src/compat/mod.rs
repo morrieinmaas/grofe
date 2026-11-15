@@ -59,6 +59,12 @@ pub fn set_started_as(identity: Identity) {
     let _ = STARTED_AS.set(identity);
 }
 
+/// Whether the CLI that started this server ran as `tmux`: then its `-f`
+/// files are tmux config, sourced as `source-file` reads them.
+pub fn started_as_tmux() -> bool {
+    STARTED_AS.get() == Some(&Identity::Tmux)
+}
+
 /// The directory holding this server's `tmux` link to grofe (spec D12),
 /// set by `main.rs` before the server runs.
 static TMUX_LINK_DIR: OnceLock<PathBuf> = OnceLock::new();

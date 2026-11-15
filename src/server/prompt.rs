@@ -1015,7 +1015,7 @@ impl InputHook for PromptHook {
         prompt.separators = separators;
         prompt.clip = clip;
         let history = &history[prompt.kind];
-        // `-N` (M5): as tmux 3.7b's `status_prompt_key`, any key but a
+        // `-N`: as tmux 3.7b's `status_prompt_key`, any key but a
         // digit answers the prompt and then goes on as a key (copy mode's
         // counts: `5` then `j`).
         if let (Read::Line, true, Input::Key(key)) = (prompt.read, prompt.numeric, input) {

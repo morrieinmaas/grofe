@@ -42,7 +42,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("history-limit", "history-limit"),
     ("mouse", "mouse"),
     ("remain-on-exit", "remain-on-exit"),
-    // M4 (spec §6): read by T4.3 and T4.4.
+    // Spec §6.
     ("restore-on-start", "restore-on-start"),
     ("restore-stagger-ms", "restore-stagger-ms"),
     ("start-from-tmux", "start-from-tmux"),
@@ -147,7 +147,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     // Clock mode (B1d), by tmux's names.
     ("clock-mode-colour", "clock-mode-colour"),
     ("clock-mode-style", "clock-mode-style"),
-    // Copy mode (M5 stub).
+    // Copy mode.
     ("word-separators", "word-separators"),
     ("wrap-search", "wrap-search"),
     ("copy-command", "copy-command"),
@@ -245,6 +245,7 @@ pub const LIST_NAMES: &[(&str, &str)] = &[
     ("codepoint-widths", "codepoint-widths"),
     ("pane-colours", "pane-colours"),
     ("user-keys", "user-keys"),
+    ("copy-hint-patterns", "copy-hint-patterns"),
 ];
 
 /// The tmux name of a list option's TOML key.
@@ -641,7 +642,9 @@ mod tests {
 
     #[test]
     fn every_list_option_has_a_toml_name() {
-        let lists: Vec<&str> = crate::server::dispatch::options::list_names().collect();
+        let lists: Vec<&str> = crate::server::dispatch::options::list_names()
+            .chain(crate::server::dispatch::options::grofe_only_list_names())
+            .collect();
         let named: Vec<&str> = LIST_NAMES.iter().map(|(_, n)| *n).collect();
         assert_eq!(lists.len(), named.len());
         for name in lists {

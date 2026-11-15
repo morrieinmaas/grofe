@@ -123,6 +123,17 @@ fn every_scenario_parses_and_has_its_golden() {
     assert!(fixtures_dir().join("golden/list-commands.txt").exists());
 }
 
+/// The front end's copy of tmux's command table
+/// (`src/compat/tmux/data/list-commands.txt`) is the recorded golden's.
+#[test]
+fn the_shipped_command_table_is_the_golden_s() {
+    let golden = fs::read_to_string(fixtures_dir().join("golden/list-commands.txt")).unwrap();
+    let shipped =
+        fs::read_to_string(fixtures_dir().join("../../../src/compat/tmux/data/list-commands.txt"))
+            .unwrap();
+    assert_eq!(shipped, golden, "re-record, then copy the golden");
+}
+
 /// Spec §9: fixtures use no strftime sequences.
 #[test]
 fn fixtures_hold_no_strftime() {

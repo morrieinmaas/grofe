@@ -313,8 +313,13 @@ in tmux; the config can still turn it on.
 >   `*-buffer` commands) work, with tmux 3.7b's stock `copy-mode-vi` and
 >   `copy-mode` (emacs) tables. Under the `tmux` name `mode-keys` defaults
 >   to `emacs`, as in tmux (`vi` when `$VISUAL` or `$EDITOR` names a vi).
-> - **`tmux -f` takes a grofe TOML file**, not a `tmux.conf`. Convert your
->   config with `grofe import-tmux` first.
+> - **`tmux -f file` takes a `tmux.conf`** through the `tmux` name: the file
+>   is sourced as `source-file` reads it (`%if`, `%hidden`, `{}` blocks), in
+>   place of the usual config, when the call starts the server. As in tmux,
+>   `-f` may repeat (each file loads in order), `-f /dev/null` or a missing
+>   file is no config, and a call that finds the server running ignores
+>   `-f`. A file named `*.toml` stays grofe's own config, and `grofe`'s own
+>   server start reads TOML only (`grofe import-tmux` converts a `tmux.conf`).
 > - **Control mode** (`tmux -C` and `-CC`, `attach` and `new-session`) works as a
 >   client-side bridge; see [docs/specs/2026-11-15-control-mode.md](docs/specs/2026-11-15-control-mode.md)
 >   for what it sends and what is still left (subscriptions, auto-pause).

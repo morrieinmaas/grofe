@@ -802,7 +802,7 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     )?;
     let literal = flags.present.contains(&'l');
     let hex = flags.present.contains(&'H');
-    // `-X` (M5): the words are a copy-mode command and its arguments.
+    // `-X`: the words are a copy-mode command and its arguments.
     let command = flags.present.contains(&'X');
     if literal && hex {
         return Err(ParseError::Other(
@@ -1994,7 +1994,7 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-// ---- M3.6 verbs (TC.2) ----
+// ---- Structure, client and overlay verbs ----
 
 /// A number as tmux's `args_percentage` reads it: an integer, or one
 /// with a `%` suffix. `None` when it is neither.
@@ -2099,7 +2099,7 @@ fn target_if_given(
 }
 
 /// At least `min` positionals, worded like tmux (`too few arguments`),
-/// unless `argv` is empty: a bare M3.6 verb parses, with its required
+/// unless `argv` is empty: a bare verb parses, with its required
 /// positionals `None`, so that its handler answers (the stub-phase tests
 /// run every verb bare) and refuses it.
 fn needs_positionals(
@@ -3162,14 +3162,14 @@ fn split_commands(
             break;
         };
         let fresh = !l.started;
-        if !c.is_whitespace() && !(c == '\\' && fresh) {
+        if !c.is_ascii_whitespace() && !(c == '\\' && fresh) {
             l.escaped_semicolon = false;
         }
         if fresh {
             l.formats = 0;
         }
         match c {
-            c if c.is_whitespace() => l.end_word(),
+            c if c.is_ascii_whitespace() => l.end_word(),
             // A command cannot start with a list (tmux's grammar: `{{`
             // is a syntax error, recorded).
             '{' if fresh && l.words.is_empty() => return Err(syntax_error()),
@@ -4266,6 +4266,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             const SHORT: &[(char, FlagKind)] = &[
                 ('e', FlagKind::Bool),
                 ('H', FlagKind::Bool),
+                ('h', FlagKind::Bool),
                 ('M', FlagKind::Bool),
                 ('u', FlagKind::Bool),
                 ('d', FlagKind::Bool),
@@ -4280,6 +4281,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 page_up: flags.present.contains(&'u'),
                 scroll_exit: flags.present.contains(&'e'),
                 hide_position: flags.present.contains(&'H'),
+                hints: flags.present.contains(&'h'),
                 mouse: flags.present.contains(&'M'),
                 cancel: flags.present.contains(&'q'),
                 page_down: flags.present.contains(&'d'),
@@ -5583,8 +5585,8 @@ mod tests {
         );
     }
 
-    /// Every M1 command name (and its listed aliases) parses at all, with
-    /// a minimal argv. This is the "every M1 command parses" acceptance
+    /// Every basic command name (and its listed aliases) parses at all, with
+    /// a minimal argv. This is the "every command parses" acceptance
     /// check as one table, on top of the per-command detail tests above.
     #[test]
     fn every_m1_command_parses_with_a_bare_target() {
@@ -5817,7 +5819,7 @@ mod tests {
         assert!(c.print);
     }
 
-    // ---- M3 commands (T3.0) ----
+    // ---- Binding and config commands ----
 
     /// Quotes, escapes, `;` and expansion, as tmux 3.7b's string parser
     /// reads them (recorded with `bind X '<string>'` then `list-keys` on
@@ -6786,6 +6788,26 @@ mod scratchpad_tests {
             Ok(Command::ChooseScratchpad)
         ));
         assert!(parse(&argv(&["choose-scratchpad", "x"])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod fuzz_regression_tests {
+    use super::*;
+
+    /// Found by the `parse_command` fuzz target: only ASCII whitespace
+    /// separates words, as in tmux. A no-break space or U+0085 is a word
+    /// character, so `escape_arg` need not quote it.
+    #[test]
+    fn non_ascii_whitespace_is_part_of_a_word() {
+        for sep in ['\u{85}', '\u{a0}', '\u{2003}'] {
+            let text = format!("send-keys a{sep}b");
+            assert_eq!(
+                split_command_string(&text),
+                Ok(vec![vec!["send-keys".to_string(), format!("a{sep}b")]]),
+                "{sep:?}"
+            );
+        }
     }
 }
 

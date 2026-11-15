@@ -169,7 +169,7 @@ pub enum ServerMsg {
 /// config until it exists, and the test harness sets both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartOptions {
-    /// `GROFE_RESTORE_ON_START=0` turns it off. Read now, used from M4, so
+    /// `GROFE_RESTORE_ON_START=0` turns it off. Read by the restore, so
     /// a test server can never restore the user's real sessions.
     pub restore_on_start: bool,
     /// `GROFE_REMAIN_ON_EXIT=1` turns it on: the initial global value of
@@ -215,7 +215,7 @@ pub struct State {
     pub inner_term: &'static str,
     /// Handed to `PaneHandle::spawn`: pane events reach the actor through it.
     pub pane_events: mpsc::Sender<PaneEvent>,
-    /// Handed to `PaneHandle::spawn`: pane output wakes the renderer (M2).
+    /// Handed to `PaneHandle::spawn`: pane output wakes the renderer.
     pub wake: Arc<Notify>,
     /// Subscribers and the events commands recorded for them.
     pub events: events::Events,
@@ -382,8 +382,7 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
     state.registry.input_hooks.push(hook);
 }
 
-/// The server's own overlays and input hooks, every M3 (T3.0) and M3.6
-/// (stub edit) one, in priority order, highest first. The rule: input
+/// The server's own overlays and input hooks, every one, in priority order, highest first. The rule: input
 /// hooks run in registration order and the first to answer `Some` wins;
 /// overlays draw in reverse order, so the highest-priority one ends on top.
 /// So an open prompt sees keys first and draws over everything; a menu
@@ -725,6 +724,7 @@ async fn serve(
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
+    dispatch::options::source_start_files(&mut state);
     // Before ready: the starting CLI's command sees the restored sessions.
     restore::at_start(&mut state);
     plugins::start(&mut state);
