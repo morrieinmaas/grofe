@@ -9,7 +9,7 @@ mod common;
 use std::process::Command;
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -37,7 +37,7 @@ fn size(srv: &TestServer) -> String {
 }
 
 fn wait_size(srv: &TestServer, want: &str) {
-    if let Err(e) = wait_until(|| size(srv) == want, WAIT) {
+    if let Err(e) = try_wait_until(|| size(srv) == want, WAIT) {
         panic!("the window never became {want} (is {}): {e}", size(srv));
     }
 }

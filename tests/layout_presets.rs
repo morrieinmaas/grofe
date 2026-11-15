@@ -120,7 +120,7 @@ fn a_one_column_cell_reports_width_one_and_keeps_a_two_column_pty() {
 
     srv.cmd(&["send-keys", "-t", "n:1.2", "Enter"])
         .expect("send-keys");
-    common::wait_until(
+    common::try_wait_until(
         || fs::read_to_string(&out).is_ok_and(|s| s.ends_with('\n')),
         WAIT,
     )

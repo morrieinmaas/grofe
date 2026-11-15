@@ -10,7 +10,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -234,7 +234,7 @@ fn an_unterminated_wrapper_is_dropped_when_the_pane_exits() {
         ])
         .unwrap_or_default()
     };
-    if let Err(e) = wait_until(|| dead().trim_end() == "1 7", WAIT) {
+    if let Err(e) = try_wait_until(|| dead().trim_end() == "1 7", WAIT) {
         panic!("{e}: pane_dead, status {:?}", dead());
     }
     assert!(srv.is_running());

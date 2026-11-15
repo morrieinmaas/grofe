@@ -377,6 +377,7 @@ fn a_pane_title_never_runs_as_a_job() {
     let _ = cli.run(&args(&["set", "-g", "status-interval", "1"]));
     let _ = cli.run(&args(&["set", "-g", "status-right", shown.trim_end()]));
     let _ = cli.run(&args(&["set", "-gF", "status-left", "#{pane_title}"]));
+    // Real time: the status line must redraw (interval 1 s) before the check.
     std::thread::sleep(std::time::Duration::from_millis(2500));
     let _ = cli.run(&args(&["kill-server"]));
     assert!(!marker.exists(), "the title ran as a command");

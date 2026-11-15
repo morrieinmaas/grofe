@@ -15,7 +15,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -164,13 +164,13 @@ fn replay(name: &str) {
                     (stdout, out.stderr, out.status.code().unwrap_or(-1))
                 };
                 if std::mem::take(&mut typed) {
-                    let _ = wait_until(|| run() == want, CMD_TIMEOUT);
+                    let _ = try_wait_until(|| run() == want, CMD_TIMEOUT);
                 }
                 assert_eq!(run(), want, "{name}: {line}");
             }
             Step::Client(cols, rows) => {
                 let a = Harness::spawn_attach_with_env(srv.command(), "main", &[], cols, rows);
-                wait_until(
+                try_wait_until(
                     || !srv.cmd(&["list-clients"]).unwrap_or_default().is_empty(),
                     CMD_TIMEOUT,
                 )
@@ -260,7 +260,7 @@ fn a_whole_100k_line_scrollback_copies() {
         srv.cmd(&["display", "-p", "-t", "main", "#{history_size}"])
             .unwrap_or_default()
     };
-    wait_until(
+    try_wait_until(
         || rows().trim() == "99977",
         std::time::Duration::from_secs(120),
     )

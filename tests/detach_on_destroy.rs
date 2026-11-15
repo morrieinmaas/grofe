@@ -7,7 +7,7 @@ mod common;
 #[path = "acceptance/harness.rs"]
 mod harness;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 use harness::Harness;
 
 #[test]
@@ -26,9 +26,9 @@ fn two_clients_of_a_killed_session_go_to_the_same_session() {
             .map(|out| out.lines().map(str::to_string).collect::<Vec<_>>())
             .unwrap_or_default()
     };
-    wait_until(|| sessions() == ["c", "c"], CMD_TIMEOUT).expect("both attached");
+    try_wait_until(|| sessions() == ["c", "c"], CMD_TIMEOUT).expect("both attached");
     srv.cmd(&["kill-session", "-t", "c"]).expect("kill-session");
-    wait_until(|| sessions().iter().all(|s| s != "c"), CMD_TIMEOUT).expect("moved");
+    try_wait_until(|| sessions().iter().all(|s| s != "c"), CMD_TIMEOUT).expect("moved");
     let after = sessions();
     assert_eq!(after.len(), 2, "both clients stay attached: {after:?}");
     assert_eq!(after[0], after[1], "one session for both: {after:?}");

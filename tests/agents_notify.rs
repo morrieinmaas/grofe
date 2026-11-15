@@ -112,6 +112,7 @@ fn notify_command_runs_recording_script_with_argv() {
     let msg = format!("perm $(touch {}) \"q\"", touched.display());
     let id = pane_id(&srv, "main");
     report(&srv, &id, "blocked", &msg);
+    // The shell creates the file before `printf` writes to it.
     srv.wait_for(
         || fs::read_to_string(&out).is_ok_and(|s| s.lines().count() >= 3),
         WAIT,
@@ -127,7 +128,7 @@ fn notify_command_runs_recording_script_with_argv() {
         "got {:?}",
         lines[2]
     );
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert!(!touched.exists(), "the $(...) must never run");
 }
 
@@ -151,7 +152,7 @@ fn mute_suppresses_command() {
         notify_list(&srv).contains("muted-one"),
         "tray still gets it"
     );
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert!(!out.exists(), "no command while muted");
     srv.cmd(&["notify", "unmute"]).expect("unmute");
     report(&srv, second, "blocked", "loud-two");
