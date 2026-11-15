@@ -1,4 +1,6 @@
-//! tmux target forms `{last}`, `!`, `{next}`, `{previous}`, `+N` and `-N` in
+//! tmux parity: target forms and the `display-message -a` variable list.
+//!
+//! Target forms `{last}`, `!`, `{next}`, `{previous}`, `+N` and `-N` in
 //! the window and pane parts, and as a bare word. Every expected value was
 //! recorded on tmux 3.7b (private `-L` server, `-f /dev/null`) in the same
 //! state: session `a` with windows 0, 1, 2 (current 2, last 1); window 2
@@ -191,4 +193,65 @@ fn no_last_window_or_pane_says_so_in_tmuxs_words() {
     for target in [":{next}", ":+", ":+3", ":{previous}"] {
         assert_eq!(at(&srv, target), "0.0", "{target}");
     }
+}
+
+/// Variables of tmux 3.7b's `display-message -a` (one detached session, no
+/// client) that grofe has no value for, and why. `docs/compat-coverage.md`
+/// lists them too. A name missing from grofe and not here fails the test.
+const NOT_PROVIDED: &[&str] = &[
+    // The command being run: grofe's `display-message -a` has no command.
+    "command",
+    "config_files",
+    // Emulator state alacritty keeps private or does not track.
+    "history_all_bytes",
+    "pane_bg",
+    "pane_fg",
+    "pane_key_mode",
+    "pane_pb_progress",
+    "pane_pb_state",
+    "pane_tabs",
+    "pane_unseen_changes",
+    "scroll_region_lower",
+    "scroll_region_upper",
+    "synchronized_output_flag",
+    // Data grofe does not keep.
+    "session_last_attached",
+    "sixel_support",
+    "window_active_clients",
+    "window_cell_height",
+    "window_cell_width",
+];
+
+fn names(text: &str) -> Vec<String> {
+    let mut names: Vec<String> = text
+        .lines()
+        .filter_map(|l| l.split_once('=').map(|(n, _)| n.to_string()))
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn display_message_a_lists_every_variable_tmux_does_but_the_documented_ones() {
+    let srv = TestServer::unstarted();
+    ok(&srv, &["start-server"]);
+    ok(&srv, &["new-session", "-d", "-s", "a", "sleep 600"]);
+    let got = names(&ok(&srv, &["display-message", "-a", "-t", "a"]));
+    let pinned = include_str!("fixtures/tmux-display-message-a.names");
+    let missing: Vec<&str> = pinned
+        .lines()
+        .filter(|n| !got.iter().any(|g| g == n) && !NOT_PROVIDED.contains(n))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "tmux lists these, grofe does not: {missing:?}"
+    );
+    let stale: Vec<&&str> = NOT_PROVIDED
+        .iter()
+        .filter(|n| got.iter().any(|g| g == **n))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "provided now, drop from NOT_PROVIDED: {stale:?}"
+    );
 }

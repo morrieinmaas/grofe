@@ -497,6 +497,11 @@ impl Model {
         SessionId(self.next_session - 1)
     }
 
+    /// The id the next session gets (tmux's `next_session_id`).
+    pub fn next_session_id(&self) -> SessionId {
+        SessionId(self.next_session)
+    }
+
     pub fn alloc_window_id(&mut self) -> WindowId {
         self.next_window += 1;
         WindowId(self.next_window - 1)
