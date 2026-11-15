@@ -11,12 +11,11 @@
 //! left to step over.
 
 use nix::libc;
-use unicode_width::UnicodeWidthChar;
 
 use super::x11::X11;
 use super::{
-    Expander, Fail, FormatVars, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, ctime, flag,
-    fnmatch, is_truthy, posix_basename, regex_match,
+    Expander, Fail, FormatVars, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, char_width,
+    ctime, flag, fnmatch, is_truthy, posix_basename, regex_match,
 };
 
 /// `FORMAT_MAX_WIDTH`, `_REPEAT` and `_PRECISION`.
@@ -179,10 +178,6 @@ fn leading_hashes(b: &[u8], at: usize) -> (usize, usize, usize) {
         return (n, n / 2, at + n);
     }
     (n, n / 2, at + n - 1)
-}
-
-fn char_width(c: char) -> usize {
-    c.width().unwrap_or(0)
 }
 
 /// tmux's `format_width`: the columns of text, counting `#[...]` styles as

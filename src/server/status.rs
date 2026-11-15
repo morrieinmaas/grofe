@@ -22,8 +22,8 @@
 //! left-hand side is what stays.
 
 use nix::libc;
-use unicode_width::UnicodeWidthChar;
 
+use crate::cmd::format::char_width;
 use crate::cmd::{FormatVars, expand};
 use crate::server::pane::CellFlags;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
@@ -1513,10 +1513,6 @@ fn apply_strftime(text: &str, tm: &libc::tm) -> String {
         )
     };
     String::from_utf8_lossy(&buf[..n]).into_owned()
-}
-
-fn char_width(c: char) -> usize {
-    UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -22,6 +22,11 @@ impl FormatVars for NoVars {
     }
 }
 
+/// Terminal columns of one character: 0 for control and combining marks, 2 for wide.
+pub fn char_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
 /// Supplies named values to [`expand`]. Implemented by whatever holds the
 /// pane/window/session/client state a format string reaches for
 /// (`server/model.rs`, from T1.5c onward).
@@ -1208,6 +1213,23 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn char_width_is_columns_for_every_callers_input() {
+        for (c, w) in [
+            ('a', 1),
+            (' ', 1),
+            ('\u{4e2d}', 2),
+            ('\u{1f600}', 2),
+            ('\u{301}', 0),
+            ('\u{0}', 0),
+            ('\n', 0),
+            ('\u{7f}', 0),
+            ('\u{e9}', 1),
+        ] {
+            assert_eq!(char_width(c), w, "{c:?}");
+        }
+    }
 
     struct MapVars(BTreeMap<&'static str, &'static str>);
 
