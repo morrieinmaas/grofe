@@ -568,7 +568,13 @@ fn a_lua_file_is_not_a_config_format_and_other_extensions_fail() {
         "{}",
         joined(&errs)
     );
-    assert!(!joined(&errs).contains("M6"), "{}", joined(&errs));
+    // Only key and message: the file path is a random temp dir that can contain "M6".
+    assert!(
+        errs.iter()
+            .all(|e| !e.key.contains("M6") && !e.message.contains("M6")),
+        "{}",
+        joined(&errs)
+    );
     let conf = s.write("x.conf", "set -g mouse on\n");
     let errs = errors(config::load_with_file(&s.env, &[conf]));
     assert_eq!(errs.len(), 1);
