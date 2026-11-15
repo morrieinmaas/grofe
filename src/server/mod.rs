@@ -292,9 +292,6 @@ pub struct State {
     /// The running CLI request's stdin and umask, for `load-buffer -` and
     /// the files `save-buffer` creates (TM.7); `None` outside one.
     pub(crate) cli_io: Option<CliIo>,
-    /// The log lines of the request now running, logged as its commands
-    /// fire (`clients::log_fired`).
-    pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
     /// The key whose binding is running its commands (`show-messages`).
     pub(crate) event_key: Option<String>,
     /// Set by a command (`kill-server`, the last session closing): the
@@ -708,7 +705,6 @@ async fn serve(
         held: None,
         failed_out: String::new(),
         cli_io: None,
-        command_log: Default::default(),
         event_key: None,
         typing: (0, false),
         snapshot_writer: None,
@@ -966,15 +962,14 @@ fn handle(state: &mut State, msg: ServerMsg) {
             // Logged as tmux 3.7b logs a client's commands and errors
             // (`show-messages`).
             let who = pid.map_or_else(|| "client".to_string(), |p| format!("client-{p}"));
-            state.command_log = match &parsed {
+            let mut log = match &parsed {
                 Ok(dispatch::Parsed::Commands(cmds)) => {
                     clients::plan_command_log(state, &who, &ctx, &req.argv, cmds.len())
                 }
                 _ => Default::default(),
             };
-            let result = dispatch::run_parsed(state, &ctx, parsed);
+            let result = dispatch::run_parsed(state, &ctx, parsed, &mut log);
             state.cli_io = None;
-            state.command_log.clear();
             if let Err(e) = &result {
                 clients::log_error(state, &who, e);
             }
@@ -1449,7 +1444,6 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         held: None,
         failed_out: String::new(),
         cli_io: None,
-        command_log: Default::default(),
         event_key: None,
         typing: (0, false),
         snapshot_writer: None,

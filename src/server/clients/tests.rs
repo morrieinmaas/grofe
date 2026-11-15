@@ -237,10 +237,10 @@ fn a_cli_request_is_logged_command_by_command_with_its_error() {
     let argv: Vec<String> = ["splitw", "-h", ";", "has", "-t", "=ma", ";", "ls"]
         .map(String::from)
         .to_vec();
-    state.command_log = plan_command_log(&state, "client-7", &ctx, &argv, 3);
+    let mut log = plan_command_log(&state, "client-7", &ctx, &argv, 3);
     // Two commands fire; the second fails, so the third never does.
-    log_fired(&mut state);
-    log_fired(&mut state);
+    log_fired(&mut state, &mut log);
+    log_fired(&mut state, &mut log);
     log_error(&mut state, "client-7", "can't find session: ma");
     let lines: Vec<&str> = messages(&state).map(|(_, l)| l.as_str()).collect();
     assert_eq!(
