@@ -9,13 +9,14 @@
 //! when the text changed, so a clock without seconds draws once a minute.
 //! With no pane in the mode there is no timer.
 
+use crate::cmd::NoVars;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
-use crate::cmd::{ClockMode, FormatVars, Resolve, expand_time};
+use crate::cmd::{ClockMode, Resolve, expand_time};
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options;
 use crate::server::input::{Input, InputHook, ROOT_TABLE, Routed};
@@ -80,15 +81,6 @@ impl Clocks {
         {
             timer.abort();
         }
-    }
-}
-
-/// No format variables: the clock's `strftime` formats name none.
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 

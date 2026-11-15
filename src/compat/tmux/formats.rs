@@ -930,19 +930,12 @@ pub(crate) fn rows() -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd::NoVars;
 
     fn native(fmt: &str) -> String {
         let got = to_native(fmt, Jobs::Empty);
         assert!(got.before.is_empty());
         got.value
-    }
-
-    struct NoVars;
-
-    impl crate::cmd::FormatVars for NoVars {
-        fn get(&self, _: &str) -> Option<String> {
-            None
-        }
     }
 
     /// Hostile nesting is rewritten and expanded at once, with tmux's

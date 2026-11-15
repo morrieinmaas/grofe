@@ -11,6 +11,7 @@
 //! `-F`, `display-message -p` and `-c` expand against that pane, its
 //! window and its session.
 
+use crate::cmd::NoVars;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -2130,15 +2131,6 @@ fn set_option(
 /// which `-a` appends to.
 fn is_text(name: &str) -> bool {
     name.starts_with('@') || builtin(name).is_some_and(|b| b.kind == Kind::String)
-}
-
-/// No format variables: `-F` with no pane to expand against.
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
-    }
 }
 
 /// `option-changed`, emitted only for a real change (spec §4.2).

@@ -13,6 +13,15 @@ mod x11;
 
 pub use modify::escape_arg;
 
+/// A [`FormatVars`] that names nothing, for formats expanded with no context.
+pub struct NoVars;
+
+impl FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
+}
+
 /// Supplies named values to [`expand`]. Implemented by whatever holds the
 /// pane/window/session/client state a format string reaches for
 /// (`server/model.rs`, from T1.5c onward).

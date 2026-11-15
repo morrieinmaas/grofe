@@ -45,6 +45,7 @@
 //! (`Session.env`); here are its hidden ones and the names it marks
 //! removed.
 
+use crate::cmd::NoVars;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -1986,14 +1987,6 @@ impl HookFormats {
             "hook_window_name" => text(self.hook_window_name.clone()),
             _ => None,
         }
-    }
-}
-
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 

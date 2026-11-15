@@ -15,6 +15,7 @@
 //! waits on it (D8); the CLI's reply comes through
 //! [`dispatch::defer_reply`] once the command exits (R23).
 
+use crate::cmd::NoVars;
 use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -2281,14 +2282,6 @@ pub(crate) fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> Stri
             let vars = FormatCtx::new(model, pane);
             with_hook(&ServerVars::new(state, pane, &vars))
         }
-    }
-}
-
-struct NoVars;
-
-impl cmd::FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 

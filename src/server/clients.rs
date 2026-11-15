@@ -29,6 +29,7 @@
 //!   (mouse modes, passthrough, graphics) ahead of the client's next frame,
 //!   in the same `Output` frame.
 
+use crate::cmd::NoVars;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -2642,14 +2643,6 @@ fn sync_pane_defaults(model: &Model) {
             let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
             pane.handle.set_default_colours(fg, bg);
         }
-    }
-}
-
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 
