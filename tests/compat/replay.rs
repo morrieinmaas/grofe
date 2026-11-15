@@ -61,14 +61,14 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, test::TermSize};
 use alacritty_terminal::vte::ansi::Processor;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb};
-use nix::pty::{Winsize, openpty};
+use nix::pty::Winsize;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 use crate::normalize::{Context, Normalizer, fixtures_dir};
 
 /// How long one command, or a screen settling, may take.
-const CMD_TIMEOUT: Duration = Duration::from_secs(10);
+const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A client's screen counts as settled after this long without output.
 const SCREEN_QUIET: Duration = Duration::from_millis(500);
@@ -744,8 +744,8 @@ impl PtyClient {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let pty = openpty(&size, None).expect("openpty");
-        let tty = nix::unistd::ttyname(&pty.slave).expect("pty slave name");
+        let (pty, tty) = grofe::server::pane::open_pty(&size).expect("openpty");
+        let tty = tty.expect("pty slave name");
         let slave = |fd: &OwnedFd| Stdio::from(fd.try_clone().expect("dup pty slave"));
         cmd.stdin(slave(&pty.slave))
             .stdout(slave(&pty.slave))

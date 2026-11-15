@@ -416,6 +416,9 @@ pub struct Registry {
     /// The status-line messages `show-messages` prints (TC.9), oldest
     /// first, with when each was shown.
     messages: VecDeque<(SystemTime, String)>,
+    /// The options a `set-option` has already warned about: stored, but
+    /// with no effect in grofe.
+    inert_warned: BTreeSet<String>,
     /// `wait-for` channels (TC.9).
     waits: BTreeMap<String, WaitChannel>,
     /// The clients now locked, their `lock-command` running in a popup
@@ -483,6 +486,7 @@ impl Default for Registry {
             status_at: None,
             names_at: None,
             messages: VecDeque::new(),
+            inert_warned: BTreeSet::new(),
             waits: BTreeMap::new(),
             locked: BTreeSet::new(),
             lock_fired: BTreeMap::new(),
@@ -856,6 +860,14 @@ fn log_message(state: &mut State, id: ClientId, text: &str) {
         return;
     };
     push_message(state, format!("{name} message: {text}"));
+}
+
+/// Logs to `show-messages`, once per option and server, that setting `name`
+/// does nothing: grofe stores it and never reads it.
+pub(crate) fn warn_inert_option(state: &mut State, name: &str) {
+    if state.registry.inert_warned.insert(name.to_string()) {
+        push_message(state, format!("{name}: stored, but has no effect in grofe"));
+    }
 }
 
 fn push_message(state: &mut State, line: String) {
@@ -2641,21 +2653,19 @@ impl FormatVars for NoVars {
     }
 }
 
-/// Hands a pane that was just spawned the colours its window and session
-/// give it, before anything can be read from it: a program that asks for
-/// OSC 10 or 11 at once is answered with the style, not the fixed palette.
+/// The colours a pane about to spawn answers OSC 10 and 11 with, given to its
+/// [`PaneSpawn`](crate::server::pane::PaneSpawn) so a program that asks at once
+/// is answered with the style, not the fixed palette.
 /// The window may not be in the model yet, so the styles are read as the
 /// window's active pane would see them, without formats.
-pub(crate) fn seed_defaults(
+pub(crate) fn default_colours(
     model: &Model,
     (session, window): (SessionId, WindowId),
-    handle: &crate::server::pane::PaneHandle,
-) {
+) -> (Option<Rgb>, Option<Rgb>) {
     let chain = [Owner::Window(window), Owner::Session(session)];
     let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
     let (fg, bg) = window_style_colours(&opt, &NoVars, true);
-    let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
-    handle.set_default_colours(fg, bg);
+    with_terminal(model, colour_rgb(fg), colour_rgb(bg))
 }
 
 /// A colour `window-style` leaves to the terminal is the attached

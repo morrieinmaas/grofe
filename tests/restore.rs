@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 use grofe::server::layout::{GeometryCell, LayoutGeometry};
 use grofe::server::snapshot::{
     OptionSnap, PaneSnap, SNAPSHOT_VERSION, SessionSnap, Snapshot, WindowSnap,
@@ -197,7 +197,7 @@ fn write_snapshot(srv: &TestServer, snap: &Snapshot) {
 /// Stops the server and waits until its socket stops answering.
 fn kill(srv: &TestServer) {
     ok(srv, &["kill-server"]);
-    wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
+    try_wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
 }
 
 fn write_config(srv: &TestServer, text: &str) -> PathBuf {
@@ -393,7 +393,7 @@ fn new_session_a_attaches_the_restored_session() {
     cmd.args(["new-session", "-A", "-s", "main"])
         .env("TERM", "xterm-256color");
     let _client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-sessions", "-F", "#{session_name} #{session_attached}"])
                 .is_ok_and(|out| out.lines().any(|l| l == "main 1"))
@@ -425,7 +425,7 @@ fn bare_grofe_attaches_the_restored_sessions_without_adding_one() {
     let mut cmd = srv.command();
     cmd.env("TERM", "xterm-256color");
     let _client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-clients", "-F", "#{client_session}"])
                 .is_ok_and(|out| !out.trim().is_empty())
@@ -451,7 +451,7 @@ fn the_session_used_last_is_the_most_recent_after_a_restore() {
     cmd.args(["attach-session", "-t", "a"])
         .env("TERM", "xterm-256color");
     let client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-clients", "-F", "#{client_session}"])
                 .is_ok_and(|out| out.trim() == "a")
@@ -477,7 +477,7 @@ fn bare_grofe_on_a_running_server_makes_a_new_session() {
     let mut cmd = srv.command();
     cmd.env("TERM", "xterm-256color");
     let _client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-sessions", "-F", "#{session_name}"])
                 .is_ok_and(|out| out.lines().count() == 2)
@@ -585,7 +585,7 @@ fn the_first_attach_fills_the_update_environment() {
         80,
         24,
     );
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["show-environment", "-t", "main", "SSH_AUTH_SOCK"])
                 .is_ok_and(|out| out == "SSH_AUTH_SOCK=/tmp/x\n")
@@ -642,7 +642,7 @@ fn a_restore_raises_restore_done() {
     kill(&srv);
     write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["show-options", "-gqv", "@restored"])
                 .is_ok_and(|v| v == "yes\n")
@@ -672,7 +672,7 @@ fn a_restored_state_is_saved_again_with_its_persist_marks() {
         let text = fs::read_to_string(srv.snapshot_path()).unwrap_or_default();
         text.contains("renamed") && text.contains("sess-b") && text.contains("@theme")
     };
-    wait_until(saved, WAIT).expect("the writer saved the restored state with its marks");
+    try_wait_until(saved, WAIT).expect("the writer saved the restored state with its marks");
     kill(&srv);
     ok(&srv, &["start-server", "--restore"]);
     assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&home(&srv)));
@@ -756,6 +756,7 @@ fn build(srv: &TestServer) {
         .unwrap_or_else(|_| panic!("cd in {pane}"));
     }
     // T4.1 writes within a second of a change and samples cwds.
+    // Real time: the snapshot writer runs on its own timer.
     std::thread::sleep(Duration::from_secs(3));
 }
 
@@ -846,7 +847,7 @@ fn the_restore_request_reaches_nothing_the_server_runs() {
     );
     for file in ["pipe-env", "run-env", "pane-env"] {
         let path = srv.home.join(file);
-        wait_until(
+        try_wait_until(
             || fs::read_to_string(&path).is_ok_and(|t| t.contains("HOME=")),
             WAIT,
         )

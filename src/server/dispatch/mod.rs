@@ -570,6 +570,7 @@ pub(crate) fn spawn_pane_delayed(
         .or_else(|| state.model.default_command(session).map(|c| vec![c]));
     let shell = pane_shell(state.model.default_shell(session).as_deref());
     env.push(("SHELL".to_string(), shell.clone()));
+    let colours = clients::default_colours(&state.model, (session, window));
     let spec = PaneSpawn {
         id,
         session,
@@ -588,10 +589,10 @@ pub(crate) fn spawn_pane_delayed(
         images: graphics::images_enabled(&state.model),
         identity: state.model.identity,
         delay,
+        colours,
     };
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
-    clients::seed_defaults(&state.model, (session, window), &handle);
     state.model.panes.insert(
         id,
         Pane {

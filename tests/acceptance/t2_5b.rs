@@ -14,7 +14,7 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::{Harness, require_tool};
 
@@ -54,7 +54,7 @@ fn display(srv: &TestServer, target: &str, format: &str) -> String {
 }
 
 fn wait_display(srv: &TestServer, target: &str, format: &str, want: &str) {
-    if let Err(e) = wait_until(
+    if let Err(e) = try_wait_until(
         || display(srv, target, format) == want,
         Duration::from_secs(10),
     ) {
@@ -73,7 +73,7 @@ fn pane_count(srv: &TestServer, target: &str) -> usize {
 }
 
 fn wait_panes(srv: &TestServer, target: &str, want: usize) {
-    if let Err(e) = wait_until(|| pane_count(srv, target) == want, Duration::from_secs(10)) {
+    if let Err(e) = try_wait_until(|| pane_count(srv, target) == want, Duration::from_secs(10)) {
         panic!(
             "{target} never had {want} panes (has {}): {e}",
             pane_count(srv, target)
@@ -94,7 +94,7 @@ fn client_session(srv: &TestServer) -> String {
 }
 
 fn wait_client_session(srv: &TestServer, want: &str) {
-    if let Err(e) = wait_until(|| client_session(srv) == want, Duration::from_secs(10)) {
+    if let Err(e) = try_wait_until(|| client_session(srv) == want, Duration::from_secs(10)) {
         panic!(
             "the client never showed {want} (shows {:?}): {e}",
             client_session(srv)
@@ -254,9 +254,10 @@ fn neovim_edits_and_writes_a_file() {
     a.wait_for("hello from grofe");
     a.send("\x1b");
     // Past escape-time and nvim's own ttimeout, so `:` is not Meta-:.
+    // Past escape-time and nvim ttimeout, so `:` is not Meta-:.
     sleep(Duration::from_millis(300));
     a.send(":wq\r");
-    if let Err(e) = wait_until(
+    if let Err(e) = try_wait_until(
         || fs::read_to_string(&file).is_ok_and(|s| s == "hello from grofe\n"),
         Duration::from_secs(10),
     ) {
@@ -366,7 +367,7 @@ fn automatic_rename_works_without_a_client() {
     new_session(&srv, "main", "exec sh");
     srv.cmd(&["send-keys", "-t", "main", "cd /tmp", "Enter"])
         .expect("send-keys");
-    if let Err(e) = wait_until(
+    if let Err(e) = try_wait_until(
         || window_names(&srv, "main") == "tmp\n",
         Duration::from_secs(10),
     ) {
@@ -388,7 +389,7 @@ fn rename_window_and_new_window_n_stop_automatic_rename() {
     srv.cmd(&["send-keys", "-t", "main", "cd /tmp", "Enter"])
         .expect("send-keys");
     // Past a sample and a rename check.
-    sleep(Duration::from_millis(2500));
+    common::quiet_period(Duration::from_millis(2500));
     assert_eq!(window_names(&srv, "main"), "mine\n");
 
     srv.cmd(&["new-window", "-t", "main", "-n", "fixed", "exec sh"])
@@ -489,7 +490,7 @@ fn the_last_window_survives_the_active_windows_shell_exiting() {
     srv.cmd(&["select-window", "-t", "main:3"]).expect("select");
     srv.cmd(&["send-keys", "-t", "main:3", "exit", "Enter"])
         .expect("send-keys");
-    if let Err(e) = wait_until(
+    if let Err(e) = try_wait_until(
         || window_names(&srv, "main").lines().count() == 2,
         Duration::from_secs(10),
     ) {
