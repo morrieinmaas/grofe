@@ -453,8 +453,8 @@
     <div class="hero-act">
       <div class="row">
         <div class="cmd" style="flex: 1 1 560px">
-          <code><span class="prompt">$ </span>cargo install --locked --git https://github.com/termage/grofe grofe</code>
-          <button class="copy" type="button" data-copy="cargo install --locked --git https://github.com/termage/grofe grofe">Copy</button>
+          <code><span class="prompt">$ </span>brew install termage/tap/grofe</code>
+          <button class="copy" type="button" data-copy="brew install termage/tap/grofe">Copy</button>
         </div>
         <a class="btn" href="docs/">Read the docs</a>
         <a class="btn btn--quiet" href="https://github.com/termage/grofe" target="_blank" rel="noopener noreferrer">Star on GitHub<span data-gh="stars-inline"></span></a>
@@ -715,14 +715,19 @@ start-from-tmux = <span class="k">true</span>
       <h2 id="install-h" data-rise>Install grofe</h2>
       <div class="inst-grid">
         <div data-rise>
-          <h3>Build it with cargo</h3>
+          <h3>Homebrew, on macOS and Linux</h3>
+          <div class="cmd">
+            <code><span class="prompt">$ </span>brew install termage/tap/grofe</code>
+            <button class="copy" type="button" data-copy="brew install termage/tap/grofe">Copy</button>
+          </div>
+          <h3 class="next">Or with cargo</h3>
           <p>With Rust 1.88 or newer from <a href="https://rustup.rs" target="_blank" rel="noopener noreferrer">rustup</a>. It lands in <code>~/.cargo/bin</code>.</p>
           <div class="cmd">
-            <code><span class="prompt">$ </span>cargo install --locked --git https://github.com/termage/grofe grofe</code>
-            <button class="copy" type="button" data-copy="cargo install --locked --git https://github.com/termage/grofe grofe">Copy</button>
+            <code><span class="prompt">$ </span>cargo install --locked grofe</code>
+            <button class="copy" type="button" data-copy="cargo install --locked grofe">Copy</button>
           </div>
-          <h3 class="next">Or download a release</h3>
-          <p>Tagged releases carry binaries for macOS and Linux, x86_64 and arm64, static on Linux. Unpack one and put <code>grofe</code> on your <code>PATH</code>.</p>
+          <h3 class="next">Or a package from the release</h3>
+          <p>Each release carries a <code>.deb</code> and an <code>.rpm</code> for Debian, Ubuntu and Fedora, and static binaries for macOS and Linux, x86_64 and arm64. Every file is listed in <code>SHA256SUMS</code> and has a build attestation, so <code>gh attestation verify &lt;file&gt; --repo termage/grofe</code> proves it was built here.</p>
           <a class="btn btn--quiet" href="https://github.com/termage/grofe/releases" target="_blank" rel="noopener noreferrer">GitHub Releases</a>
           <h3 class="next">Coming from tmux</h3>
           <div class="cmd">

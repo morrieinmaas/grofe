@@ -2,16 +2,55 @@
 
 grofe runs on macOS and Linux.
 
+## Homebrew
+
+On macOS and Linux:
+
+```sh
+brew install termage/tap/grofe
+```
+
+`brew upgrade grofe` picks up new releases.
+
+## crates.io
+
+With Rust 1.88 or newer (from [rustup](https://rustup.rs)):
+
+```sh
+cargo install --locked grofe
+```
+
+## Debian, Ubuntu and Fedora
+
+Each release on the [releases page](https://github.com/termage/grofe/releases)
+carries a `.deb` and an `.rpm` for amd64 and arm64:
+
+```sh
+sudo apt install ./grofe_0.2.0-1_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./grofe-0.2.0-1.x86_64.rpm     # Fedora, RHEL
+```
+
 ## Prebuilt binaries
 
-Each tagged release has binaries for x86_64 and arm64 (static on Linux) on
-the [releases page](https://github.com/termage/grofe/releases). Unpack
-one and put `grofe` on your `PATH`.
+The same release has static binaries for x86_64 and arm64 on Linux, and
+binaries for both on macOS. Unpack one and put `grofe` on your `PATH`.
+
+## Verify a download
+
+Every release file is listed in `SHA256SUMS` and has a build attestation
+from GitHub Actions. In the folder you downloaded to:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify grofe-v0.2.0-x86_64-unknown-linux-musl.tar.gz --repo termage/grofe
+```
+
+The first proves the file is intact; the second proves it was built from
+this repository by its release workflow.
 
 ## From source
 
-With Rust 1.88 or newer (from [rustup](https://rustup.rs)), in a checkout of
-the repository:
+In a checkout of the repository:
 
 ```sh
 cargo install --locked --path .
