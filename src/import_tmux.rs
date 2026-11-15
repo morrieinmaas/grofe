@@ -37,6 +37,7 @@ use crate::config::provenance::tilde;
 use crate::config::{self, ConfigError, Ty, toml_type};
 use crate::server::dispatch::options::{ListOp, Options, Owner, by_separator, split_index};
 use crate::server::input::{Key, KeyCode, parse_key};
+use crate::util::quote;
 
 const USAGE: &str = "usage: import-tmux [<tmux.conf>] [-o <path>]";
 
@@ -1470,12 +1471,12 @@ impl Importer {
     /// superseded line so it is still accounted for.
     fn upsert_key(&mut self, new: BindingEntry) {
         if self.tpm_ran {
-            let (table, key) = (single_quote(&new.table), single_quote(&new.key.to_string()));
+            let (table, key) = (quote::sh(&new.table), quote::sh(&new.key.to_string()));
             let text = match new.command.as_str() {
                 "" => format!("unbind-key -T {table} {key}"),
                 cmd => {
                     let r = if new.repeat { "-r " } else { "" };
-                    format!("bind-key {r}-T {table} {key} {}", single_quote(cmd))
+                    format!("bind-key {r}-T {table} {key} {}", quote::sh(cmd))
                 }
             };
             self.load_commands.push(RuntimeEntry {
@@ -1977,7 +1978,7 @@ impl Importer {
                 // ponytail: a plugin path with a space in it is not quoted for sh.
                 let path = tilde(&p, self.home.as_deref());
                 self.load_commands.push(RuntimeEntry {
-                    text: format!("run-shell {}", single_quote(&path)),
+                    text: format!("run-shell {}", quote::sh(&path)),
                     file: file.to_path_buf(),
                     line,
                 });
@@ -2757,11 +2758,6 @@ fn literal(toml: &str, value: &str) -> String {
 
 fn quote(s: &str) -> String {
     toml::Value::String(s.to_string()).to_string()
-}
-
-/// One word in grofe's command grammar: in single quotes, a `'` as `'\''`.
-fn single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 fn bare_or_quoted(s: &str) -> String {
