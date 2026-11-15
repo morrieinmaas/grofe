@@ -174,15 +174,16 @@ mod tests {
     #[test]
     fn test_nested_guarded_keeps_outer_deadline() {
         let r = rt();
-        let t = Instant::now();
         r.guarded("outer", |_| {
-            std::thread::sleep(Duration::from_millis(30));
+            // Past the outer 50 ms deadline: a fresh inner budget would spin for another 50 ms.
+            std::thread::sleep(Duration::from_millis(60));
+            let t = Instant::now();
             let inner = r.exec("inner", "while true do end").unwrap_err();
+            assert!(t.elapsed() < Duration::from_millis(25), "{:?}", t.elapsed());
             assert!(inner.message.contains("budget"), "{inner}");
             Ok(())
         })
         .unwrap();
-        assert!(t.elapsed() < Duration::from_millis(75), "{:?}", t.elapsed());
     }
 
     /// Runs `src`, checks it ended fast with an error containing `want`, then that the VM still runs.
@@ -208,7 +209,8 @@ mod tests {
     }
     #[test]
     fn huge_allocations_are_errors() {
-        aborts("string.rep('x', 2^31)", "too large");
+        // Not 2^31: Luau casts the count to int, which wraps negative on x86_64 and yields "".
+        aborts("string.rep('x', 2^30 + 1)", "too large");
         aborts("string.rep('x', 1e9)", "memory");
         aborts("string.format('%999999999d', 1)", "invalid format");
         aborts("buffer.create(1e9)", "memory");
