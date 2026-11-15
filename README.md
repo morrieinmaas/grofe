@@ -223,9 +223,10 @@ the tiling and follows the pointer, its content still live, while a preview
 frame shows where it will land:
 
 - drop it on another pane's middle and the two swap;
-- drop it on the outer quarter of a side and it docks there, splitting that
+- drop it on the thin band along a side and it docks there, splitting that
   pane;
-- drop it on a gap, off every tile, and it stays floating there;
+- drop it on a gap, the status line or off the window and it snaps to the
+  nearest pane: a tiled pane never ends up floating by accident;
 - right-click or press Escape before you let go to put it back.
 
 The program inside learns its new size once, when you let go. Dragging a gap

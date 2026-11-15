@@ -6,9 +6,10 @@
 //! | Released over | Result |
 //! |---|---|
 //! | the middle of `T` | the two swap places, as `swap-pane` |
-//! | the outer quarter of one of `T`'s sides | `T` is split and the pane takes the half on that side; the space it left is filled as `kill-pane` fills it |
+//! | the thin band along one of `T`'s sides | `T` is split and the pane takes the half on that side; the space it left is filled as `kill-pane` fills it |
 //! | the pane itself | nothing |
-//! | no tile (a gap) | the pane floats where it was dropped ([`float_at`]) |
+//! | no tile (a gap, off the window), a tiled pane | the nearest tile, as if the pointer were at its closest cell |
+//! | no tile, a floating pane | it floats where it was dropped ([`float_at`]) |
 //!
 //! An edge drop that would leave the layout's shape as it is changes
 //! nothing, so a moved divider stays put; a side of `T` too small to split
@@ -53,8 +54,14 @@ pub struct Drop {
     pub swap: bool,
 }
 
+/// The width of an edge band along a side `len` cells long: a sixth of it,
+/// 1 to 5 cells, so most of a pane is its middle.
+fn band(len: u32) -> u32 {
+    (len / 6).clamp(1, 5)
+}
+
 /// The zone of rect `r` that window cell `(x, y)`, inside it, is in: the
-/// outer quarter of a side is that edge, the closest one (relative to the
+/// thin band along a side is that edge, the closest one (relative to the
 /// rect's size) in a corner; the rest is the middle.
 pub fn zone(r: Rect, (x, y): (u32, u32)) -> Zone {
     let (cols, rows) = (u32::from(r.cols).max(1), u32::from(r.rows).max(1));
@@ -64,8 +71,8 @@ pub fn zone(r: Rect, (x, y): (u32, u32)) -> Zone {
     );
     let (near_x, left) = (dx.min(cols - 1 - dx), dx <= cols - 1 - dx);
     let (near_y, top) = (dy.min(rows - 1 - dy), dy <= rows - 1 - dy);
-    let on_x = 4 * near_x < cols;
-    let on_y = 4 * near_y < rows;
+    let on_x = near_x < band(cols);
+    let on_y = near_y < band(rows);
     let side_x = if left { Side::Left } else { Side::Right };
     let side_y = if top { Side::Top } else { Side::Bottom };
     match (on_x, on_y) {
@@ -107,10 +114,17 @@ pub fn plan(w: &Window, dragged: PaneId, at: (u32, u32)) -> Option<Drop> {
     let area = w.area();
     let framed = w.framed();
     let floating = w.floating(dragged).is_some();
-    let (onto, content) = w
-        .tiled_rects()
-        .into_iter()
-        .find(|(_, r)| contains(drop_rect(*r, framed), at))?;
+    let tiles = w.tiled_rects();
+    let (onto, content, at) = match tiles
+        .iter()
+        .find(|(_, r)| contains(drop_rect(*r, framed), at))
+    {
+        Some(&(onto, content)) => (onto, content, at),
+        // A tiled pane released off every tile snaps to the nearest, and
+        // never floats.
+        None if !floating => nearest(&tiles, framed, at)?,
+        None => return None,
+    };
     let (layout, swap) = if onto == HOLE {
         // Only floating panes are left: one dropped anywhere takes the
         // layout's hole, as `unfloat-pane` does.
@@ -139,6 +153,30 @@ pub fn plan(w: &Window, dragged: PaneId, at: (u32, u32)) -> Option<Drop> {
         preview,
         swap,
     })
+}
+
+/// The tile closest to window cell `at`, off every tile, with its content
+/// rect and the cell of it (frame included) that `at` is nearest to. The
+/// first tile wins a tie, so a gap between two goes to the left or upper one.
+fn nearest(
+    tiles: &[(PaneId, Rect)],
+    framed: bool,
+    at: (u32, u32),
+) -> Option<(PaneId, Rect, (u32, u32))> {
+    let clamp = |r: Rect| {
+        let (x, y) = (
+            at.0.clamp(u32::from(r.x), u32::from(r.x + r.cols.max(1) - 1)),
+            at.1.clamp(u32::from(r.y), u32::from(r.y + r.rows.max(1) - 1)),
+        );
+        (x, y)
+    };
+    tiles
+        .iter()
+        .filter(|(id, _)| *id != HOLE)
+        .map(|&(id, content)| (id, content, clamp(drop_rect(content, framed))))
+        .min_by_key(|&(_, _, (x, y))| {
+            (u64::from(x.abs_diff(at.0)).pow(2)) + u64::from(y.abs_diff(at.1)).pow(2)
+        })
 }
 
 /// A drop on the middle of `onto` (content rect `content`): a tiled pane
@@ -332,18 +370,52 @@ mod tests {
     }
 
     #[test]
-    fn the_outer_quarter_of_a_side_is_its_edge() {
+    fn the_middle_is_most_of_a_pane_and_an_edge_a_thin_band() {
         let r = rect(10, 0, 40, 20);
-        assert_eq!(zone(r, (10, 10)), Zone::Edge(Side::Left));
-        assert_eq!(zone(r, (19, 10)), Zone::Edge(Side::Left));
-        assert_eq!(zone(r, (20, 10)), Zone::Middle);
-        assert_eq!(zone(r, (49, 10)), Zone::Edge(Side::Right));
-        assert_eq!(zone(r, (30, 0)), Zone::Edge(Side::Top));
-        assert_eq!(zone(r, (30, 19)), Zone::Edge(Side::Bottom));
-        assert_eq!(zone(r, (30, 10)), Zone::Middle);
+        // 40 columns: a band of 5 (a sixth, at most 5); 20 rows: 3.
+        assert_eq!(zone(r, (14, 10)), Zone::Edge(Side::Left));
+        assert_eq!(zone(r, (15, 10)), Zone::Middle);
+        assert_eq!(zone(r, (44, 10)), Zone::Middle);
+        assert_eq!(zone(r, (45, 10)), Zone::Edge(Side::Right));
+        assert_eq!(zone(r, (30, 2)), Zone::Edge(Side::Top));
+        assert_eq!(zone(r, (30, 3)), Zone::Middle);
         // A corner goes to the nearer edge for the side's length.
-        assert_eq!(zone(r, (11, 4)), Zone::Edge(Side::Left));
-        assert_eq!(zone(r, (18, 0)), Zone::Edge(Side::Top));
+        assert_eq!(zone(r, (11, 2)), Zone::Edge(Side::Left));
+        assert_eq!(zone(r, (13, 0)), Zone::Edge(Side::Top));
+        // A wide pane's band stops at 5 cells.
+        let wide = rect(0, 0, 200, 50);
+        assert_eq!(zone(wide, (5, 25)), Zone::Middle);
+        // A tiny pane still has a one-cell edge.
+        let tiny = rect(0, 0, 4, 4);
+        assert_eq!(zone(tiny, (0, 2)), Zone::Edge(Side::Left));
+    }
+
+    #[test]
+    fn a_tiled_pane_released_off_every_tile_snaps_to_the_nearest() {
+        for framed in [false, true] {
+            let w = window(framed);
+            let right = rects(&w.layout, &w)[1].1;
+            let below = u32::from(w.rows) + 3;
+            // Below %1's middle, off the window: %0 goes under %1.
+            let d =
+                plan(&w, PaneId(0), (u32::from(right.x + right.cols / 2), below)).expect("a snap");
+            assert!(!d.swap);
+            let after = rects(&d.layout, &w);
+            let at = |id| after.iter().find(|p| p.0 == PaneId(id)).unwrap().1;
+            let (zero, one) = (at(0), at(1));
+            assert!(
+                zero.y > one.y && zero.x == one.x,
+                "framed {framed}: {after:?}"
+            );
+            // Past %1's right edge: %0 docks on its right.
+            let d = plan(&w, PaneId(0), (200, 10)).expect("a snap");
+            let after = rects(&d.layout, &w);
+            let at = |id| after.iter().find(|p| p.0 == PaneId(id)).unwrap().1;
+            assert!(at(0).x > at(1).x, "framed {framed}: {after:?}");
+            // Off its own side of the window: it is the nearest tile, so
+            // nothing changes.
+            assert!(plan(&w, PaneId(0), (0, 10)).is_none(), "framed {framed}");
+        }
     }
 
     #[test]
