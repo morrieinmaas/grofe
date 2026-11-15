@@ -130,6 +130,7 @@ struct Launch {
 impl Launch {
     /// Prompts for the branch; empty means no worktree.
     fn ask(self, state: &mut State, client: ClientId) {
+        let key = self.ctx.request.event_key.clone();
         prompt::ask(
             state,
             client,
@@ -137,7 +138,6 @@ impl Launch {
             "",
             "command",
             false,
-            self.ctx.request.event_key.clone(),
             Box::new(move |state, client, text| {
                 let text = text.trim().to_string();
                 let result = if text.is_empty() {
@@ -158,6 +158,7 @@ impl Launch {
                 Routed::Consumed
             }),
         );
+        prompt::opened_by(state, client, key);
     }
 
     /// Makes the worktree off the actor, then opens in it from a job.

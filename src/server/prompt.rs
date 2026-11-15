@@ -1925,7 +1925,6 @@ pub fn ask(
     initial: &str,
     kind: &str,
     single: bool,
-    key: Option<String>,
     then: PromptFn,
 ) {
     let kind = PROMPT_TYPES.iter().position(|k| *k == kind).unwrap_or(0);
@@ -1935,10 +1934,16 @@ pub fn ask(
         then: Then(Some(then)),
         ..Prompt::new(label.to_string(), initial, String::new())
     };
-    let mut prompt = prompt;
-    prompt.key = key;
     state.prompts.open.insert(id, prompt);
     clients::mark_dirty(state, id);
+}
+
+/// Records `key`, the key whose binding opened client `id`'s prompt, so
+/// its commands are logged as run by it (`show-messages`).
+pub fn opened_by(state: &mut State, id: ClientId, key: Option<String>) {
+    if let Some(prompt) = state.prompts.open.get_mut(&id) {
+        prompt.key = key;
+    }
 }
 
 /// An incremental prompt's callback (tmux's `cmd_command_prompt_callback`

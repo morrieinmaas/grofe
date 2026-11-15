@@ -312,7 +312,6 @@ pub(super) fn ask_yes(
         "",
         "command",
         true,
-        None,
         Box::new(move |state, _client, text| {
             let mut chars = text.chars();
             let yes = matches!(chars.next(), Some(c) if c.eq_ignore_ascii_case(&'y'))
@@ -365,7 +364,6 @@ pub(super) fn custom_enter(
                         &initial,
                         "command",
                         false,
-                        None,
                         Box::new(move |state, _client, text| {
                             if text.is_empty() {
                                 return Routed::Consumed;
@@ -393,7 +391,6 @@ pub(super) fn custom_enter(
                     &initial,
                     "command",
                     false,
-                    None,
                     Box::new(move |state, client, text| {
                         if text.is_empty() {
                             return Routed::Consumed;
@@ -419,7 +416,6 @@ pub(super) fn custom_enter(
                     &initial,
                     "command",
                     false,
-                    None,
                     Box::new(move |state, _client, text| {
                         if !text.is_empty() {
                             customize::set_key_note(state, &table, &key, text);
@@ -892,7 +888,6 @@ pub(super) fn key_press(state: &mut State, client: ClientId, key: &Key) -> Route
             &initial,
             "search",
             false,
-            None,
             Box::new(move |state, client, text| {
                 if let Some(tree) = state.trees.open.get_mut(&client) {
                     tree.filter = (!text.is_empty()).then(|| text.to_string());
@@ -954,7 +949,6 @@ pub(super) fn key_press(state: &mut State, client: ClientId, key: &Key) -> Route
             "",
             "command",
             false,
-            None,
             Box::new(move |state, client, text| {
                 if text.is_empty() {
                     return Routed::Consumed;
@@ -1053,7 +1047,6 @@ pub(super) fn ask_search(state: &mut State, client: ClientId) -> Routed {
         "",
         "search",
         false,
-        None,
         Box::new(move |state, client, text| {
             if let Some(tree) = state.trees.open.get_mut(&client) {
                 tree.search = (!text.is_empty()).then(|| Search {
@@ -1219,16 +1212,7 @@ pub(super) fn kill_prompt(
     if yes {
         return kill(state, client, "y");
     }
-    crate::server::prompt::ask(
-        state,
-        client,
-        &label,
-        "",
-        "command",
-        true,
-        None,
-        Box::new(kill),
-    );
+    crate::server::prompt::ask(state, client, &label, "", "command", true, Box::new(kill));
     Routed::Consumed
 }
 
