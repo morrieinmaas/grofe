@@ -1060,53 +1060,6 @@ pub(crate) fn messages(state: &State) -> impl DoubleEndedIterator<Item = &(Syste
     state.registry.messages.iter()
 }
 
-/// tmux's `format_pretty_time` without seconds (`#{t/p:...}`): `HH:MM`
-/// within a day, `%a%d` within the month or 28 days, `%d%b` within the
-/// year, else `%b%y`.
-pub(crate) fn pretty_time(t: SystemTime) -> String {
-    let secs = |t: SystemTime| {
-        t.duration_since(UNIX_EPOCH)
-            .map_or(0, |d| libc::time_t::try_from(d.as_secs()).unwrap_or(0))
-    };
-    let then = secs(t);
-    let now = secs(SystemTime::now()).max(then);
-    let age = now - then;
-    let (tm, now_tm) = (local_tm(then), local_tm(now));
-    let format = if age < 24 * 3600 {
-        "%H:%M"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon == now_tm.tm_mon) || age < 28 * 24 * 3600 {
-        "%a%d"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon < now_tm.tm_mon)
-        || (tm.tm_year == now_tm.tm_year - 1 && tm.tm_mon > now_tm.tm_mon)
-    {
-        "%d%b"
-    } else {
-        "%b%y"
-    };
-    strftime(format, &tm)
-}
-
-fn local_tm(t: libc::time_t) -> libc::tm {
-    // SAFETY: `localtime_r` writes into the zeroed `tm` we own (all-zero
-    // is a valid `tm`).
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        tm
-    }
-}
-
-fn strftime(format: &str, tm: &libc::tm) -> String {
-    let Ok(format) = std::ffi::CString::new(format) else {
-        return String::new();
-    };
-    let mut buf = [0u8; 64];
-    // SAFETY: `buf` is writable for its length and `strftime` writes at
-    // most that many bytes, returning how many (0 on overflow).
-    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), buf.len(), format.as_ptr(), tm) };
-    String::from_utf8_lossy(&buf[..n]).into_owned()
-}
-
 /// Client `id` redraws (`refresh-client`): only its status line with
 /// `status_only`, else everything, as if it had just attached.
 pub(crate) fn refresh(state: &mut State, id: ClientId, status_only: bool) {
@@ -4875,21 +4828,6 @@ mod tests {
             messages(&state).next_back().map(|(_, m)| m.as_str()),
             Some("client-1 message: last")
         );
-    }
-
-    /// tmux's `format_pretty_time`: the time of day within a day, else a
-    /// day and date, a date and month, or a month and year.
-    #[test]
-    fn pretty_times_follow_tmux() {
-        let now = SystemTime::now();
-        let t = pretty_time(now);
-        assert!(t.len() == 5 && t.as_bytes()[2] == b':', "{t}");
-        let year_ago = now - Duration::from_secs(400 * 24 * 3600);
-        let t = pretty_time(year_ago);
-        assert_eq!(t.len(), 5, "{t}");
-        assert!(t[3..].chars().all(|c| c.is_ascii_digit()), "{t}");
-        let week_ago = pretty_time(now - Duration::from_secs(7 * 24 * 3600));
-        assert!(week_ago.len() == 5 && week_ago[3..].chars().all(|c| c.is_ascii_digit()));
     }
 
     fn held_inputs(state: &State, id: ClientId) -> Vec<Input> {

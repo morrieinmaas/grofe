@@ -10,8 +10,8 @@
 //! bracket-aware splitting ([`skip1`]) only has the `##` and `#{` forms
 //! left to step over.
 
-use nix::libc;
 
+use super::time::{localtime, pretty_time, strftime};
 use super::x11::X11;
 use super::{
     Expander, Fail, FormatVars, LoopItem, LoopKind, LoopSort, NameKind, SortOrder, char_width,
@@ -377,58 +377,6 @@ fn strip(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-}
-
-fn localtime(t: i64) -> Option<libc::tm> {
-    let t = t as libc::time_t;
-    // SAFETY: `tm` is plain old data, so all zeroes is a valid value.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers are to live locals; localtime_r is reentrant.
-    (!unsafe { libc::localtime_r(&t, &mut tm) }.is_null()).then_some(tm)
-}
-
-/// `strftime(3)` of `fmt` for `tm`, with a buffer of `max` bytes: `None`
-/// when the result is empty or does not fit, as tmux reads a 0 return.
-fn strftime(fmt: &str, tm: &libc::tm, max: usize) -> Option<String> {
-    let cfmt = std::ffi::CString::new(fmt).ok()?;
-    let mut buf = vec![0u8; max];
-    // SAFETY: `buf` is `max` bytes long and `cfmt` a NUL-terminated string;
-    // `tm` is a fully initialised broken-down time.
-    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), max, cfmt.as_ptr(), tm) };
-    (n != 0).then(|| String::from_utf8_lossy(&buf[..n]).into_owned())
-}
-
-/// `fmt` through `strftime` at the current local time (the first thing
-/// tmux's `format_expand_time` does).
-pub(super) fn strftime_now(fmt: &str, max: usize) -> Option<String> {
-    strftime(fmt, &localtime(now_secs())?, max)
-}
-
-/// tmux's `format_pretty_time`: how long ago, as short as it can be.
-fn pretty_time(t: i64) -> String {
-    let now = now_secs().max(t);
-    let age = now - t;
-    let (Some(now_tm), Some(tm)) = (localtime(now), localtime(t)) else {
-        return String::new();
-    };
-    let fmt = if age < 24 * 3600 {
-        "%H:%M"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon == now_tm.tm_mon) || age < 28 * 24 * 3600 {
-        "%a%d"
-    } else if (tm.tm_year == now_tm.tm_year && tm.tm_mon < now_tm.tm_mon)
-        || (tm.tm_year == now_tm.tm_year - 1 && tm.tm_mon > now_tm.tm_mon)
-    {
-        "%d%b"
-    } else {
-        "%h%y"
-    };
-    strftime(fmt, &tm, 9).unwrap_or_default()
 }
 
 /// tmux's `regsub`: every match of the extended regular expression

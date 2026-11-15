@@ -84,10 +84,6 @@ impl Clocks {
     }
 }
 
-fn strftime(fmt: &str) -> String {
-    expand_time(fmt, &NoVars)
-}
-
 /// The text the clock shows for `style` (0 and 2 are 12 hours, 1 and 3 24;
 /// 2 and 3 have seconds), `time` being `strftime` at the current time:
 /// tmux's `window_clock_draw_screen`.
@@ -115,7 +111,7 @@ fn style_of(state: &State, pane: PaneId) -> u8 {
 }
 
 fn now_text(state: &State, pane: PaneId) -> String {
-    text(style_of(state, pane), &strftime)
+    text(style_of(state, pane), &|fmt| expand_time(fmt, &NoVars))
 }
 
 /// `clock-mode [-t target-pane]`: puts the pane in clock mode. A pane

@@ -9,6 +9,7 @@ use std::cell::{Cell, RefCell};
 
 mod modify;
 mod names;
+pub mod time;
 mod x11;
 
 pub use modify::escape_arg;
@@ -213,7 +214,7 @@ pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
     if !fmt.contains('%') {
         return expand_after_time(fmt, vars);
     }
-    match modify::strftime_now(fmt, 8192) {
+    match time::strftime_now(fmt, 8192) {
         Some(timed) => expand_after_time(&timed, vars),
         None => String::new(),
     }
@@ -416,7 +417,7 @@ impl<'a> Expander<'a> {
         if self.shared.expand_time.get() && !top_done && fmt.contains('%') {
             // tmux 3.7b: a format too long for strftime's 8 KiB buffer gives
             // nothing.
-            let Some(timed) = modify::strftime_now(fmt, 8192) else {
+            let Some(timed) = time::strftime_now(fmt, 8192) else {
                 self.log(|| "format is too long".to_string());
                 return String::new();
             };
