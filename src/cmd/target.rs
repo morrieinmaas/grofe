@@ -2,7 +2,8 @@
 //! `session:window`, `session:window.pane`, with window by index or name
 //! and pane by index. A bare word is read as tmux's cmd-find.c reads it,
 //! by the kind of target the verb wants ([`SessionRef::Bare`]). Not supported in v1: fnmatch patterns, `{last}`/
-//! `{next}` tokens, `!`, `+`/`-` offsets.
+//! `{next}`/`{previous}` tokens, `!`, `+`/`-` offsets (the tmux front end reads
+//! them, below).
 //!
 //! A leading `=` means exact, natively and in the tmux front end alike, as
 //! in tmux: `=name:window` and `=name:window.pane` name exactly session
@@ -12,8 +13,9 @@
 //! exactly that window.
 //!
 //! The tmux front end (FE.1, spec §4.5) also reads targets the tmux way
-//! through [`with_tmux_targets`]: `+`/`-` offsets in the window and pane
-//! parts are relative to the active window or pane, `^`/`{start}` and
+//! through [`with_tmux_targets`]: `+`/`-` offsets and `{next}`/`{previous}` in
+//! the window and pane parts are relative to the active window or pane,
+//! `!`/`{last}` is the last window or pane, `^`/`{start}` and
 //! `$`/`{end}` in the window part are the first and last window, and a
 //! bare `=` (tmux's mouse target, which mouse keys replace before parsing,
 //! M36-R3) fails when it is resolved, as in tmux, so a mouse binding that
@@ -70,6 +72,9 @@ pub enum WindowRef {
     /// tmux's `+N`/`-N`: that many windows after or before the session's
     /// current one, wrapping. Built only by the tmux front end.
     Offset(i32),
+    /// tmux's `!`/`{last}`: the session's last window. Built only by the
+    /// tmux front end.
+    LastUsed,
     /// tmux's `^`/`{start}` and `$`/`{end}`: the session's lowest and
     /// highest window index. Built only by the tmux front end.
     First,
@@ -85,6 +90,9 @@ pub enum PanePart {
     /// tmux's `+N`/`-N`: that many panes after or before the window's
     /// active one, wrapping. Built only by the tmux front end.
     Offset(i32),
+    /// tmux's `!`/`{last}`: the window's last active pane. Built only by the
+    /// tmux front end.
+    LastUsed,
 }
 
 /// A fully parsed `session:window.pane` target, bundled into one type so
@@ -114,6 +122,9 @@ pub enum Target {
 /// [`ParseError::UnsupportedTarget`] instead of silently treating them as
 /// a literal name.
 fn is_unsupported_token(s: &str) -> bool {
+    if tmux_targets() && (is_last_token(s) || tmux_offset(s).is_some()) {
+        return false;
+    }
     if s == "!" || s == "{last}" || s == "{next}" {
         return true;
     }
@@ -159,6 +170,9 @@ fn tmux_window(s: &str) -> Option<WindowRef> {
     if !tmux_targets() {
         return None;
     }
+    if is_last_token(s) {
+        return Some(WindowRef::LastUsed);
+    }
     match s {
         "^" | "{start}" => Some(WindowRef::First),
         "$" | "{end}" => Some(WindowRef::Last),
@@ -166,9 +180,46 @@ fn tmux_window(s: &str) -> Option<WindowRef> {
     }
 }
 
+/// A bare word that tmux reads as a window by position (`!`, `{next}`, `+2`,
+/// `^`, `{end}`), for a verb that wants a window. The tmux front end leaves
+/// such words as [`SessionRef::Bare`] for the resolver; a window named
+/// `{previous}` or `-` is not reachable by a bare word there.
+pub fn tmux_window_token(s: &str) -> Option<WindowRef> {
+    if is_last_token(s) {
+        return Some(WindowRef::LastUsed);
+    }
+    match s {
+        "^" | "{start}" => Some(WindowRef::First),
+        "{end}" => Some(WindowRef::Last),
+        _ => offset_token(s).map(WindowRef::Offset),
+    }
+}
+
+/// The same for a verb that wants a pane: `!`, `{next}`, `-1`.
+pub fn tmux_pane_token(s: &str) -> Option<PanePart> {
+    if is_last_token(s) {
+        return Some(PanePart::LastUsed);
+    }
+    offset_token(s).map(PanePart::Offset)
+}
+
+/// tmux's `!` and `{last}`.
+pub fn is_last_token(s: &str) -> bool {
+    s == "!" || s == "{last}"
+}
+
 fn tmux_offset(s: &str) -> Option<i32> {
     if !tmux_targets() {
         return None;
+    }
+    offset_token(s)
+}
+
+fn offset_token(s: &str) -> Option<i32> {
+    match s {
+        "{next}" => return Some(1),
+        "{previous}" => return Some(-1),
+        _ => {}
     }
     let (sign, digits) = match s.as_bytes().first()? {
         b'+' => (1, &s[1..]),
@@ -404,6 +455,9 @@ fn parse_window_ref(s: &str) -> Result<WindowRef, ParseError> {
 }
 
 fn parse_pane_part(s: &str) -> Result<PanePart, ParseError> {
+    if tmux_targets() && is_last_token(s) {
+        return Ok(PanePart::LastUsed);
+    }
     if let Some(n) = tmux_offset(s) {
         return Ok(PanePart::Offset(n));
     }
@@ -804,9 +858,20 @@ mod tests {
             parse_target("1").unwrap(),
             Target::Session(SessionRef::Bare("1".to_string()))
         );
-        // Ids and a bare offset keep their native reading.
+        // Ids keep their native reading; a bare offset or `!` is left for
+        // the resolver, which reads it by the kind of target the verb wants
+        // (recorded on tmux 3.7b: `select-window -t +1`).
         assert_eq!(t("%3").unwrap(), parse_target("%3").unwrap());
-        assert!(t("+1").is_err());
+        for word in ["+1", "-2", "!", "{last}", "{next}", "{previous}"] {
+            assert_eq!(
+                t(word).unwrap(),
+                Target::Session(SessionRef::Bare(word.into()))
+            );
+            assert!(
+                parse_target(word).is_err() || word == "{previous}",
+                "{word}"
+            );
+        }
         // The reading ends with the call.
         assert!(parse_target(":.+").is_err());
     }
