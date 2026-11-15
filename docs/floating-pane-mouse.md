@@ -62,9 +62,10 @@ release over a tiled pane `T`:
 | Released over | Result |
 |---|---|
 | the middle of `T` | the two swap places, as `swap-pane` |
-| the outer quarter of one of `T`'s sides (its frame included) | `T` is split, and the pane takes the half on that side; the space it left is filled as `kill-pane` would fill it |
+| the thin band along one of `T`'s sides (its frame included): a sixth of the side, 1 to 5 cells | `T` is split, and the pane takes the half on that side; the space it left is filled as `kill-pane` would fill it |
 | the pane itself | nothing changes |
-| no tile: a gap, or off the window | the pane floats there at its size, on top and active (a floating pane moves there); a window's last tiled pane stays. Unframed, only off the window |
+| no tile (a gap, the status line, off the window), a tiled pane | the nearest tile, as if the pointer were on its closest cell: a tiled pane never floats from a drop |
+| no tile, a floating pane | it moves there, at its size, on top and active |
 
 A right click or Escape before the release cancels the move, and the rest of
 the drag does nothing.
