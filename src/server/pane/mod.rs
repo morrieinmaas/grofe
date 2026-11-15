@@ -1940,6 +1940,43 @@ mod tests {
         assert_eq!(got, ["1", "0", "0", "0"]);
     }
 
+    /// The colours in the spawn answer an OSC 11 query the child sends at
+    /// once, with no `set_default_colours` after the spawn.
+    #[tokio::test]
+    async fn a_spawn_answers_osc_11_with_its_colours_from_the_start() {
+        let (tx, _rx) = mpsc::channel(64);
+        let spec = PaneSpawn {
+            colours: (
+                None,
+                Some(Rgb {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }),
+            ),
+            ..spec_for(&[
+                "sh",
+                "-c",
+                "stty raw -echo; printf '\\033]11;?\\033\\\\'; \
+                 dd bs=1 count=23 2>/dev/null | cat -v; exec sleep 100",
+            ])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        let mut got = String::new();
+        for _ in 0..500 {
+            got = handle.capture(&CaptureOpts {
+                start: None,
+                end: None,
+                escapes: false,
+            });
+            if got.contains("rgb:") && got.contains("5656") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(got.contains("rgb:1212/3434/5656"), "{got:?}");
+    }
+
     /// F1: a respawned pane keeps what it reported (OSC 7), as tmux's does,
     /// and the old process's output does not reach the new screen.
     #[tokio::test]
