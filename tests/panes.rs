@@ -48,7 +48,7 @@ fn active(srv: &TestServer, target: &str) -> String {
 }
 
 fn wait_for_file(path: &Path) -> String {
-    common::wait_until(
+    common::try_wait_until(
         || fs::read_to_string(path).is_ok_and(|s| s.ends_with('\n')),
         WAIT,
     )
@@ -184,7 +184,7 @@ fn split_window_without_room_errors_like_tmux() {
     assert_eq!(err.trim_end(), "size or position no space for a new pane");
     assert_eq!(panes(&srv, "s", "#{pane_id}").len(), 2);
     // The command never started: no pane was spawned for a failed split.
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!ran.exists());
 }
 
@@ -479,7 +479,7 @@ fn respawn_pane_keeps_the_uid() {
     wait_for_line(&srv, "r:1.2", "second");
     assert_eq!(display(&srv, "r:1.2", "#{pane_id} #{pane_uid}"), before);
     // The respawned pane is still live after the old process's exit.
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(display(&srv, "r:1.2", "#{pane_dead}"), "0");
 }
 

@@ -315,11 +315,11 @@ fn a_stalled_client_gets_each_image_once() {
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(0)
     };
-    if let Err(e) = common::wait_until(|| discarded() > 0, WAIT) {
+    if let Err(e) = common::try_wait_until(|| discarded() > 0, WAIT) {
         panic!("{e}: no frame was dropped for the stopped client");
     }
     touch(&stop);
-    if let Err(e) = common::wait_until(|| srv.capture("main").contains("END"), WAIT) {
+    if let Err(e) = common::try_wait_until(|| srv.capture("main").contains("END"), WAIT) {
         panic!("{e}: the pane never finished:\n{}", srv.capture("main"));
     }
     drop(stopped);
