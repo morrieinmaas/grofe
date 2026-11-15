@@ -24,10 +24,14 @@ a conversation. Every other pane comes back as a shell in its directory. No
 resurrect, no continuum, no list of process names to whitelist. Before you
 reboot, `grofe reboot-check` tells you exactly what will come back.
 
-**Works with the agent tools you already use.** grofe does not build its own
-agent dashboard. The tmux plugins that track coding agents, such as
-tmux-claude-session-manager and opensessions, run on grofe unchanged, and a
-pane told how to resume its agent comes back to the same conversation.
+**Knows your coding agents.** grofe tracks which panes run an agent (Claude
+Code, opencode, codex and others, as config data) and what each one is doing:
+working, blocked, done. A picker jumps to the pane that needs you, a sidebar
+and a grid show every agent at a glance, and desktop notifications reach you
+when you are looking elsewhere. Every surface is optional. The tmux plugins
+that track coding agents, such as tmux-claude-session-manager and
+opensessions, still run on grofe unchanged, and a pane told how to resume its
+agent comes back to the same conversation.
 
 **A config you can actually debug.** Configuration is TOML with a schema. A
 typo is an error that names the file, the line and the setting you probably
@@ -130,6 +134,7 @@ A session started without `-s` is named after the git repository it starts
 in, or else its folder (`home` for `~`), with `-2`, `-3` for more in the same
 place.
 
+Every option, its type, default and tmux name is in [docs/config-reference.md](docs/config-reference.md).
 Configuration lives in `~/.config/grofe/` (or `$XDG_CONFIG_HOME/grofe/`).
 `config.toml` loads first, then every `conf.d/*.toml` in name order, then
 `user.toml`, and each one overrides the ones before. Write a small config,
@@ -445,8 +450,8 @@ described above; `import-tmux` and the tmux compatibility layer, with tmux
 plugins loading unchanged; and grofe's own supervised plugins over
 [protocol v1](docs/protocol-v1.md). It runs on Linux and macOS.
 
-The [roadmap](docs/plans/2026-09-23-milestones.md) has the details, and the
-[design document](docs/specs/2026-09-23-grofe-design.md) explains the
+The [roadmap](docs/roadmap.md) lists what is open, and the
+[design document](docs/archive/specs/2026-09-23-grofe-design.md) explains the
 reasoning behind every choice.
 
 ## Contributing
@@ -463,8 +468,8 @@ Integration tests start their own servers on private sockets, so they never
 touch a grofe or tmux you have running. The tmux compatibility suite
 (`tests/compat`) compares against recorded tmux output, so it mostly needs no
 tmux installed; the cases that replay real-world configs skip unless
-`GROFE_COMPAT_CANOPY` and `GROFE_COMPAT_ATHOME` point at checkouts of them.
-`docs/` holds the design, the milestone plans and the notes behind them.
+`GROFE_COMPAT_*` variables point at checkouts of them (see `docs/archive/owner-corpus.md`).
+`docs/` holds the user guides and the specs; `docs/archive/` keeps the finished milestone plans and one-off notes.
 
 ## License
 

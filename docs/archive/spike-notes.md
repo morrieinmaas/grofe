@@ -235,7 +235,7 @@ Not re-run, as in T0.4: `hs`/`XF` (they describe the entry, not an escape a
 pane sends), `E3` (erasing scrollback is the pane emulator's own business,
 not the outer terminal's) and `XR` (`\E[>0q`, XTVERSION): the pane gets no
 reply (spec §8), so an app waiting for one without a DA1 fence times out;
-logged in docs/dogfood.md.
+logged in docs/archive/dogfood.md.
 
 **macOS's own entry is older.** The table was read from ncurses 6.6's
 `tmux-256color`. macOS ships ncurses 6.0 (`/usr/bin/infocmp -V`:

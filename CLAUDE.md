@@ -1,10 +1,10 @@
 # grofe: agent conventions
 
-Conventions for agents implementing tasks from `docs/plans/2026-09-23-milestones.md`.
+Conventions for agents implementing tasks from `docs/archive/plans/2026-09-23-milestones.md`.
 
 ## Before starting a task
 
-- Read the spec (`docs/specs/2026-09-23-grofe-design.md`) and the task's row in the
+- Read the spec (`docs/archive/specs/2026-09-23-grofe-design.md`) and the task's row in the
   plan before writing code.
 - File ownership per the plan's "Owns" column is a hard boundary: a task edits
   only the files it owns. If you need a dependency that isn't already in

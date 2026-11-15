@@ -101,7 +101,7 @@ and how many lines `compat-miss.log` has.
 
 ## Daily checklist
 
-Note anything that differs from your tmux in `docs/dogfood.md`'s entry
+Note anything that differs from your tmux in `docs/archive/dogfood.md`'s entry
 format, with the terminal it happened in.
 
 - [ ] **Your keys:** the prefix, splits, pane moves and resizes, `prefix c`'s

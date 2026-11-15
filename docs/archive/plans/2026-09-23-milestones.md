@@ -445,8 +445,8 @@ let mut ev = srv.subscribe(&["pane-exited"])?;
 | **T0.1** Library verification | **Done 2026-09-23** during planning (spec §8) | spec §8 | none | met |
 | **T0.2** Skeleton + CI | `cargo init`; every module in the crate layout as an empty file with its `mod` line; every dependency through M3 (`tokio`, `tokio-util`, `nix`, `libproc` (macOS), `alacritty_terminal`, `crossterm`, `serde`, `serde_json`, `toml`, `ulid`, `base64`, `anyhow`/`thiserror`, `futures-util` (`sink`), `unicode-width`; dev: `insta`, `expectrl`, `proptest`, `tempfile`); `CLAUDE.md`; GitHub Actions matrix (`ubuntu-latest`, `macos-latest`): fmt, clippy, test, bats, and install neovim, fzf, htop, tmux; split by cost (spec §9) into a `unit` job on every push and an `acceptance` job (integration tests, bats) on PRs, `main` and `workflow_dispatch` | `Cargo.toml`, `Cargo.lock`, all empty modules, `CLAUDE.md`, `.github/` | none | CI green on an empty test; every listed tool present on both runners |
 | **T0.5** Shared types | `types.rs`, `event.rs` per contract, with `Display`/`FromStr` for ids and unit tests | `src/types.rs`, `src/event.rs` | T0.2 | ids round-trip `%3`/`@2`/`$1`; `Event` serializes to the §4.6 JSON |
-| **T0.3** Single-pane spike | `examples/spike.rs`: spawn `$SHELL` per spec §4.8 (pre_exec, CLOEXEC), feed `alacritty_terminal` with a listener that answers PtyWrite, render the grid full-screen with a naive full redraw, forward input, handle resize. Throwaway code | `examples/spike.rs`, `tests/spike.rs`, `docs/spike-notes.md` | T0.2 | `tests/spike.rs` (expectrl): starts the spike, runs `nvim -u NONE`, inserts text, asserts it on the reconstructed screen, `:q` restores the shell prompt; `printf '\e[6n'` gets a reply. **[owner]** live run in Ghostty and in WezTerm (spec D11): true colour, cursor shape, resize reflow, less, fzf; gaps tagged "lib" or "ours" in the notes |
-| **T0.4** Decide `TERM` | Per spec D7: list `infocmp tmux-256color` capabilities, test the extras in the spike, pick the default, record per-OS fallback | spec D7, `docs/spike-notes.md` | T0.3 | Decision recorded; a test asserts the resolved `TERM` per OS |
+| **T0.3** Single-pane spike | `examples/spike.rs`: spawn `$SHELL` per spec §4.8 (pre_exec, CLOEXEC), feed `alacritty_terminal` with a listener that answers PtyWrite, render the grid full-screen with a naive full redraw, forward input, handle resize. Throwaway code | `examples/spike.rs`, `tests/spike.rs`, `docs/archive/spike-notes.md` | T0.2 | `tests/spike.rs` (expectrl): starts the spike, runs `nvim -u NONE`, inserts text, asserts it on the reconstructed screen, `:q` restores the shell prompt; `printf '\e[6n'` gets a reply. **[owner]** live run in Ghostty and in WezTerm (spec D11): true colour, cursor shape, resize reflow, less, fzf; gaps tagged "lib" or "ours" in the notes |
+| **T0.4** Decide `TERM` | Per spec D7: list `infocmp tmux-256color` capabilities, test the extras in the spike, pick the default, record per-OS fallback | spec D7, `docs/archive/spike-notes.md` | T0.3 | Decision recorded; a test asserts the resolved `TERM` per OS |
 
 **Exit gate:** reviewer confirms spike tests on both OSes; **[owner]** accepts the
 library picks. If `alacritty_terminal` fails the spike, M0 extends; nothing else
@@ -540,8 +540,8 @@ contract edits listed in the M3 addendum, including every
 | Task | Scope | Owns | Accept |
 |---|---|---|---|
 | **T3.5** Wire config | Config drives options and key tables (`repeat` bindings, `name`s in `list-keys`); `reload` validates every layer, then applies all or nothing and reports all errors (spec §5.4); `bind-key`, `unbind-key`, `list-keys` (with source and description; runtime and plugin binds marked as outside the table), `source-file` (relative paths against the including file); `;` command sequences in binding strings and the CLI (contract edit: T3.5 co-owns `cmd/parse.rs` for this); README install and usage, including the supported terminals and the WezTerm `enable_kitty_keyboard = true` note (spec D11) | `src/server/dispatch/options.rs` additions, `src/server/input.rs` table loading, `src/cmd/parse.rs` (sequences), `README.md`, `tests/config_live.rs`, `.github/workflows/readme.yml` | Integration: editing a conf.d file then `reload` changes a binding; a `reload` with errors in two files reports both and changes nothing; `source-file sub.toml` from a conf.d file loads the file next to it whatever the server's cwd; `list-keys` shows each binding's source and marks a runtime `bind-key`; a `split-window ; select-pane -L` binding runs both; README steps pass in a clean Linux container job |
-| **T3.8** Kitty graphics placeholders | Spec §4.9. First a T0-style check, recorded before any code: which of the owner's tools emit placeholder mode (Claude Code image output, `kitten icat --unicode-placeholder`, chafa and timg if relevant); **[owner]** reviews the result. Then `server/graphics.rs`: consume `PaneEvent::Graphics` from T3.3's scanner; per-pane image id remap; forward transmit, virtual-placement (`U=1`) and delete commands with `q=2` to clients whose caps report kitty graphics, queued ahead of the next frame; answer the pane's `a=q` queries from caps; keep the last data per image id under a memory cap and re-send it on attach and full redraw; the renderer rewrites placeholder cell colours to the remapped id and never downgrades them (contract edit: T3.8 co-owns `render.rs` for this); direct placement and sixel ignored | `src/server/graphics.rs`, `tests/fixtures/graphics/`, placeholder colour rewrite in `src/server/render.rs`, `tests/acceptance/t3_8.rs`, `docs/graphics-notes.md` | Acceptance (skipped when `kitten` is absent): `kitten icat --unicode-placeholder` in a pane produces the APC transmit in the outer pty stream and placeholder cells on the reconstructed screen; the placeholder cells survive a split and a scroll with the image id intact; a second client attaching afterwards receives the image data. Unit: two panes that both transmit id 1 are forwarded with distinct ids; the cache evicts oldest first at its cap |
-| **T3.6** Dogfood readiness | Complete acceptance suite (spec §8 list, nested tmux and nested grofe included) green on both OSes; panic hook writes a report to the state dir; `docs/dogfood.md` log template with the copy-mode fallback (shift-drag) noted; re-run the T0.4 capability table against the real render path; flip D7 to tmux-256color if every extra capability now passes (a capability that still fails is logged as a gap to fix before alias day, spec D7) | `tests/acceptance/t3_6.rs`, panic hook in `src/main.rs`, `docs/dogfood.md` | CI green; the kitty-flags bare-`q` check from T2.5b passes with a config loaded; a forced panic writes a report; **[owner]** starts the dogfood week |
+| **T3.8** Kitty graphics placeholders | Spec §4.9. First a T0-style check, recorded before any code: which of the owner's tools emit placeholder mode (Claude Code image output, `kitten icat --unicode-placeholder`, chafa and timg if relevant); **[owner]** reviews the result. Then `server/graphics.rs`: consume `PaneEvent::Graphics` from T3.3's scanner; per-pane image id remap; forward transmit, virtual-placement (`U=1`) and delete commands with `q=2` to clients whose caps report kitty graphics, queued ahead of the next frame; answer the pane's `a=q` queries from caps; keep the last data per image id under a memory cap and re-send it on attach and full redraw; the renderer rewrites placeholder cell colours to the remapped id and never downgrades them (contract edit: T3.8 co-owns `render.rs` for this); direct placement and sixel ignored | `src/server/graphics.rs`, `tests/fixtures/graphics/`, placeholder colour rewrite in `src/server/render.rs`, `tests/acceptance/t3_8.rs`, `docs/archive/graphics-notes.md` | Acceptance (skipped when `kitten` is absent): `kitten icat --unicode-placeholder` in a pane produces the APC transmit in the outer pty stream and placeholder cells on the reconstructed screen; the placeholder cells survive a split and a scroll with the image id intact; a second client attaching afterwards receives the image data. Unit: two panes that both transmit id 1 are forwarded with distinct ids; the cache evicts oldest first at its cap |
+| **T3.6** Dogfood readiness | Complete acceptance suite (spec §8 list, nested tmux and nested grofe included) green on both OSes; panic hook writes a report to the state dir; `docs/archive/dogfood.md` log template with the copy-mode fallback (shift-drag) noted; re-run the T0.4 capability table against the real render path; flip D7 to tmux-256color if every extra capability now passes (a capability that still fails is logged as a gap to fix before alias day, spec D7) | `tests/acceptance/t3_6.rs`, panic hook in `src/main.rs`, `docs/archive/dogfood.md` | CI green; the kitty-flags bare-`q` check from T2.5b passes with a config loaded; a forced panic writes a report; **[owner]** starts the dogfood week |
 
 > **Options added by T3.0.** `dispatch/options.rs`'s `BUILTINS` belongs to
 > T1.5c and, in M3, to T3.5's additions; T3.0 adds the rows M3 reads (`mouse`,
@@ -553,7 +553,7 @@ contract edits listed in the M3 addendum, including every
 > TC.11. This is the one exception to "M2 rows use tmux's defaults".
 
 **Exit gate:** **[owner]** a week of daily use in both Ghostty and WezTerm,
-logged in `docs/dogfood.md` with the terminal named per entry. The log feeds the
+logged in `docs/archive/dogfood.md` with the terminal named per entry. The log feeds the
 task breakdown for M4 and M5.
 
 ---
@@ -731,7 +731,7 @@ TC.6 4, FE.1 4, FE.2 3, FE.3 5, FE.4 3, TP.0 3, TP.1 4, TP.2 2, TC.13 4:
 **Exit gate (alias day):** reviewer runs the compat suite on both OSes from a
 clean clone; CI `compat` job green; **[owner]** puts the `tmux` symlink first
 on PATH with the Wave C config and works a week. Every difference noticed goes
-in `docs/dogfood.md` tagged `compat`, and each becomes a TC.13 scenario before
+in `docs/archive/dogfood.md` tagged `compat`, and each becomes a TC.13 scenario before
 it is fixed; `compat-miss.log` is read at the end of each day. The plugin
 bindings (sessionx `s`, tmux-fzf `F`, fzf-url `u`, which-key `Space`,
 opensessions `o`, claude-session-manager `a`/`A`) arrive with M3.7 and are
@@ -776,13 +776,13 @@ exactly as today, unaffected by TP.3, pending the owner's answer to Q-M37-1
 | **TP.8** compat check: tmux-fzf-url | `wfxr/tmux-fzf-url` | `prefix u` captures the pane (`capture-pane -ep`, native since M2), extracts URLs, and opens the fzf-url picker; `@fzf-url-history-limit 2000` (already set in the ported config) is honoured | `tests/acceptance/tp_8.rs` | TP.3, TC.6 | `prefix u` over a pane with three URLs lists all three, matching the golden; choosing one runs its open command with that URL as argv |
 | **TP.9** compat check: opensessions | `Ataraxy-Labs/opensessions` | Its twelve hooks (`run-shell -b` plus `tmux -S #{socket_path}`) and its sidebar (`join-pane` at `@opensessions_width`) fire in tmux's order against a recording endpoint | `tests/compat/scenarios/opensessions.rs`, reusing TC.0b's recording-endpoint pattern | TP.3, TC.5, TC.8 | A scripted session fires the same hook calls in the same order as a golden recorded with TC.0b; the sidebar opens at `@opensessions_width` and keeps it across `resize-window` |
 | **TP.10** compat check: claude-session-manager | `craftzdog/tmux-claude-session-manager` | `prefix a`/`prefix A` (`@claude_launch_key`/`@claude_list_key`) open a nested `display-popup -E` running `tmux attach -t <agent session>` | `tests/acceptance/tp_10.rs` | TP.3, TC.6, TC.1 | From a pane in `main`, `prefix a` shows the named agent session in a popup; detaching closes the popup and leaves `main` attached; attaching to `main` from its own popup is refused, matching TC.1's nesting rule |
-| **TP.9a** Parity, all tables but copy mode | every stock, canopy and plugin binding not in `copy-mode-vi` | `scripts/key-parity.sh` compares real tmux's `list-keys` (old config, private socket, `env -u TMUX`) with `grofe list-keys` per table: `prefix` (114) without `[`, `]`, `=` and `PageUp`; `root` (22) without the wheel, drag, double-click and triple-click rows; `opensessions` (13); stock mouse bindings matched against the built-in mouse model, stock `m` against its out-of-scope reason | `scripts/key-parity.sh`, the reasons column in `docs/compat-coverage.md` | TP.3 through TP.10 | The script exits 0 on every row not deferred to TP.9b; **[owner]** each daily binding (`s`, `K`, `?`, `u`, `g`, `G`, `P`, `T`, `W`, `a`, `A`) used once and ticked in `docs/dogfood.md` |
+| **TP.9a** Parity, all tables but copy mode | every stock, canopy and plugin binding not in `copy-mode-vi` | `scripts/key-parity.sh` compares real tmux's `list-keys` (old config, private socket, `env -u TMUX`) with `grofe list-keys` per table: `prefix` (114) without `[`, `]`, `=` and `PageUp`; `root` (22) without the wheel, drag, double-click and triple-click rows; `opensessions` (13); stock mouse bindings matched against the built-in mouse model, stock `m` against its out-of-scope reason | `scripts/key-parity.sh`, the reasons column in `docs/compat-coverage.md` | TP.3 through TP.10 | The script exits 0 on every row not deferred to TP.9b; **[owner]** each daily binding (`s`, `K`, `?`, `u`, `g`, `G`, `P`, `T`, `W`, `a`, `A`) used once and ticked in `docs/archive/dogfood.md` |
 | **TP.11** compat check: tmux-yank *(runs in M5)* | `tmux-plugins/tmux-yank` | `y`, `Y` and `MouseDragEnd1Pane` in `copy-mode-vi`, bound by the plugin's own script to `copy-pipe-and-cancel` with the OS clipboard command it detects, plus OSC 52, the same criterion TP.5 carried in the original plan, now met by running the plugin unchanged once M5's copy-pipe targets exist, instead of hand-writing the bindings | `tests/acceptance/tp_11.rs` | TP.3, TM.5, TM.6 | A selection copied in copy mode reaches the plugin's own clipboard command and the outer pty as OSC 52; `prefix ]` pastes it with bracketed paste in a pane that asked for it |
 | **TP.9b** Parity, copy mode *(runs in M5)* | `copy-mode-vi` (93), `prefix` `[`, `]`, `=`, `PageUp`, `root` wheel/drag/click | the TP.9a rows the copy-mode table left out | the TP.9b rows of `scripts/key-parity.sh` | TP.9a, TP.11, TM.1, TM.4, TM.6, TM.7 | The script exits 0 for every table, with no row left out |
 
 **Exit gate:** reviewer runs TP.9a (and, once M5 closes, TP.9b) and the
 compat suite; **[owner]** a week under the alias with every plugin loaded
-unchanged, `compat` entries in `docs/dogfood.md` all closed or scheduled.
+unchanged, `compat` entries in `docs/archive/dogfood.md` all closed or scheduled.
 TP.11 and TP.9b close with M5, so M3.7 closes with M5, unchanged from the
 original plan's shape.
 
@@ -869,7 +869,7 @@ TM.6 3, TM.7 5, TP.11 2, TP.9b 2: 29 task-days.
 **Exit gate (no-difference parity):** reviewer runs `scripts/ci-local.sh` and
 TM.7's suite; TP.9b exits 0 for every table; **[owner]** a week under the
 alias using copy mode instead of shift-drag, every `copy` entry in
-`docs/dogfood.md` closed (substitute: TM.7's 93 scenarios and TP.9b green).
+`docs/archive/dogfood.md` closed (substitute: TM.7's 93 scenarios and TP.9b green).
 M3.7 closes here.
 
 ---
@@ -1031,7 +1031,7 @@ run beside T4.3; T4.5 (3 d) runs beside T4.4. **One-lane sum:** T4.1 3, T4.2
 **Exit gate:** reviewer runs `scripts/ci-local.sh` (`macos`, `linux`, `e2e`)
 from a clean clone; **[owner]** a real reboot on each OS returns every
 session with its `uid`s and every pane with a resume runs it, logged in
-`docs/dogfood.md` (substitute: T4.6 green on the Debian image; Arch optional). Only after this
+`docs/archive/dogfood.md` (substitute: T4.6 green on the Debian image; Arch optional). Only after this
 gate, and the owner's answer to Q-M37-1 (`plan-amend-2026-09-29.md`), does
 the owner's machine drop resurrect and continuum.
 
@@ -1056,7 +1056,7 @@ routed to stubs; a `control` arm stub in `src/main.rs`.
 
 | Task | Scope | Owns | Depends | Accept |
 |---|---|---|---|---|
-| **T6.0** Spec §7 rewrite | From `docs/dogfood.md`, the daily `compat-miss.log` reviews, TC.5's event list and the plugins canopy's loader runs (M3.7): rewrite spec §7's plugin part and §4.6's events paragraph into an **event catalog** (event, payload fields, emitter, first consumer), the protocol v1 rules, the `[plugins.<name>]` schema | spec §7 (plugin part), §4.6's events paragraph, §5.1's layer 5 | T4.6 green (not the owner's reboot) | Every catalog event names at least one consumer (a hook name row, an in-tree plugin, or a test) and no event is listed without one; **[owner]** approves the rewrite |
+| **T6.0** Spec §7 rewrite | From `docs/archive/dogfood.md`, the daily `compat-miss.log` reviews, TC.5's event list and the plugins canopy's loader runs (M3.7): rewrite spec §7's plugin part and §4.6's events paragraph into an **event catalog** (event, payload fields, emitter, first consumer), the protocol v1 rules, the `[plugins.<name>]` schema | spec §7 (plugin part), §4.6's events paragraph, §5.1's layer 5 | T4.6 green (not the owner's reboot) | Every catalog event names at least one consumer (a hook name row, an in-tree plugin, or a test) and no event is listed without one; **[owner]** approves the rewrite |
 
 **Wave A (after the stub edit; parallel; merge order T6.1).**
 
@@ -1152,7 +1152,7 @@ TE.3's legs.
    and every Claude Code pane is back in its own conversation. (Substitute:
    T4.6 and TA.1.)
 4. A week of normal work under the alias. Each difference goes in
-   `docs/dogfood.md` tagged `compat` or `copy`, becomes a scenario, then gets
+   `docs/archive/dogfood.md` tagged `compat` or `copy`, becomes a scenario, then gets
    fixed; `compat-miss.log` is read each day. (Substitute: TC.13, TM.7, TP.9a and TP.9b.)
 5. Real tmux stays installed, reachable as `env -u TMUX <absolute path>`, until
    that week ends with no open entry; removing it is the owner's call.
@@ -1172,7 +1172,7 @@ its keep. (`import-tmux` moved to M3.5.)
 
 ## MF: framed panes, gaps and mouse moves
 
-Spec: [`../specs/2026-11-05-frames.md`](../specs/2026-11-05-frames.md). Integration
+Spec: [`../specs/2026-11-05-frames.md`](../../specs/2026-11-05-frames.md). Integration
 branch `frames`. Wave 1 runs FR.1 and FR.4 in parallel; wave 2 runs FR.2 and FR.3
 in parallel after both merge; FR.5 follows them all. Every task keeps tmux identity byte-identical: the
 existing suites and compat goldens stay green unchanged.

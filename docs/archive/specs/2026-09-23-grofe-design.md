@@ -5,7 +5,7 @@
 revised 2026-09-27 for the owner's tmux compatibility decision (D1, D12);
 revised 2026-09-28 with the task-level M4 to M7 plan (§4.11, §6, §7, §9)
 **Origin:** the `grofe-plan.md` design note (formerly `rtmux-plan.md`); canopy
-(`morrieinmaas/canopy`) is the requirements document.
+(a private repository) is the requirements document.
 
 ---
 
@@ -60,7 +60,7 @@ If performance becomes the headline, the project has lost the plot.
 | D4 | **Headless control mode is the first interface.** Every operation is a command; the CLI, key bindings, control mode and (later) plugins all go through one command dispatcher. | Tests and canopy's bats suite can drive grofe before any UI exists. A scriptable surface is what makes the plugin API designable later. |
 | D5 | **Single-owner state.** One tokio task (the server actor) owns the model. Pane I/O tasks, client connections and timers send it messages. The only shared state is each pane's terminal behind a mutex, with bounded lock holds (§4.8). | Removes a class of concurrency bugs; easy for parallel implementers to reason about. |
 | D6 | **Window size follows the latest active client**, where "latest" means last input, debounced ~500 ms so two attached clients do not make the window flap. Larger clients are letterboxed (window drawn at its size, the rest filled with a dim pattern). Smaller clients are cropped, with a viewport that follows the active pane's cursor. The emulator reflows the primary screen on resize; alt-screen apps just get SIGWINCH. | Every multiplexer picks a side. tmux users already know this behavior. |
-| D7 | **Advertise an honest `TERM`: `tmux-256color`.** Default `tmux-256color` plus `COLORTERM=truecolor`, falling back per host to `screen-256color` when the `tmux-256color` terminfo entry is missing, and to `xterm-256color` when both are (that last resort advertises more than `screen-256color` and exists only for such hosts). T0.4 checked whether every extra capability `tmux-256color`'s entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survived the M0 spike's render path; it did not, so M0 to M3 shipped `screen-256color`. T3.6 re-ran the check through grofe's real render path (pane, server, attach client, reconstructed outer terminal) on macOS and Linux after T2.2 and T3.3 landed, and every capability passed (`tests/acceptance/t3_6.rs`, docs/spike-notes.md "T3.6 re-run"), so the default is now `tmux-256color` under both names: under the `tmux` name `TERM` is what the owner sees in tmux today. The honesty rule stands: a capability that fails later is fixed, not advertised anyway, and the re-run passing is a gate for alias day (plan M3.6). | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. The owner runs `tmux-256color` with italics and undercurl in Neovim; a smaller `TERM` would be a visible difference under the alias. |
+| D7 | **Advertise an honest `TERM`: `tmux-256color`.** Default `tmux-256color` plus `COLORTERM=truecolor`, falling back per host to `screen-256color` when the `tmux-256color` terminfo entry is missing, and to `xterm-256color` when both are (that last resort advertises more than `screen-256color` and exists only for such hosts). T0.4 checked whether every extra capability `tmux-256color`'s entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survived the M0 spike's render path; it did not, so M0 to M3 shipped `screen-256color`. T3.6 re-ran the check through grofe's real render path (pane, server, attach client, reconstructed outer terminal) on macOS and Linux after T2.2 and T3.3 landed, and every capability passed (`tests/acceptance/t3_6.rs`, docs/archive/spike-notes.md "T3.6 re-run"), so the default is now `tmux-256color` under both names: under the `tmux` name `TERM` is what the owner sees in tmux today. The honesty rule stands: a capability that fails later is fixed, not advertised anyway, and the re-run passing is a gate for alias day (plan M3.6). | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. The owner runs `tmux-256color` with italics and undercurl in Neovim; a smaller `TERM` would be a visible difference under the alias. |
 | D8 | **No subprocess on the redraw path, ever.** The status line renders formats over options; rendering never forks or waits. Dynamic content arrives in options, set either by something external or by a **status source**: a command the server runs at most once per `status-interval` (or the source's own `interval`), off the redraw path, with one run in flight and a timeout after which it is killed; the last non-empty line of its output (CR or LF ends a line), as tmux 3.7b keeps it, is stored in an option. `#(cmd)` in a format is shorthand for an inline source keyed by the command: the format reads the cached value, empty until the first run returns, as in tmux. `run-shell` exists for key bindings and hooks. | Forks in the status line are the one real performance problem in tmux setups. canopy measured it: folding its status into one aggregator and removing 20 forks took a render from ~97 ms to ~67 ms (canopy 6ef854a). Banning commands outright would lose the owner's pet, network, battery and canopy-status segments, which the alias must keep. A cached source bounds the cost by the number of sources and their intervals, never by redraws, clients or windows, and a slow or hung command can only make its own segment stale. |
 | D9 | **Build the plugin API last** (M6). Before that, the control protocol and events exist for tests and dogfooding, may change, and grow only when a test or feature needs them. | Needed events beat guessed events. |
 | D10 | **Generic primitives in core, agent semantics in a plugin.** Core provides pane identity, a resume command, pane options, events, persistence, and config introspection. The five agent states, adapters and rollups live in a first-party `agents` plugin (M7). **[Dropped with M7, owner ruling 2026-10-06]:** no first-party agents plugin is built; agent semantics stay in tmux plugins run unchanged through canopy's loader and in canopy's own adapters and strategies. | Keeps core general. The plugin API's first users are now the tmux plugins and the in-tree event-log plugin (plan M6). |
@@ -935,7 +935,7 @@ row (§4.5) that a plugin the owner runs binds, the in-tree event-log plugin
 (plan T6.6), or a test. The catalog below was derived on 2026-10-27 (plan
 T6.0) from TC.5's event list (`EVENTS` in `src/server/hooks.rs`), the
 existing `subscribe` stream (`src/event.rs`, `src/server/events.rs`), the
-hooks the owner's plugins bind, and `docs/dogfood.md`. Of those plugins,
+hooks the owner's plugins bind, and `docs/archive/dogfood.md`. Of those plugins,
 opensessions binds twelve of TC.5's tmux hook names (every one but the three
 alert hooks), and canopy's copy of tmux-claude-session-manager binds
 `alert-bell`; the rest bind none. Neither the dogfood log nor the
@@ -975,7 +975,7 @@ plugin finds shows up in `compat-miss.log` and is fixed as a compat bug.
   `<prefix>session` with `--persist`, never `<prefix>state`. The `exited` state
   stays visible: a restored agent pane respawns to a shell (§6) and keeps its
   options.
-- *[dropped]* **Adapter contract [was planned for M7].** canopy's `docs/adapters/contract.md` is
+- *[dropped]* **Adapter contract [was planned for M7].** canopy's adapters contract document is
   the authority; grofe reads the same manifest files, found in the `[agents]
   adapter-dirs` list (canopy's fragment names its config directory, then its
   store; the first wins). All six keys are required, each validated on every
@@ -1274,7 +1274,7 @@ spike's render path lost some of the capabilities `tmux-256color` adds over
 relay, OSC 52 clipboard, cursor colour and focus events were not forwarded),
 so grofe shipped `screen-256color` until T3.6 re-ran every extra capability
 through the real render path on macOS and Linux and all of them passed. See
-docs/spike-notes.md's "TERM decision" and "T3.6 re-run" sections for the
+docs/archive/spike-notes.md's "TERM decision" and "T3.6 re-run" sections for the
 evidence; the passing re-run is what alias day requires (D7).
 
 An inner `CSI > q` (XTVERSION) gets no reply from the library, so grofe

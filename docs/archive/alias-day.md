@@ -46,7 +46,7 @@ canopy on `PATH`, so these steps call it by its full path.
 panes' `uid`s, and every Claude Code pane is back in its own conversation.
 
 **4. Work under the alias for a week.** Write each difference from tmux in
-`docs/dogfood.md`, tagged `compat` or `copy`; each one becomes a scenario
+`docs/archive/dogfood.md`, tagged `compat` or `copy`; each one becomes a scenario
 and then gets fixed. Read `compat-miss.log` in grofe's state directory each
 day.
 
