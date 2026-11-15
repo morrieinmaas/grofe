@@ -2677,6 +2677,8 @@ fn glob_sorted(resolved: &str) -> Vec<PathBuf> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.file_name())
+        // As glob(3): a leading `.` is matched only by a `.` in the pattern.
+        .filter(|name| pattern.starts_with('.') || !name.to_string_lossy().starts_with('.'))
         .filter(|name| fnmatch(pattern.as_bytes(), name.to_string_lossy().as_bytes()))
         .map(|name| dir.join(name))
         .collect();
@@ -2759,6 +2761,23 @@ fn key_toml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_file_globs_skip_dotfiles_like_glob3() {
+        let dir = tempfile::tempdir().expect("tmp");
+        for f in ["a.conf", ".h.conf", "[x].conf"] {
+            fs::write(dir.path().join(f), "").expect("write");
+        }
+        let at = |p: &str| glob_sorted(&format!("{}/{p}", dir.path().display()));
+        let names = |v: Vec<PathBuf>| -> Vec<String> {
+            v.iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(names(at("*.conf")), ["[x].conf", "a.conf"]);
+        assert_eq!(names(at(".*.conf")), [".h.conf"]);
+        assert_eq!(names(at("?.conf")), ["a.conf"]);
+    }
 
     fn words(s: &str) -> Vec<String> {
         tokenize_words(s).into_iter().map(|w| w.value).collect()

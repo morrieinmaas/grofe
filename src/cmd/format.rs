@@ -1595,6 +1595,33 @@ mod tests {
         }
     }
 
+    /// `terminal-features` and `#{m:}` are fnmatch(3) in tmux: the same
+    /// answers as libc on awkward sets and escapes. An unterminated `[` is
+    /// left out: glibc and musl match it literally, as grofe does, macOS libc
+    /// does not.
+    #[test]
+    fn fnmatch_agrees_with_libc() {
+        let pats = [
+            "[]", "[]a]", "[!]", "[!]a]", "[a-]", "[-a]", "[a-c]", "[c-a]", "[!a-c]", "[^a]", "?",
+            "??", "*?", "?*", "a\\", "\\a", "\\[a]", "x[[]y", "*[]", "[*]", "[?]", "a*[bc]*d", "",
+            "*", "**", "xterm*", "[xy]term",
+        ];
+        let strs = [
+            "", "a", "b", "[", "]", "ab", "a[", "[a", "[a]", "x[y", "xterm", "yterm", "?", "*",
+            "-", "abcd", "c",
+        ];
+        for p in pats {
+            for s in strs {
+                let (cp, cs) = (
+                    std::ffi::CString::new(p).expect("no nul"),
+                    std::ffi::CString::new(s).expect("no nul"),
+                );
+                let want = unsafe { nix::libc::fnmatch(cp.as_ptr(), cs.as_ptr(), 0) } == 0;
+                assert_eq!(fnmatch(p.as_bytes(), s.as_bytes()), want, "{p:?} ~ {s:?}");
+            }
+        }
+    }
+
     #[test]
     fn fnmatch_matches_as_fnmatch_with_no_flags() {
         for (pattern, s, want) in [
