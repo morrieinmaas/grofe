@@ -37,7 +37,7 @@ flowchart LR
   session state: losing it loses nothing.
 - **Protocol v1 does not change** its frames (§8 forbids new frame kinds). Everything the server
   must say to a remote client goes through additive v1 verbs and events on the control channel.
-- **Proxy protocol** (`grofe-proxy 1`, new, documented in `docs/protocol-proxy.md`, fixtures
+- **Proxy protocol** (`grofe-proxy 1`, new, documented in protocol-proxy.md under docs, fixtures
   checked byte for byte like v1): after a one-line JSON hello each way (version, grofe version,
   os, arch, features), frames `[u8 kind][u32 channel][u32 len][payload]`, len at most 1 MiB.
   Kinds: `open` (channel, JSON: `{"type":"attach"|"control"|"tcp"|"upload", ...}`), `data`,
@@ -172,10 +172,10 @@ grofe client.
 
 ## 7. Docs
 
-`docs/remote.md` (user guide: connecting, install, reconnect, forwarding, latency, machines,
-security notes), `docs/protocol-proxy.md`, the new options in `docs/config-reference.md`,
+a new user guide, remote.md under docs (connecting, install, reconnect, forwarding, latency, machines,
+security notes), protocol-proxy.md, the new options in `docs/config-reference.md`,
 README (a "Remote sessions" section and the feature list), roadmap (remove the ssh items),
-and the landing page (`site/index.html`) and mdBook (`docs/book`) when PR #17 has merged.
+and the landing page and the mdBook guide (both from PR #17, now on main).
 
 ## 8. Security
 
