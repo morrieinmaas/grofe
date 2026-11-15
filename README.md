@@ -94,7 +94,6 @@ From v0.2.0 on, each release is also packaged:
 | Where | Install with |
 | --- | --- |
 | Homebrew (macOS, Linux) | `brew install termage/tap/grofe` |
-| Arch Linux (AUR) | `yay -S grofe-bin`, or any AUR helper |
 | crates.io | `cargo install --locked grofe` |
 | Debian, Ubuntu | the release's `.deb`: `sudo apt install ./grofe_0.2.0-1_amd64.deb` |
 | Fedora, RHEL | the release's `.rpm`: `sudo dnf install ./grofe-0.2.0-1.x86_64.rpm` |
