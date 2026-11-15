@@ -4,7 +4,7 @@
 //! capability `tmux-256color`'s terminfo entry adds (italics, strikeout,
 //! invisible text, the `Smulx` extended underline styles, OSC 52
 //! clipboard, focus reporting, cursor colour and style, window-title relay
-//! via `tsl`/`fsl`/`dsl`) survived the M0 spike's render path. T3.6 re-ran
+//! via `tsl`/`fsl`/`dsl`) survived the spike's render path. A later task re-ran
 //! every one of them through grofe's real render path (pane, server,
 //! attach client, reconstructed outer terminal) on macOS and Linux, and
 //! all pass (`tests/acceptance/t3_6.rs`, the `term_rerun_*` tests), so

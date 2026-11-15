@@ -66,7 +66,7 @@ runtime_id!(SessionId, "$", "session");
 runtime_id!(WindowId, "@", "window");
 runtime_id!(PaneId, "%", "pane");
 
-/// An attached client, numbered by the server as it attaches (M2). Never
+/// An attached client, numbered by the server as it attaches. Never
 /// reused within a server. It has no sigil or wire form yet: tmux names
 /// clients by tty, and `list-clients` output is T2.5a's to define.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

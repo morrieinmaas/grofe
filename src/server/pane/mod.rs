@@ -84,7 +84,7 @@ pub enum PaneEventKind {
     /// What an OSC 7 reported, as `#{pane_path}` shows it (the scanner's
     /// [`crate::server::passthrough`] `osc7_text`).
     Path(String),
-    /// M3: one framed APC `_G` command from the scanner.
+    /// One framed APC `_G` command from the scanner.
     Graphics(Vec<u8>),
     /// G3: one `DCS q` sixel image from the scanner, as the reader
     /// handles it; never sent to the actor. `body` starts with the `q`.
@@ -92,7 +92,7 @@ pub enum PaneEventKind {
         p2: u32,
         body: Vec<u8>,
     },
-    /// M3: an OSC passthrough re-emits (9, 777, 12, 112), its body without
+    /// An OSC passthrough re-emits (9, 777, 12, 112), its body without
     /// the `ESC ]` and terminator.
     Osc(Vec<u8>),
     /// An OSC 7501 agent status report from the scanner, its body after
@@ -188,7 +188,7 @@ pub struct CursorState {
     pub blink: bool,
 }
 
-/// An owned copy of some visible rows, taken under the pane lock (M2 renderer
+/// An owned copy of some visible rows, taken under the pane lock (renderer
 /// input), with the cursor as it was under that same lock.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RowsSnapshot {
@@ -1231,7 +1231,7 @@ impl PaneHandle {
 
     /// Every row of the grid, the oldest history row first and then the
     /// screen, each passed to `row`, under one lock: copy mode's copy of
-    /// the pane (M5, TM.1). Returns the number of history rows and the
+    /// the pane. Returns the number of history rows and the
     /// cursor.
     /// With each row goes which of its cells an intact tab covers (the
     /// blanks it moved over to its stop, as [`Self::capture_lines`] reads
@@ -1506,7 +1506,7 @@ pub fn pane_shell(candidate: Option<&str>) -> String {
 
 /// `candidate` when it is an executable absolute path (tmux's
 /// `checkshell`), else the user's passwd shell when that is, else
-/// `/bin/sh`, as tmux's `getshell` falls back (spec D2 in the M3.6 ledger).
+/// `/bin/sh`, as tmux's `getshell` falls back (spec D2).
 pub fn pick_shell(candidate: Option<String>) -> String {
     let usable = |s: &String| check_shell(s);
     candidate

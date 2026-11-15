@@ -1634,7 +1634,7 @@ pub fn changed(state: &mut State) {
     }
     let live = &state.model.sessions;
     state.registry.owners.retain(|s, _| live.contains_key(s));
-    // A killed pane's copy mode goes with it (M5).
+    // A killed pane's copy mode goes with it.
     let panes = &state.model.panes;
     state.copy.retain(|p| panes.contains_key(&p));
     sync_pane_status(&mut state.model);
@@ -3269,7 +3269,7 @@ fn local_now() -> libc::tm {
     }
 }
 
-/// Format variables for a client: `client_*` (M2 addendum: real
+/// Format variables for a client: `client_*` (real
 /// `client_width`/`client_height`), falling through to the pane's
 /// [`FormatCtx`].
 pub struct ClientVars<'a> {
@@ -5090,8 +5090,8 @@ mod tests {
         assert_eq!(status_at(&state, id, 1, 2), None);
     }
 
-    /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,
-    /// popup, chooser, mouse) and M5's copy mode are registered in priority order, and with
+    /// The hooks and overlays (prompt, menu, popup, chooser, mouse, copy
+    /// mode) are registered in priority order, and with
     /// nothing open every hook passes every kind of input on and every
     /// overlay leaves the screen alone.
     #[test]

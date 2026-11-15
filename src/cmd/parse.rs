@@ -802,7 +802,7 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
     )?;
     let literal = flags.present.contains(&'l');
     let hex = flags.present.contains(&'H');
-    // `-X` (M5): the words are a copy-mode command and its arguments.
+    // `-X`: the words are a copy-mode command and its arguments.
     let command = flags.present.contains(&'X');
     if literal && hex {
         return Err(ParseError::Other(
@@ -1994,7 +1994,7 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-// ---- M3.6 verbs (TC.2) ----
+// ---- Structure, client and overlay verbs ----
 
 /// A number as tmux's `args_percentage` reads it: an integer, or one
 /// with a `%` suffix. `None` when it is neither.
@@ -2099,7 +2099,7 @@ fn target_if_given(
 }
 
 /// At least `min` positionals, worded like tmux (`too few arguments`),
-/// unless `argv` is empty: a bare M3.6 verb parses, with its required
+/// unless `argv` is empty: a bare verb parses, with its required
 /// positionals `None`, so that its handler answers (the stub-phase tests
 /// run every verb bare) and refuses it.
 fn needs_positionals(
@@ -5562,8 +5562,8 @@ mod tests {
         );
     }
 
-    /// Every M1 command name (and its listed aliases) parses at all, with
-    /// a minimal argv. This is the "every M1 command parses" acceptance
+    /// Every basic command name (and its listed aliases) parses at all, with
+    /// a minimal argv. This is the "every command parses" acceptance
     /// check as one table, on top of the per-command detail tests above.
     #[test]
     fn every_m1_command_parses_with_a_bare_target() {
@@ -5796,7 +5796,7 @@ mod tests {
         assert!(c.print);
     }
 
-    // ---- M3 commands (T3.0) ----
+    // ---- Binding and config commands ----
 
     /// Quotes, escapes, `;` and expansion, as tmux 3.7b's string parser
     /// reads them (recorded with `bind X '<string>'` then `list-keys` on

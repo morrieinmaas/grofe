@@ -1,9 +1,10 @@
-//! Key-name table for `send-keys` and (from M3) key bindings (spec §4.5).
+//! Key-name table for `send-keys` and key bindings (spec §4.5).
 //!
-//! `key_bytes` never looks at `modes.kitty_flags`: M1 always encodes keys
+//! `key_bytes` never looks at `modes.kitty_flags`: grofe always encodes keys
 //! in the legacy (non-kitty) style, even for a pane that has requested the
 //! kitty keyboard protocol.
-//! ponytail: kitty keyboard protocol encoding is M2 T2.3's job.
+//! ponytail: kitty keyboard protocol encoding is not implemented, so a pane
+//! that asks for it still gets legacy bytes.
 
 use crate::types::InputModes;
 

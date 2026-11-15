@@ -142,7 +142,7 @@ fn enter(status: &SharedStatus, phase: Phase, pid: Option<u32>) {
 pub struct Plugins {
     /// The merged config's plugins, as of the last config application.
     desired: BTreeMap<String, ConfigPlugin>,
-    /// Plugins start once the server has applied its config (and, from M4,
+    /// Plugins start once the server has applied its config (and
     /// restored); a config applied before that only records `desired`.
     started: bool,
     entries: BTreeMap<String, Entry>,

@@ -66,20 +66,20 @@ struct Builtin {
     default: &'static str,
 }
 
-// ponytail: only the options M1 to M3 need. `history-limit`, `base-index`
-// and `pane-base-index` take effect through the model (T3.5).
+// ponytail: only the options grofe has a use for. `history-limit`,
+// `base-index` and `pane-base-index` take effect through the model.
 //
-// M2 rows use tmux's names and scopes (tmux 3.7b bounds). Their defaults are
-// tmux's except where grofe differs on purpose or M2 formats cannot yet say
-// the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
+// The window, status and key rows use tmux's names and scopes (tmux 3.7b
+// bounds). Their defaults are tmux's except where grofe differs on purpose or
+// the native formats cannot say the same thing: `escape-time` 25 (spec §5.3), `automatic-rename-format`
 // `#{b:pane_current_path}` (spec §4.5), and `status-right`'s pane title
 // untrimmed (tmux's is `#{=21:pane_title}`; the native language has no `=`
 // trim, so a title over 21 columns shows whole). The window formats are
 // tmux's, `#I:#W` spelled out (TC.11, D8). tmux's escape-time is a server
 // option; grofe's server scope is global.
 //
-// M3 rows (T3.0, R4) use tmux's names and scopes with spec §5.3's defaults
-// where grofe differs: `mouse` on (tmux off), `focus-events` on (tmux
+// The mouse, focus and border rows use tmux's names and scopes with spec
+// §5.3's defaults where grofe differs: `mouse` on (tmux off), `focus-events` on (tmux
 // off), `pane-active-border-style`
 // `fg=green` (tmux's is a format that also colours copy mode and
 // synchronized panes). `status-position` takes `top` from TC.11.
@@ -203,7 +203,7 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Global,
         default: "50",
     },
-    // M5 stub: copy mode's options, with tmux 3.7b's scopes and defaults
+    // Copy mode's options, with tmux 3.7b's scopes and defaults
     // (`copy-command` is a server option there, global here).
     Builtin {
         name: "word-separators",
@@ -669,17 +669,15 @@ const BUILTINS: &[Builtin] = &[
         scope: OptionScope::Window,
         default: "off",
     },
-    // M3.6 (the stub edit): the server's identity override (spec D12).
-    // TC.1 reads it once at start; until then nothing does.
+    // The server's identity override (spec D12), read once at start.
     Builtin {
         name: "compat-identity",
         kind: Kind::Choice(&["auto", "tmux", "grofe"]),
         scope: OptionScope::Global,
         default: "auto",
     },
-    // M4 (the stub edit; spec §6): whether a starting server restores the
-    // snapshot, and the spread of resumed panes' start delays. grofe's own
-    // names; T4.3 and T4.4 read them, nothing does until then.
+    // Spec §6: whether a starting server restores the snapshot, and the
+    // spread of resumed panes' start delays. grofe's own names.
     Builtin {
         name: "restore-on-start",
         kind: Kind::Bool,
@@ -762,7 +760,7 @@ const BUILTINS: &[Builtin] = &[
     // (`Model::default_command`, `Model::default_shell`);
     // its default is the server's shell, as tmux's `getshell` picks it
     // (`compat::server_started`).
-    // Copy mode reads `mode-keys` (M5).
+    // Copy mode reads `mode-keys`.
     Builtin {
         name: "aggressive-resize",
         kind: Kind::Bool,
@@ -1358,7 +1356,7 @@ pub enum Owner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub value: String,
-    /// Set with `--persist`: M4 includes it in the snapshot.
+    /// Set with `--persist`: the snapshot includes it.
     pub persist: bool,
 }
 
@@ -2523,7 +2521,7 @@ pub(crate) fn quote(value: &str) -> String {
     let mut it = value.chars().peekable();
     while let Some(c) = it.next() {
         match c {
-            // As tmux's `utf8_stravis`: `$` only before a name (M5: the
+            // As tmux's `utf8_stravis`: `$` only before a name (the
             // `word-separators` default holds `$%`).
             '$' if quotes == Some('"')
                 && !it
@@ -4967,8 +4965,7 @@ impl FormatVars for FormatCtx<'_> {
                 let since = m.started?.duration_since(std::time::UNIX_EPOCH).ok()?;
                 return Some(since.as_secs().to_string());
             }
-            // ponytail: stubs until the features exist: copy mode (M5),
-            // and the status range under
+            // ponytail: stubs until the features exist: the status range under
             // the mouse, which only a mouse-bound command sees (TC.10).
             // `client_tty` is a client's (`ClientVars`), empty with none.
             "copy_cursor_word" | "pane_mode" | "mouse_status_range" | "client_tty"
@@ -5095,7 +5092,7 @@ impl FormatVars for FormatCtx<'_> {
             "pane_width" => p.cols.to_string(),
             "pane_height" => p.rows.to_string(),
             "pane_dead" => flag(p.dead.is_some()),
-            // M4 (spec §6): the pane's resume argv, quoted as
+            // Spec §6: the pane's resume argv, quoted as
             // `pane_start_command`; the reason a resume is expected and
             // none is known; whether the pane came from a snapshot.
             "pane_resume" => p
@@ -5233,8 +5230,8 @@ impl FormatVars for FormatCtx<'_> {
             "pane_start_path" => p.cwd.display().to_string(),
             "window_linked" => flag(w.links.len() > 1),
             "window_linked_sessions" => m.linked_units(w.id).to_string(),
-            // ponytail: `client_width`/`client_height` need clients (M2);
-            // `host` and `host_short` are `ServerVars`' (TC.11).
+            // `client_width`/`client_height` are `ClientVars`', `host` and
+            // `host_short` are `ServerVars`'.
             // The emulator's screen state (`cursor_x`, `wrap_flag`, ...).
             _ => return p.handle.term_var(name),
         })
@@ -6715,7 +6712,7 @@ mod tests {
     }
 
     /// The rows T3.0 adds (R4): tmux's names and scopes, spec §5.3's
-    /// defaults (`set-clipboard` `external` as tmux's, an M5 ruling), and
+    /// defaults (`set-clipboard` `external` as tmux's, a ruling), and
     /// tmux's value checks.
     #[test]
     fn m3_rows_have_grofe_defaults_and_tmux_scopes() {

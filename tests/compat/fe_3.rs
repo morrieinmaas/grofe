@@ -383,12 +383,13 @@ fn a_pane_title_never_runs_as_a_job() {
 }
 
 /// The front end's copy of tmux's option tables
-/// (`src/compat/tmux/tmux-options.txt`) is the recorded golden's.
+/// (`src/compat/tmux/data/tmux-options.txt`) is the recorded golden's.
 #[test]
 fn the_shipped_option_tables_are_the_golden_s() {
     let golden = fs::read_to_string(fixtures_dir().join("golden/fe_3/tmux-tables.golden")).unwrap();
-    let data = fs::read_to_string(fixtures_dir().join("../../../src/compat/tmux/tmux-options.txt"))
-        .unwrap();
+    let data =
+        fs::read_to_string(fixtures_dir().join("../../../src/compat/tmux/data/tmux-options.txt"))
+            .unwrap();
     for (step, section) in [
         ("$ show -g\n", "[session]"),
         ("$ show -gw\n", "[window]"),

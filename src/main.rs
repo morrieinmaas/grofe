@@ -696,7 +696,7 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     {
         // The id is the last line; `-P`'s output comes before it.
         // ponytail: tmux 3.7b shows `-P`'s output in view mode over the new
-        // pane (recorded); grofe has no view mode until M5 and drops it.
+        // pane (recorded); grofe has no view mode and drops it.
         Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
         Ok(Reply::Err { err, .. }) => return fail(&err),
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),

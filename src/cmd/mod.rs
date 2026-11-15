@@ -1,10 +1,10 @@
-//! `Command`, per-command argument shapes, and `ParseError` for the M1,
-//! M2, M3 and M3.6 command sets (spec §4.5). [`parse::parse`] turns argv into a `Command`;
+//! `Command`, per-command argument shapes, and `ParseError` for the command
+//! set (spec §4.5). [`parse::parse`] turns argv into a `Command`;
 //! `target`, `format` and `keys` hold the target grammar, `#{...}`
 //! expansion and the key-name table that a command's flags may reference.
 //!
 //! Every CLI call, key binding and control-mode request goes through
-//! [`parse::parse`]: the CLI, key bindings, control mode and (from M3)
+//! [`parse::parse`]: the CLI, key bindings, control mode and
 //! plugins all produce argv shaped like a shell command line.
 
 pub mod format;
@@ -55,7 +55,7 @@ pub enum ParseError {
     MissingArgument(String),
     /// Fewer positionals than the command needs, worded like tmux's own
     /// CLI: `command wait-for: too few arguments (need at least 1)`. A
-    /// bare M3.6 verb still parses (see [`WaitFor`]); its handler refuses
+    /// bare verb still parses (see [`WaitFor`]); its handler refuses
     /// it with this variant.
     #[error("command {0}: too few arguments (need at least {1})")]
     TooFewArguments(String, usize),
@@ -83,7 +83,7 @@ pub struct NewSession {
     pub width: Option<u16>,
     pub height: Option<u16>,
     pub command: Option<Vec<String>>,
-    /// `-A` (M3.6, TC.9): attach to the session named by `-s` if it
+    /// `-A`: attach to the session named by `-s` if it
     /// exists, instead of creating it.
     pub attach: bool,
     /// `-P` (TC.9): print the new session (`-F`, else tmux's
@@ -127,7 +127,7 @@ pub struct HasSession {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListSessions {
     pub format: Option<String>,
-    /// `-f` (M3.6): a format; only sessions it expands true for are listed.
+    /// `-f`: a format; only sessions it expands true for are listed.
     pub filter: Option<String>,
     /// `-O` and `-r`.
     pub sort: SortFlags,
@@ -195,9 +195,9 @@ pub enum WindowMove {
 pub struct ListWindows {
     pub target: Target,
     pub format: Option<String>,
-    /// `-a` (M3.6): every window of every session.
+    /// `-a`: every window of every session.
     pub all: bool,
-    /// `-f` (M3.6): a format; only windows it expands true for are listed.
+    /// `-f`: a format; only windows it expands true for are listed.
     pub filter: Option<String>,
     /// `-O` and `-r`.
     pub sort: SortFlags,
@@ -221,7 +221,7 @@ pub struct PaneSetup {
 }
 
 /// `split-window` (`-h -v -c -p -l -t`, plus a trailing shell command;
-/// from M3.6 `-b -f -d -P -F`, TC.8).
+/// also `-b -f -d -P -F`, TC.8).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SplitWindow {
     pub dir: Dir,
@@ -261,11 +261,11 @@ pub struct KillPane {
 pub struct SelectPane {
     pub edge: Option<Edge>,
     pub target: Target,
-    /// `-l` (M3.6, TC.8): the target window's last pane, as `last-pane`.
+    /// `-l`: the target window's last pane, as `last-pane`.
     pub last: bool,
-    /// `-Z` (M3.6, TC.8): a zoomed window stays zoomed.
+    /// `-Z`: a zoomed window stays zoomed.
     pub keep_zoom: bool,
-    /// `-T` (M3.6, TC.11): sets the pane's title (expanded as a format)
+    /// `-T`: sets the pane's title (expanded as a format)
     /// instead of selecting it, as tmux does.
     pub title: Option<String>,
     /// `-e` / `-d`: let the pane take input again, or stop it taking any
@@ -300,7 +300,7 @@ pub enum ResizeAction {
     ToggleZoom,
 }
 
-/// `resize-pane` (`-L -R -U -D -Z -t`, an amount, and from M3.6 `-x -y`).
+/// `resize-pane` (`-L -R -U -D -Z -t`, an amount, and `-x -y`).
 /// `width`/`height` set the pane's size outright, in cells or `N%` of the
 /// window; they may come with a direction, or alone, in which case
 /// `action` is `Edges` with no edges. They apply before the direction.
@@ -308,9 +308,9 @@ pub enum ResizeAction {
 pub struct ResizePane {
     pub action: ResizeAction,
     pub target: Target,
-    /// `-x` (M3.6, TC.8).
+    /// `-x`.
     pub width: Option<SplitSize>,
-    /// `-y` (M3.6, TC.8).
+    /// `-y`.
     pub height: Option<SplitSize>,
 }
 
@@ -321,7 +321,7 @@ pub struct RespawnPane {
     pub kill: bool,
     pub target: Target,
     pub command: Option<Vec<String>>,
-    /// `-c` (M3.6, TC.8): the start directory, raw (a format).
+    /// `-c`: the start directory, raw (a format).
     pub cwd: Option<String>,
     /// `-e`: variables for the new process's environment.
     pub env: Vec<(String, String)>,
@@ -331,11 +331,11 @@ pub struct RespawnPane {
 pub struct ListPanes {
     pub target: Target,
     pub format: Option<String>,
-    /// `-a` (M3.6): every pane of every session.
+    /// `-a`: every pane of every session.
     pub all: bool,
-    /// `-s` (M3.6): every pane of the target's session.
+    /// `-s`: every pane of the target's session.
     pub session: bool,
-    /// `-f` (M3.6): a format; only panes it expands true for are listed.
+    /// `-f`: a format; only panes it expands true for are listed.
     pub filter: Option<String>,
     /// `-O` and `-r`.
     pub sort: SortFlags,
@@ -355,12 +355,12 @@ pub enum SendKeysItem {
 pub struct SendKeys {
     pub target: Target,
     pub items: Vec<SendKeysItem>,
-    /// `-X` (M5): the items are a copy-mode command and its arguments,
+    /// `-X`: the items are a copy-mode command and its arguments,
     /// run by the target pane's mode.
     pub command: bool,
-    /// `-N` (M5): the repeat count, a format expanded when it runs.
+    /// `-N`: the repeat count, a format expanded when it runs.
     pub count: Option<String>,
-    /// `-F` (M5): the mode command expands its arguments as formats.
+    /// `-F`: the mode command expands its arguments as formats.
     pub format: bool,
     /// `-R`: the pane's terminal state is reset first (palette, modes,
     /// screen).
@@ -388,7 +388,7 @@ pub struct CapturePane {
     /// `-b` (without `-p`): the buffer the text goes to, else a new one.
     pub buffer: Option<String>,
     pub opts: CaptureOpts,
-    /// `-J` (M3.6): join wrapped lines and keep trailing spaces.
+    /// `-J`: join wrapped lines and keep trailing spaces.
     pub join: bool,
     /// `-N` (B2b): keep each line's trailing spaces, up to the cells the
     /// line has allocated.
@@ -428,7 +428,7 @@ pub enum OptionScope {
     GlobalWindow,
 }
 
-/// `set-option`/`set` (`-g -s -w -p -u --persist`, and from M3.6 `-a -F
+/// `set-option`/`set` (`-g -s -w -p -u --persist`, and `-a -F
 /// -q -o`, spec §4.5's options row). `scope` is `None` when no scope flag
 /// was given: the option's own schema (dispatch, T1.5c) decides the
 /// default scope for that option name.
@@ -459,7 +459,7 @@ pub struct SetOption {
     pub shown: Option<String>,
 }
 
-/// `show-options`/`show` (`-g -s -w -p -t`, and from M3.6 `-v -q`).
+/// `show-options`/`show` (`-g -s -w -p -t`, and `-v -q`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShowOptions {
     pub scope: Option<OptionScope>,
@@ -513,7 +513,7 @@ pub struct Subscribe {
 
 /// `attach-session`/`attach` (`-t -d --nest`). `nest` is grofe's force for
 /// self-nesting (spec §4.6); tmux's `-f` (client flags) is reserved for the
-/// tmux front end (M3.6).
+/// tmux front end.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AttachSession {
     pub target: Target,
@@ -549,9 +549,9 @@ pub struct DetachClient {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListClients {
     pub format: Option<String>,
-    /// `-t` (M3.6, FE.2): only the clients showing this session.
+    /// `-t`: only the clients showing this session.
     pub target: Option<Target>,
-    /// `-f` (M3.6, FE.2): a format; only clients it expands true for are
+    /// `-f`: a format; only clients it expands true for are
     /// listed.
     pub filter: Option<String>,
     /// `-O` and `-r`.
@@ -562,7 +562,7 @@ pub struct ListClients {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowStep {
     pub target: Target,
-    /// `-a` (M3.6, TC.8; `next-window` and `previous-window` only): the
+    /// `-a` (`next-window` and `previous-window` only): the
     /// next or previous window with an alert.
     pub alert: bool,
 }
@@ -587,7 +587,7 @@ pub struct SwitchClient {
     pub previous: bool,
     /// `-T`: the key table to switch to.
     pub key_table: Option<String>,
-    /// `-c` (M3.6, TC.9): the client to switch, raw like
+    /// `-c`: the client to switch, raw like
     /// [`DetachClient::client`]; `None` is the requesting client.
     pub client: Option<String>,
     /// `-Z`: a zoomed window stays zoomed on the pane switched to.
@@ -643,7 +643,7 @@ pub struct UnbindKey {
     pub quiet: bool,
 }
 
-/// `list-keys` (`-T`, and from M3.6 `-1 -N` with a key).
+/// `list-keys` (`-T`, and `-1 -N` with a key).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListKeys {
     pub table: Option<String>,
@@ -770,7 +770,7 @@ pub struct RebootCheck {
     pub json: bool,
 }
 
-/// `command-prompt` (`-p -I`, then a template; R24; from M3.6 `-b -k -1
+/// `command-prompt` (`-p -I`, then a template; R24; also `-b -k -1
 /// -T`, TC.7).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommandPrompt {
@@ -803,7 +803,7 @@ pub struct CommandPrompt {
     pub client: Option<String>,
 }
 
-/// `run-shell` (a shell command; from M3.6 `-b`, TC.5).
+/// `run-shell` (a shell command; also `-b`, TC.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunShell {
     /// Empty only with `-d` and no command: then only the delay.
@@ -824,7 +824,7 @@ pub struct RunShell {
     pub args: Vec<String>,
 }
 
-/// `select-layout` (`-t`, a layout name; from M3.6 `-E`, TC.8). `name` is
+/// `select-layout` (`-t`, a layout name; also `-E`, TC.8). `name` is
 /// empty only with `-E`, which needs none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectLayout {
@@ -840,8 +840,8 @@ pub struct SelectLayout {
     pub undo: bool,
 }
 
-// M3.6 verbs (spec §4.5's rows, native forms; TC.2 parses them). Each
-// struct names the task whose `server/dispatch` handler implements it.
+// More verbs (spec §4.5's rows, native forms). Each struct names the task
+// whose `server/dispatch` handler implements it.
 // Flags follow tmux 3.7b's letters (its `list-commands` golden), limited to
 // the ones a §4.5 row or the corpus (`docs/compat-coverage.md`) names; any
 // other flag is an unknown flag natively.
@@ -1660,7 +1660,7 @@ pub struct PasteBuffer {
     pub target: Target,
 }
 
-/// `copy-mode [-deHMqSu] [-s src-pane] [-t pane]` (M5, TM.1; `-H` and `-M`
+/// `copy-mode [-deHMqSu] [-s src-pane] [-t pane]` (`-H` and `-M`
 /// TM.6; `-d -q -s -S` B1d).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyMode {
@@ -1700,7 +1700,7 @@ pub struct ChooseBuffer {
     pub opts: ChooseOpts,
 }
 
-/// One parsed command (spec §4.5, M1 and M2 sets).
+/// One parsed command (spec §4.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     NewSession(NewSession),
@@ -1725,7 +1725,7 @@ pub enum Command {
     DisplayMessage(DisplayMessage),
     KillServer(KillServer),
     Subscribe(Subscribe),
-    // M2 (T2.5a, T2.5b implement them).
+    // Clients, sessions and window stepping.
     AttachSession(AttachSession),
     DetachClient(DetachClient),
     ListClients(ListClients),
@@ -1736,25 +1736,24 @@ pub enum Command {
     RenameWindow(Rename),
     SwitchClient(SwitchClient),
     SendPrefix(SendPrefix),
-    // M3 (T3.0 parses them; T3.4, T3.5 and T3.7 implement them).
+    // Bindings and config.
     BindKey(BindKey),
     UnbindKey(UnbindKey),
     ListKeys(ListKeys),
     SourceFile(SourceFile),
     Reload(Reload),
-    // M6 (the stub edit adds them; T6.3 implements them).
+    // Plugins.
     ListPlugins(ListPlugins),
     PluginRestart(PluginRestart),
-    // M4 (the stub edit adds them; T4.2 and T4.5 implement them).
+    // Resume, agents and restore.
     PaneSetResume(PaneSetResume),
     Agent(AgentCmd),
     RebootCheck(RebootCheck),
     CommandPrompt(CommandPrompt),
     RunShell(RunShell),
     SelectLayout(SelectLayout),
-    // M3.6 (the stub edit adds them; TC.2 parses their flags, the task
-    // named on each struct implements it). No `list-commands`: it is
-    // front-end only (M36-R1).
+    // Structure, client and overlay verbs. No `list-commands`: it is
+    // front-end only.
     JoinPane(JoinPane),
     SwapPane(SwapPane),
     SwapWindow(SwapWindow),
@@ -1807,7 +1806,7 @@ pub enum Command {
     /// A tmux command grofe cannot do, in a sourced file: it fails with
     /// this text when its turn comes, and the file's other lines run.
     Refused(String),
-    // M5: buffers (TM.4).
+    // Buffers.
     SetBuffer(SetBuffer),
     ShowBuffer(ShowBuffer),
     LoadBuffer(LoadBuffer),
@@ -1817,7 +1816,7 @@ pub enum Command {
     PasteBuffer(PasteBuffer),
     ChooseBuffer(ChooseBuffer),
     CustomizeMode(CustomizeMode),
-    // M5: copy mode (TM.1).
+    // Copy mode.
     CopyMode(CopyMode),
     /// `choose-agent`: the agent picker overlay.
     ChooseAgent,
