@@ -224,7 +224,13 @@ exec = true
     let p = panes(&srv, "run:");
     assert_eq!(p.len(), 2);
     let screen = |id: &str| srv.capture(id);
-    try_wait_until(|| screen(&p[0][0]).contains("typed-marker"), WAIT).unwrap();
+    // Wait for the command's output, not its echo: the echoed
+    // `echo typed-marker` alone already contains the marker.
+    let ran = |s: &str| {
+        s.lines()
+            .any(|l| l.ends_with("typed-marker") && !l.contains("echo"))
+    };
+    try_wait_until(|| ran(&screen(&p[0][0])), WAIT).unwrap();
     // The dead pane's `remain-on-exit-format` line scrolls the screen up one
     // row, as tmux's does, so the marker may already be in the history.
     let history = |id: &str| {
@@ -237,10 +243,7 @@ exec = true
     // (the harness keeps it dead).
     let typed = screen(&p[0][0]);
     assert!(
-        typed.contains("echo typed-marker")
-            && typed
-                .lines()
-                .any(|l| l.ends_with("typed-marker") && !l.contains("echo")),
+        typed.contains("echo typed-marker") && ran(&typed),
         "{typed}"
     );
     assert_eq!(p[0][4], "0", "typed pane alive: {p:?}");
