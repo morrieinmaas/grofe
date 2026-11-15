@@ -26,7 +26,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::run_bounded;
-pub use common::wait_until;
+pub use common::try_wait_until;
 
 use crate::harness::Harness;
 
@@ -366,7 +366,7 @@ impl Rig {
                 self.t(&["bind-key", "M-s", "run-shell", &wrapper]);
             }
         }
-        let loaded = wait_until(|| self.plugins.iter().all(|p| self.loaded(p)), WAIT);
+        let loaded = try_wait_until(|| self.plugins.iter().all(|p| self.loaded(p)), WAIT);
         assert!(
             loaded.is_ok(),
             "{:?} never loaded; plugins.log:\n{}\nlogs:\n{}",
@@ -406,7 +406,7 @@ impl Rig {
         }
         cmd.args(["attach", "-t", session]);
         let a = Harness::spawn(cmd, COLS, ROWS);
-        let attached = wait_until(
+        let attached = try_wait_until(
             || {
                 self.try_t(&["list-clients", "-F", "#{client_session}"])
                     .is_ok_and(|c| c.lines().any(|l| l == session))
@@ -419,7 +419,7 @@ impl Rig {
 
     pub fn kill_server(&self) {
         let _ = self.try_t(&["kill-server"]);
-        let gone = wait_until(|| self.try_t(&["list-sessions"]).is_err(), WAIT);
+        let gone = try_wait_until(|| self.try_t(&["list-sessions"]).is_err(), WAIT);
         assert!(gone.is_ok(), "the server outlived kill-server");
     }
 
@@ -441,7 +441,7 @@ impl Rig {
     }
 
     pub fn wait_lines(&self, name: &str, n: usize, what: &str) {
-        let got = wait_until(|| self.lines(name) >= n, WAIT);
+        let got = try_wait_until(|| self.lines(name) >= n, WAIT);
         assert!(got.is_ok(), "{what}: {name} never reached {n} lines");
     }
 

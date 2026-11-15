@@ -497,6 +497,11 @@ impl Model {
         SessionId(self.next_session - 1)
     }
 
+    /// The id the next session gets (tmux's `next_session_id`).
+    pub fn next_session_id(&self) -> SessionId {
+        SessionId(self.next_session)
+    }
+
     pub fn alloc_window_id(&mut self) -> WindowId {
         self.next_window += 1;
         WindowId(self.next_window - 1)
@@ -1134,6 +1139,16 @@ impl Model {
                 let windows = &self.sessions[&sid].windows;
                 Ok(step(windows, current, *n))
             }
+            // tmux's `!`/`{last}`: the window the session was on before this
+            // one; `can't find window: !` when there is none.
+            (s, WindowRef::LastUsed) => {
+                let sid = self.session_ref(s, ctx)?;
+                self.sessions[&sid]
+                    .last_windows
+                    .last()
+                    .copied()
+                    .ok_or_else(|| "can't find window: !".to_string())
+            }
             (s, WindowRef::First | WindowRef::Last) => {
                 let sid = self.session_ref(s, ctx)?;
                 let windows = &self.sessions[&sid].windows;
@@ -1192,6 +1207,12 @@ impl Model {
                 let window = &self.windows[&w];
                 Ok(step(&window.pane_ids(), window.active, n))
             }
+            PanePart::LastUsed => {
+                let w = self.window_ref(&r.session, &r.window, ctx)?;
+                self.windows[&w]
+                    .last_pane()
+                    .ok_or_else(|| "can't find pane: !".to_string())
+            }
             PanePart::Index(index) => {
                 let w = self.window_ref(&r.session, &r.window, ctx)?;
                 index
@@ -1207,6 +1228,9 @@ impl Model {
     /// tmux's bare word as a window (cmd-find.c): `=word` is `word`, read
     /// the same way here since window names never match by prefix.
     fn bare_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
+        if let Some(w) = crate::cmd::target::tmux_window_token(word) {
+            return self.window_ref(&SessionRef::Current, &w, ctx);
+        }
         let name = match word.strip_prefix('=') {
             Some(name) if !name.is_empty() => name,
             _ => word,
@@ -1219,6 +1243,10 @@ impl Model {
     /// one for an index or a name, else the session the word names.
     fn word_winlink(&self, word: &str, ctx: &ClientCtx) -> Option<(SessionId, WindowId)> {
         let current = self.current_session(ctx).ok()?;
+        if let Some(w) = crate::cmd::target::tmux_window_token(word) {
+            let w = self.window_ref(&SessionRef::Current, &w, ctx).ok()?;
+            return Some((current, w));
+        }
         let in_current = word
             .parse::<u32>()
             .ok()
@@ -1263,6 +1291,16 @@ impl Model {
     /// leading `=` is part of the word here: tmux strips it only from a
     /// session or window part.
     fn bare_pane(&self, word: &str, ctx: &ClientCtx) -> Result<PaneId, String> {
+        if let Some(pane) = crate::cmd::target::tmux_pane_token(word) {
+            return self.pane_ref(
+                &PaneRef {
+                    session: SessionRef::Current,
+                    window: WindowRef::Current,
+                    pane,
+                },
+                ctx,
+            );
+        }
         if let Ok(index) = word.parse::<u32>() {
             let pane = PaneRef {
                 session: SessionRef::Current,
@@ -1455,7 +1493,9 @@ mod tests {
             images: false,
             identity: Default::default(),
             delay: std::time::Duration::ZERO,
+            colours: Default::default(),
         };
+        // A transient macOS ENXIO is retried by `pane::open_pty`.
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(
             id,

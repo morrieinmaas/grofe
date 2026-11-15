@@ -18,7 +18,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{CMD_TIMEOUT, TestServer, run_bounded, wait_until};
+use common::{CMD_TIMEOUT, TestServer, run_bounded, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -67,7 +67,7 @@ fn state(srv: &TestServer) -> String {
 }
 
 fn wait_state(srv: &TestServer, want: &str) {
-    let ok = wait_until(|| state(srv) == want, CMD_TIMEOUT);
+    let ok = try_wait_until(|| state(srv) == want, CMD_TIMEOUT);
     assert!(ok.is_ok(), "want {want}, have {}", state(srv));
 }
 
@@ -91,7 +91,7 @@ fn start(editor: Option<&str>) -> (TestServer, Harness) {
     ]);
     let out = run_bounded(cmd, CMD_TIMEOUT);
     assert!(out.status.success(), "new-session: {}", out.stderr);
-    let ready = wait_until(
+    let ready = try_wait_until(
         || srv.capture("main").contains("last line of text"),
         CMD_TIMEOUT,
     );
@@ -130,7 +130,7 @@ fn c_space_then_m_w_copies_the_selection_into_a_buffer() {
     // C-p up to "last line of text", C-a to its start, C-Space, four C-f,
     // M-w.
     a.send("\x10\x01\x00\x06\x06\x06\x06");
-    let x = wait_until(
+    let x = try_wait_until(
         || tmux(&srv, &["display", "-p", "-t", "main", "#{copy_cursor_x}"]) == "4\n",
         CMD_TIMEOUT,
     );

@@ -70,7 +70,7 @@ fn named_shell(srv: &TestServer, name: &str) -> String {
 
 /// What `file` holds once its command wrote a whole line.
 fn written(file: &Path) -> String {
-    common::wait_until(
+    common::try_wait_until(
         || fs::read_to_string(file).is_ok_and(|s| s.ends_with('\n')),
         Duration::from_secs(5),
     )
@@ -146,7 +146,7 @@ fn a_respawn_keeps_its_shell_and_several_words_skip_it() {
     srv.cmd(&["set-option", "-g", "default-shell", &second])
         .unwrap();
     srv.cmd(&["respawn-pane", "-k", "-t", "s:2"]).unwrap();
-    common::wait_until(
+    common::try_wait_until(
         || fs::read_to_string(&file).is_ok_and(|s| s.lines().count() == 2),
         Duration::from_secs(5),
     )

@@ -60,7 +60,7 @@ fn start_without_remain(srv: &TestServer, args: &[&str]) {
 }
 
 fn wait_for_file(path: &Path) -> String {
-    common::wait_until(
+    common::try_wait_until(
         || fs::read_to_string(path).is_ok_and(|s| s.ends_with('\n')),
         WAIT,
     )
@@ -343,7 +343,7 @@ fn late_pane_exit_after_kill_is_ignored() {
     // kill-window races the fast pane's own exit.
     srv.cmd(&["new-window", "-t", "a", "true"]).unwrap();
     srv.cmd(&["kill-window", "-t", "a:2"]).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     let out = lines(&srv.cmd(&["list-windows", "-t", "a"]).unwrap());
     assert_eq!(out.len(), 1, "{out:?}");
     assert!(srv.cmd(&["has-session", "-t", "keep"]).is_ok());
@@ -352,7 +352,7 @@ fn late_pane_exit_after_kill_is_ignored() {
     // kill-session races the fast pane's own exit.
     srv.cmd(&["new-session", "-d", "-s", "b", "true"]).unwrap();
     srv.cmd(&["kill-session", "-t", "b"]).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(srv.cmd(&["has-session", "-t", "b"]).is_err());
     assert!(srv.cmd(&["has-session", "-t", "a"]).is_ok());
     assert!(srv.cmd(&["has-session", "-t", "keep"]).is_ok());

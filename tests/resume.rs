@@ -229,7 +229,7 @@ fn a_cli_inside_a_pane_resolves_against_its_own_path_and_respawn_runs_it() {
         .unwrap_or_else(|e| panic!("{e}: #{{pane_resume}} is {:?}", f.resume("main")));
     // The CLI has exited; the resume stays, bound to the shell that ran it.
     f.wait_prompt("main");
-    thread::sleep(SEVERAL_SAMPLES);
+    common::quiet_period(SEVERAL_SAMPLES);
     assert_eq!(f.resume("main"), want);
     f.srv
         .cmd(&["respawn-pane", "-k", "-t", "main"])
@@ -389,7 +389,7 @@ fn a_stopped_agent_keeps_its_resume() {
     let pid = pid_with("--session-id stopme");
     let pid = nix::unistd::Pid::from_raw(pid);
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).expect("SIGSTOP");
-    thread::sleep(SEVERAL_SAMPLES);
+    common::quiet_period(SEVERAL_SAMPLES);
     let still = f.resume("main");
     let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT);
     let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
@@ -406,7 +406,7 @@ fn a_resume_set_over_the_shell_survives_running_ls() {
     f.srv
         .wait_for(|| f.srv.capture("main").contains("usr"), WAIT)
         .expect("ls ran");
-    thread::sleep(SEVERAL_SAMPLES);
+    common::quiet_period(SEVERAL_SAMPLES);
     assert_eq!(f.resume("main"), "/bin/sleep 9");
 }
 
@@ -462,7 +462,7 @@ fn a_spawn_command_is_the_resume_bound_to_the_root() {
         .expect("new-window");
     let pane = pane.trim();
     assert_eq!(f.resume(pane), "/bin/sleep 1000");
-    thread::sleep(SEVERAL_SAMPLES);
+    common::quiet_period(SEVERAL_SAMPLES);
     assert_eq!(f.resume(pane), "/bin/sleep 1000");
 }
 
@@ -471,7 +471,7 @@ fn with_no_server_it_fails_and_starts_nothing() {
     let srv = TestServer::unstarted();
     let out = srv.run(&["pane-set-resume", "--", "/bin/true"]);
     assert!(!out.status.success(), "{out:?}");
-    thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!srv.is_running());
     assert_eq!(srv.server_starts(), 0);
 }
@@ -535,7 +535,7 @@ fn every_set_and_clear_raises_resume_changed() {
         .wait_for(|| count() == 5, WAIT)
         .expect("raised on set and -u");
     // Nothing that changes nothing raises it.
-    thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(count(), 5);
 }
 
@@ -639,6 +639,6 @@ fn a_cli_from_another_grofe_binary_binds_to_its_shell() {
         .wait_for(|| f.resume("main") == "/bin/sleep 5", WAIT)
         .unwrap_or_else(|e| panic!("{e}: #{{pane_resume}} is {:?}", f.resume("main")));
     f.wait_prompt("main");
-    thread::sleep(SEVERAL_SAMPLES);
+    common::quiet_period(SEVERAL_SAMPLES);
     assert_eq!(f.resume("main"), "/bin/sleep 5");
 }

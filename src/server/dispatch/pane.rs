@@ -508,6 +508,7 @@ pub(crate) fn respawn(
     own.extend(extra_env);
     let mut env = super::pane_env(state, session, pane, own);
     env.push(("SHELL".to_string(), shell.clone()));
+    let colours = clients::default_colours(model, (session, p.window));
     let spec = PaneSpawn {
         id: pane,
         session,
@@ -526,6 +527,7 @@ pub(crate) fn respawn(
         images: graphics::images_enabled(&state.model),
         identity: state.model.identity,
         delay: std::time::Duration::ZERO,
+        colours,
     };
     let cwd = spec.cwd.clone();
     // The scrollback stays, as tmux's `screen_reinit` leaves it.
@@ -536,11 +538,6 @@ pub(crate) fn respawn(
         &state.model.panes[&pane].handle,
     )
     .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
-    clients::seed_defaults(
-        &state.model,
-        (session, state.model.panes[&pane].window),
-        &handle,
-    );
     let mut before = Default::default();
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
