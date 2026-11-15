@@ -41,7 +41,8 @@ Every release file is listed in `SHA256SUMS` and has a build attestation
 from GitHub Actions. In the folder you downloaded to:
 
 ```sh
-sha256sum -c --ignore-missing SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS        # Linux
+shasum -a 256 -c --ignore-missing SHA256SUMS    # macOS
 gh attestation verify grofe-v0.2.0-x86_64-unknown-linux-musl.tar.gz --repo termage/grofe
 ```
 
