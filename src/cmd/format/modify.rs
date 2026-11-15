@@ -10,7 +10,6 @@
 //! bracket-aware splitting ([`skip1`]) only has the `##` and `#{` forms
 //! left to step over.
 
-
 use super::time::{localtime, pretty_time, strftime};
 use super::x11::X11;
 use super::{

@@ -1056,12 +1056,13 @@ fn regex_match(pattern: &str, s: &str, icase: bool) -> bool {
     })
 }
 
-/// `fnmatch(3)` with no flags, as tmux's `#{m:}`: `*` and `?` also match
+/// `fnmatch(3)` with no flags, as tmux's `#{m:}`, `terminal-features` and
+/// the event filters and `source-file` globs: `*` and `?` also match
 /// `/` and a leading `.`, `[...]` takes ranges and `!` or `^` to negate,
 /// and a backslash quotes the next character. An unclosed `[` is an
 /// ordinary character, as in glibc. Iterative, backtracking only to the
 /// last `*`, so it takes O(pattern x string) steps whatever the input.
-fn fnmatch(p: &[u8], s: &[u8]) -> bool {
+pub fn fnmatch(p: &[u8], s: &[u8]) -> bool {
     let (mut pi, mut si) = (0, 0);
     // Where to resume after the last `*`: the pattern after it, and the
     // string position it has absorbed up to.
@@ -1563,10 +1564,23 @@ mod tests {
     /// once (a pane can put such text in its title).
     #[test]
     fn fnmatch_does_not_backtrack_exponentially() {
-        let pattern = "*a*a*a*a*a*a*a*a*a*a*b";
-        let s = "a".repeat(30);
         let start = crate::thread_cpu_time();
-        assert!(!fnmatch(pattern.as_bytes(), s.as_bytes()));
+        // The `#{m:}` shape, then each former caller's: event filters
+        // (`*` runs), `terminal-features` (`*` and `?`), `source-file`
+        // globs (sets between `*`).
+        for (pattern, unit) in [
+            ("*a*a*a*a*a*a*a*a*a*a*b", "a"),
+            ("*-a*-a*-a*-a*-a*-a*-a*-a*-a*-a*-b", "-a"),
+            ("?*a?*a?*a?*a?*a?*a?*a?*a?*a?*a?*b", "aa"),
+            (
+                "*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*b.conf",
+                "a",
+            ),
+        ] {
+            let s = unit.repeat(30);
+            assert!(!fnmatch(pattern.as_bytes(), s.as_bytes()), "{pattern}");
+        }
+        let (pattern, s) = ("*a*a*a*a*a*a*a*a*a*a*b", "a".repeat(30));
         assert!(fnmatch(pattern.as_bytes(), format!("{s}b").as_bytes()));
         let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(50), "{took:?}");
@@ -1607,6 +1621,29 @@ mod tests {
             ("a*b*c", "axxbyy", false),
             ("*[0-9]", "win3", true),
             ("\\*a", "*a", true),
+            // Event filters (`events.rs`), `*` only.
+            ("option-*", "option-changed", true),
+            ("*", "pane-exited", true),
+            ("pane-*ed", "pane-exited", true),
+            ("*-exited", "pane-exited", true),
+            ("window-*", "pane-exited", false),
+            ("pane-", "pane-exited", false),
+            ("pane-exited", "pane-exited", true),
+            // `terminal-features` patterns (`clients.rs`).
+            ("xterm*", "xterm-256color", true),
+            ("*", "anything", true),
+            ("screen?256color", "screen-256color", true),
+            ("foot", "foot", true),
+            ("foot", "foot-extra", false),
+            ("xterm*", "screen", false),
+            ("a?", "a", false),
+            // `source-file` globs (`import_tmux.rs`).
+            ("[1-9]*.conf", "20-status.conf", true),
+            ("[1-9]*.conf", "00-core.conf", false),
+            ("*.conf", ".hidden.conf", true),
+            ("?-x.conf", "1-x.conf", true),
+            ("[!0]*.conf", "00-core.conf", false),
+            ("[ab", "[ab", true),
         ] {
             assert_eq!(
                 fnmatch(pattern.as_bytes(), s.as_bytes()),

@@ -30,6 +30,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::cmd::format::fnmatch;
 use crate::cmd::{self, Command, RegisterSource};
 use crate::compat::tmux;
 use crate::config::provenance::tilde;
@@ -2675,61 +2676,11 @@ fn glob_sorted(resolved: &str) -> Vec<PathBuf> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.file_name())
-        .filter(|name| glob_match(pattern, &name.to_string_lossy()))
+        .filter(|name| fnmatch(pattern.as_bytes(), name.to_string_lossy().as_bytes()))
         .map(|name| dir.join(name))
         .collect();
     out.sort();
     out
-}
-
-/// A small shell-style glob matcher: `*` any run of characters, `?` one
-/// character, `[abc]`/`[a-z]`/`[!abc]` a character class (canopy's
-/// `[1-9]*.conf`). No `**`, no brace expansion: tmux's own globbing for
-/// `source-file` is this small too.
-fn glob_match(pattern: &str, name: &str) -> bool {
-    fn go(pat: &[char], s: &[char]) -> bool {
-        match pat.first() {
-            None => s.is_empty(),
-            Some('*') => go(&pat[1..], s) || (!s.is_empty() && go(pat, &s[1..])),
-            Some('?') => !s.is_empty() && go(&pat[1..], &s[1..]),
-            Some('[') => {
-                let Some(close) = pat.iter().position(|c| *c == ']').filter(|&i| i > 0) else {
-                    return !s.is_empty() && s[0] == '[' && go(&pat[1..], &s[1..]);
-                };
-                let Some(&c) = s.first() else {
-                    return false;
-                };
-                let mut class = &pat[1..close];
-                let negate = class.first() == Some(&'!');
-                if negate {
-                    class = &class[1..];
-                }
-                let mut matched = false;
-                let mut i = 0;
-                while i < class.len() {
-                    if i + 2 < class.len() && class[i + 1] == '-' {
-                        if class[i] <= c && c <= class[i + 2] {
-                            matched = true;
-                        }
-                        i += 3;
-                    } else {
-                        if class[i] == c {
-                            matched = true;
-                        }
-                        i += 1;
-                    }
-                }
-                if matched == negate {
-                    return false;
-                }
-                go(&pat[close + 1..], &s[1..])
-            }
-            Some(&pc) => s.first() == Some(&pc) && go(&pat[1..], &s[1..]),
-        }
-    }
-    let pat: Vec<char> = pattern.chars().collect();
-    let s: Vec<char> = name.chars().collect();
-    go(&pat, &s)
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -3108,12 +3059,6 @@ mod tests {
             env_refs_outside_single_quotes(r#"run-shell "$A/b" '$B'"#),
             vec!["A".to_string()]
         );
-    }
-
-    #[test]
-    fn glob_matches_leading_digit_class() {
-        assert!(glob_match("[1-9]*.conf", "20-status.conf"));
-        assert!(!glob_match("[1-9]*.conf", "00-core.conf"));
     }
 
     #[test]

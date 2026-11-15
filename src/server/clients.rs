@@ -30,6 +30,7 @@
 //!   in the same `Output` frame.
 
 use crate::cmd::NoVars;
+use crate::cmd::format::fnmatch;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -2193,25 +2194,14 @@ fn terminal_features(model: &Model, term: &str, mut caps: Caps) -> Caps {
     let features = model.options.lookup_list("terminal-features", &[]);
     for entry in features.into_iter().flat_map(|f| f.values()) {
         let mut parts = entry.split(':');
-        let matches = parts.next().is_some_and(|pattern| glob(pattern, term));
+        let matches = parts
+            .next()
+            .is_some_and(|pattern| fnmatch(pattern.as_bytes(), term.as_bytes()));
         if matches && parts.any(|feature| feature == "sixel") {
             caps.sixel = true;
         }
     }
     caps
-}
-
-/// `fnmatch` with `*` and `?` only.
-fn glob(pattern: &str, text: &str) -> bool {
-    fn go(p: &[u8], t: &[u8]) -> bool {
-        match p.split_first() {
-            None => t.is_empty(),
-            Some((b'*', rest)) => (0..=t.len()).any(|i| go(rest, &t[i..])),
-            Some((b'?', rest)) => !t.is_empty() && go(rest, &t[1..]),
-            Some((c, rest)) => t.first() == Some(c) && go(rest, &t[1..]),
-        }
-    }
-    go(pattern.as_bytes(), text.as_bytes())
 }
 
 /// Client `c`'s current window, and whether it fits the client (then
@@ -5418,17 +5408,6 @@ mod tests {
         let mut s = Screen::new(4, 2);
         s.cells[0].c = c;
         s
-    }
-
-    #[test]
-    fn terminal_feature_patterns_are_globs() {
-        assert!(glob("xterm*", "xterm-256color"));
-        assert!(glob("*", "anything"));
-        assert!(glob("screen?256color", "screen-256color"));
-        assert!(glob("foot", "foot"));
-        assert!(!glob("foot", "foot-extra"));
-        assert!(!glob("xterm*", "screen"));
-        assert!(!glob("a?", "a"));
     }
 
     #[test]
