@@ -3,7 +3,7 @@ use super::*;
 pub const REMAIN_ON_EXIT: &str = "remain-on-exit";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Bool,
     /// A whole number from 0 to `max` (tmux's bounds).
     Number {
@@ -1329,6 +1329,11 @@ pub fn builtin_names() -> impl Iterator<Item = &'static str> {
 /// The built-ins only grofe's own CLI and config know ([`GROFE_ONLY`]).
 pub fn grofe_only_names() -> impl Iterator<Item = &'static str> {
     GROFE_ONLY.iter().copied()
+}
+
+/// The kind of built-in option `name`, for the config's TOML types.
+pub(crate) fn kind_of(name: &str) -> Option<Kind> {
+    builtin(name).map(|b| b.kind)
 }
 
 pub(super) fn builtin(name: &str) -> Option<&'static Builtin> {

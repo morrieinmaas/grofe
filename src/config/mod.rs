@@ -632,6 +632,28 @@ mod tests {
         }
     }
 
+    /// A TOML type must follow the option's `Kind`: booleans for `Bool`,
+    /// integers for `Number`, strings for the rest. A choice option may be
+    /// spelled as a boolean or an integer (`remain-on-exit`, `status.lines`).
+    #[test]
+    fn toml_types_agree_with_option_kinds() {
+        use crate::server::dispatch::options::{Kind, kind_of};
+        for (toml, tmux) in OPTION_NAMES {
+            let kind = kind_of(tmux).unwrap_or_else(|| panic!("{tmux} has no kind"));
+            let ok = match kind {
+                Kind::Bool => toml_type(toml) == Ty::Bool,
+                Kind::Number { .. } => toml_type(toml) == Ty::Int,
+                Kind::Choice(_) => true,
+                _ => toml_type(toml) == Ty::Str,
+            };
+            assert!(
+                ok,
+                "{toml} ({tmux}) is {kind:?}, TOML says {:?}",
+                toml_type(toml)
+            );
+        }
+    }
+
     #[test]
     fn the_restore_keys_have_their_defaults() {
         let resolved = load(&Env::from_vars(None, None)).expect("defaults load");
