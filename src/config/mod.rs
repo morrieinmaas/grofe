@@ -500,6 +500,8 @@ pub struct Resolved {
     pub sources: BTreeMap<String, ConfigSource>,
     /// `[plugins.<name>]` (T6.3), merged key by key across the layers.
     pub plugins: BTreeMap<String, ConfigPlugin>,
+    /// `[[pack]]`: the plugin manager's specs, in file order.
+    pub pack: Vec<crate::pack::spec::Spec>,
     /// `[agents]` and `[agents.kinds.<name>]`, merged key by key.
     pub agents: ConfigAgents,
     /// `[notify]`, key by key over the defaults.

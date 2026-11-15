@@ -676,8 +676,11 @@ Load order, later wins:
 Tools such as canopy write only `conf.d/NN-*.toml`; `config.toml` and
 `user.toml` belong to the user and no tool writes them. `user.toml` loads after
 every generated fragment, so the user's own settings always win over a tool's.
-There is no scripting layer: the Lua `init.lua` layer was dropped with the
-Lua runtime (owner ruling 2026-09-29). Plugins (§7.4) are not a layer
+Scripting is not a layer either. The owner ruling of 2026-11-14 reverses the
+2026-09-29 drop of Lua: `<config>/init.luau` (or `init.lua`) runs after the
+TOML layers and after every installed pack, and changes settings only by
+running commands, which land in layer 5
+(docs/specs/2026-11-14-lua-plugins.md). Plugins (§7.4) are not a layer
 either. A plugin is declared in layers 1 to 4 like any setting, and changes
 settings only by running commands, which land in layer 5.
 
@@ -923,11 +926,14 @@ that the server starts from a `[plugins.<name>]` table (§7.4) and
 supervises. It speaks control mode (§4.6) over the socket `$GROFE` names,
 or over stdio through `grofe control`, which bridges JSON lines in and out
 so a plugin needs no socket code. It acts with ordinary commands and learns
-what happened through `subscribe` (§7.2). There is no in-process scripting:
-the Lua runtime was dropped (owner ruling 2026-09-29), and with it
-`init.lua`, Lua key bindings and format functions. A key binding runs a
-command or `run-shell`, and dynamic status content comes from options and
-status sources (D8). The event catalog (§7.2) and the protocol (§7.3) are
+what happened through `subscribe` (§7.2). In-process scripting is Luau
+(owner ruling 2026-11-14, reversing the 2026-09-29 drop): `init.luau`, key
+bindings to Luau functions, event and timer callbacks, each run on the
+actor inside a 50 ms budget so no script can freeze the server
+(docs/specs/2026-11-14-lua-plugins.md). There are still no format
+functions: dynamic status content comes from options and status sources
+(D8), which a Luau timer can set. `grofe pack` installs Luau and tmux
+plugins from git with a lockfile. The event catalog (§7.2) and the protocol (§7.3) are
 frozen as v1 in M6 and change only by addition after that.
 
 **An event enters the catalog only with a named consumer:** a tmux hook name
