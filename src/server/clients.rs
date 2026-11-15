@@ -31,6 +31,7 @@
 
 use crate::cmd::NoVars;
 use crate::cmd::format::fnmatch;
+use crate::util::quote;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -920,10 +921,7 @@ pub(crate) fn plan_command_log(
             crate::protocol::Dialect::Grofe => None,
         };
         let printed = printed.unwrap_or_else(|| {
-            let words: Vec<String> = cmd
-                .iter()
-                .map(|w| crate::server::dispatch::options::escape_arg(w))
-                .collect();
+            let words: Vec<String> = cmd.iter().map(|w| quote::tmux_arg(w)).collect();
             words.join(" ")
         });
         plan.push_back((count, Some(format!("{who} command: {printed}"))));
@@ -941,10 +939,7 @@ fn print_for_log(dialect: crate::protocol::Dialect, cmd: &[String]) -> String {
         crate::protocol::Dialect::Grofe => None,
     };
     printed.unwrap_or_else(|| {
-        let words: Vec<String> = cmd
-            .iter()
-            .map(|w| crate::server::dispatch::options::escape_arg(w))
-            .collect();
+        let words: Vec<String> = cmd.iter().map(|w| quote::tmux_arg(w)).collect();
         words.join(" ")
     })
 }
@@ -998,7 +993,6 @@ pub(crate) fn log_error(state: &mut State, who: &str, err: &str) {
 /// sorted, then the arguments, each quoted as `args_escape` quotes it.
 /// `None` for a verb tmux does not have.
 fn tmux_print(argv: &[String]) -> Option<String> {
-    use crate::server::dispatch::options::escape_arg;
     let (name, args) = argv.split_first()?;
     let spec = crate::compat::tmux::resolve(name).ok()?;
     // `[-c working-directory]` takes a value, `[-dErx]` does not.
@@ -1046,12 +1040,12 @@ fn tmux_print(argv: &[String]) -> Option<String> {
     }
     for (flag, values) in valued {
         for v in values {
-            out.push_str(&format!(" -{flag} {}", escape_arg(v)));
+            out.push_str(&format!(" -{flag} {}", quote::tmux_arg(v)));
         }
     }
     for word in args.get(i..).unwrap_or_default() {
         out.push(' ');
-        out.push_str(&escape_arg(word));
+        out.push_str(&quote::tmux_arg(word));
     }
     Some(out)
 }

@@ -12,8 +12,6 @@ mod names;
 pub mod time;
 mod x11;
 
-pub use modify::escape_arg;
-
 /// A [`FormatVars`] that names nothing, for formats expanded with no context.
 pub struct NoVars;
 
