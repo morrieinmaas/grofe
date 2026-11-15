@@ -476,3 +476,22 @@ fn double_c_wraps_the_stream_in_a_dcs() {
         "the terminal echoed: {text:?}"
     );
 }
+
+/// A new pane's first output never precedes the `%window-add` that
+/// introduces it, and a pane's `%output` is escaped as tmux does.
+#[test]
+fn output_follows_the_window_add_of_its_pane() {
+    let grofe = grofe_side();
+    let mut client = Client::start(&grofe, &["-C", "new-session", "-s", "x", "cat"]);
+    client.settle(Duration::from_millis(500));
+    client.send("new-window -d 'printf \"zzmark\\\\\\\\\\n\"; sleep 30'");
+    let text = client.finish();
+    let add = text.find("%window-add @1").expect(&text);
+    let out = text
+        .lines()
+        .position(|l| l.starts_with("%output ") && l.contains("zzmark"));
+    let out = out.expect(&text);
+    let add_line = text[..add].lines().count();
+    assert!(add_line < out, "output before its window-add:\n{text}");
+    assert!(text.contains("zzmark\\134\\015\\012"), "{text}");
+}
