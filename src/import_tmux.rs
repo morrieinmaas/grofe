@@ -14,7 +14,7 @@
 //! to *validate* the command strings this module builds, exactly as
 //! `config/load.rs`'s loader will read them back.
 //!
-//! M3.6 (TP.0): every command string (a binding, a hook, an alias, a
+//! Every command string (a binding, a hook, an alias, a
 //! stored `if-shell` branch or menu item) and every option value goes
 //! through the tmux front end's own table ([`tmux::spell`]), so the
 //! converter and the live front end share one mapping: `#(cmd)` becomes a
@@ -278,7 +278,7 @@ struct Line {
     /// when more than one command shares it).
     text: String,
     words: Vec<Word>,
-    /// A `{ ... }` command block (spec 5.5, M3.6): reported once, as a
+    /// A `{ ... }` command block (spec 5.5): reported once, as a
     /// whole, never tokenized into `words`.
     is_block: bool,
 }
@@ -787,7 +787,7 @@ impl Importer {
 
     fn dispatch(&mut self, file: &Path, l: &Line) {
         if l.is_block {
-            // Reported once, as a whole (spec 5.5, M3.6): grofe does not
+            // Reported once, as a whole (spec 5.5): grofe does not
             // evaluate `{ ... }` command blocks yet.
             return self.report(file, l.line, "command block", &l.text);
         }
@@ -872,7 +872,7 @@ impl Importer {
             return self.report(
                 file,
                 line,
-                "format-expanded, pane or targeted option (not config in M3.5)",
+                "format-expanded, pane or targeted option (not config)",
                 text,
             );
         }
@@ -1572,7 +1572,7 @@ impl Importer {
     }
 
     /// A `source-file <path>` sub-command whose path resolves to a file
-    /// currently on the inclusion chain becomes `reload` (M3 ledger).
+    /// currently on the inclusion chain becomes `reload`.
     fn try_reload_rewrite(&self, file: &Path, group: &[&Word]) -> Option<String> {
         let first = group.first()?;
         if !matches!(first.value.as_str(), "source-file" | "source") {
@@ -2109,7 +2109,7 @@ impl Importer {
     /// prompt template, menu items) translated the same way. A command the
     /// front end leaves as sent keeps its source text (quotes and `$VAR`
     /// as written). `mouse` when the binding is a mouse key's, where a bare
-    /// `=` target is the pointer's (M36-R3) in either grammar.
+    /// `=` target is the pointer's in either grammar.
     fn native_command(
         &mut self,
         file: &Path,
@@ -2521,7 +2521,7 @@ fn validate_command(s: &str, aliases: &[String]) -> Result<(), String> {
 /// and the native parser reads it exactly as the front end would, so no
 /// tmux-only target (an offset, a bare `=`) is left. An exact `=name` is
 /// the same in both grammars, so it is written as it is. In a mouse key's
-/// commands a bare `=` is the pointer's target in both grammars (M36-R3),
+/// commands a bare `=` is the pointer's target in both grammars,
 /// checked with a pane id in its place. `SetOption::shown` only records
 /// what a tmux-dialect `show` prints, so it is not compared.
 fn spelled_as(spelled: &[String], command: &Command, mouse: bool) -> Option<Vec<String>> {

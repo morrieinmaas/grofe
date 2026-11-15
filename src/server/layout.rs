@@ -188,7 +188,7 @@ pub struct Insert {
 /// for the tmux layout-string codec: [`LayoutTree::export`] writes it and
 /// [`LayoutTree::import`] reads it. Geometry only.
 ///
-/// Cells name panes by runtime id; the M4 snapshot keeps the same shape
+/// Cells name panes by runtime id; the snapshot keeps the same shape
 /// with cells keyed by pane `uid` (`LayoutGeometry<String>`, spec §6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutGeometry<P = PaneId> {
@@ -211,8 +211,8 @@ pub enum GeometryCell<P = PaneId> {
     },
 }
 
-/// One contiguous, one-cell-wide run of border cells, as the M2 renderer will
-/// draw it. `Vertical` runs come from horizontal (side-by-side) splits;
+/// One contiguous, one-cell-wide run of border cells, as the renderer
+/// draws it. `Vertical` runs come from horizontal (side-by-side) splits;
 /// `Horizontal` runs come from vertical (stacked) splits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorderSegment {
@@ -688,7 +688,7 @@ impl LayoutTree {
     /// `area` cannot give every pane a cell. Either way `preset` is where
     /// `next-layout` goes on from ([`Self::last_preset`]), as in tmux.
     ///
-    /// D18 (deliberate, kept for M3.6): tmux 3.7b grows the layout past a
+    /// D18 (deliberate): tmux 3.7b grows the layout past a
     /// window too small for the preset and clips it; a tree exact on its
     /// area cannot, so the old layout stays.
     pub fn preset(&mut self, area: Rect, preset: Preset, panes: &[PaneId]) -> bool {
@@ -1594,7 +1594,7 @@ fn distribute(total: u16, weights: &[u32]) -> Vec<u16> {
     if (total as usize) < n {
         // Not enough cells for every child to get one. Simplest well-defined
         // floor: children at lower indices get one cell each until cells run
-        // out, the rest get none. M2 doesn't shrink a window below one cell
+        // out, the rest get none. grofe doesn't shrink a window below one cell
         // per pane in practice, so this path exists to be safe, not fair.
         let mut sizes = vec![0u16; n];
         for size in sizes.iter_mut().take(total as usize) {
@@ -4051,7 +4051,7 @@ mod tests {
     }
 
     /// Each preset that needs more room than the area has changes nothing
-    /// (D18, deliberate for M3.6), but still counts as the last preset.
+    /// (D18, deliberate), but still counts as the last preset.
     #[test]
     fn a_preset_that_does_not_fit_changes_nothing_but_is_remembered() {
         let area = rect(8, 10);

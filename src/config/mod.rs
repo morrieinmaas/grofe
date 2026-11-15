@@ -42,7 +42,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("history-limit", "history-limit"),
     ("mouse", "mouse"),
     ("remain-on-exit", "remain-on-exit"),
-    // M4 (spec §6): read by T4.3 and T4.4.
+    // Spec §6.
     ("restore-on-start", "restore-on-start"),
     ("restore-stagger-ms", "restore-stagger-ms"),
     ("start-from-tmux", "start-from-tmux"),
@@ -147,7 +147,7 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     // Clock mode (B1d), by tmux's names.
     ("clock-mode-colour", "clock-mode-colour"),
     ("clock-mode-style", "clock-mode-style"),
-    // Copy mode (M5 stub).
+    // Copy mode.
     ("word-separators", "word-separators"),
     ("wrap-search", "wrap-search"),
     ("copy-command", "copy-command"),

@@ -50,7 +50,7 @@
 
 use std::fmt::Write as _;
 
-use super::{Arg, GrofeTarget, Invocation, MappingKind, Rewrite, Rewritten, Row, TmuxError, row};
+use super::{Arg, GrofeTarget, Invocation, Rewrite, Rewritten, Row, TmuxError, row};
 use crate::cmd::format::SHORT_FORMS;
 use crate::cmd::{Command, RegisterSource};
 
@@ -793,7 +793,7 @@ pub(crate) fn names_a_hook(name: &str) -> bool {
 /// (recorded in TC.0b's container as the golden `fe_3/tmux-tables`, which
 /// `tests/compat/fe_3.rs` keeps this file equal to): the names, their
 /// order and the default texts the tmux dialect's `show` prints.
-const TMUX_TABLES: &str = include_str!("tmux-options.txt");
+const TMUX_TABLES: &str = include_str!("data/tmux-options.txt");
 
 /// One of tmux's three option tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -867,11 +867,9 @@ pub fn unquote(text: &str) -> String {
 /// This area's rows.
 pub(crate) fn rows() -> Vec<Row> {
     use GrofeTarget::{Native, Translate};
-    use MappingKind::{Behaviour, FlagRename, PassThrough};
     vec![
         row(
             "set-option",
-            FlagRename,
             Translate(set_option),
             &[],
             "M3.6",
@@ -879,7 +877,6 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "set-window-option",
-            FlagRename,
             Translate(set_window_option),
             &[],
             "M3.6",
@@ -887,7 +884,6 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "show-options",
-            FlagRename,
             Translate(show_options),
             &[],
             "M3.6",
@@ -895,7 +891,6 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "show-window-options",
-            FlagRename,
             Translate(show_window_options),
             &[],
             "M3.6",
@@ -903,7 +898,6 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "set-hook",
-            Behaviour,
             Translate(set_hook),
             &[],
             "B2a",
@@ -911,7 +905,6 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "show-hooks",
-            Behaviour,
             Translate(show_hooks),
             &[],
             "B2a",
@@ -919,7 +912,6 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "set-environment",
-            PassThrough,
             Native("set-environment"),
             &[],
             "M3.6",
@@ -927,7 +919,6 @@ pub(crate) fn rows() -> Vec<Row> {
         ),
         row(
             "show-environment",
-            PassThrough,
             Native("show-environment"),
             &[],
             "M3.6",

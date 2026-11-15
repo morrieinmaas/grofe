@@ -4,20 +4,19 @@
 //! [`session`], window commands (and the default `list-panes`) to
 //! [`window`], pane commands to [`pane`], and option and format commands
 //! (`set-option`, `show-options`, `display-message`, `-F` on the list
-//! commands) to [`options`]. M3's commands route the same way: key
-//! bindings and config (`bind-key`, `unbind-key`, `list-keys`,
+//! commands) to [`options`]. Key bindings and config (`bind-key`, `unbind-key`, `list-keys`,
 //! `source-file`, `reload`) to [`options`], `command-prompt` and
-//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. M3.6's
-//! verbs route to one file per owning task: [`structure`] (TC.8),
-//! [`client`] (TC.9), [`popup`] (TC.6), [`menu`] (TC.7), [`bindings`]
-//! (TC.10) and [`hooks`] (TC.5); M5's buffer verbs to [`buffers`] (TM.4).
+//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. The
+//! structure, client, popup, menu, binding and hook verbs route to one file
+//! each: [`structure`], [`client`], [`popup`], [`menu`], [`bindings`] and
+//! [`hooks`]; the buffer verbs to [`buffers`].
 //! After every command it runs the pending
 //! event hooks (`server::hooks`) and checks the lifecycle cascade: once the
 //! last session is gone the server exits.
 //!
 //! Parsing goes through `compat` (the request's dialect decides between
 //! the native parser and the tmux front end), after grofe aliases are
-//! expanded ([`menu::expand_aliases`]). No M3.6 task edits this file.
+//! expanded ([`menu::expand_aliases`]).
 //!
 //! Shared helpers for handlers that spawn panes live here too:
 //! [`spawn_pane`] and [`resolve_cwd`].
@@ -347,7 +346,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // since it needs the connection's event queue.
         Command::Subscribe(_) => Err("subscribe needs a control connection".to_string()),
 
-        // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest).
+        // Clients, sessions and window stepping.
         Command::AttachSession(c) => clients::attach_session(state, ctx, c),
         Command::DetachClient(c) => clients::detach_client(state, ctx, c),
         Command::ListClients(c) => clients::list_clients(state, ctx, c),
@@ -359,8 +358,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::SwitchClient(c) => session::switch_client(state, ctx, c),
         Command::SendPrefix(c) => pane::send_prefix(state, ctx, c),
 
-        // M3: bindings and config (T3.5), the prompt and run-shell (T3.4),
-        // layout presets (T3.7).
+        // Bindings and config, the prompt and run-shell, layout presets.
         Command::BindKey(c) => options::bind_key(state, ctx, c),
         Command::UnbindKey(c) => options::unbind_key(state, ctx, c),
         Command::ListKeys(c) => options::list_keys(state, ctx, c),
@@ -383,7 +381,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::RunShell(c) => prompt::run_shell(state, ctx, c),
         Command::SelectLayout(c) => window::select_layout(state, ctx, c),
 
-        // M3.6: stubs until each owning task lands (the stub edit).
+        // Structure, client and listing verbs.
         Command::JoinPane(c) => structure::join_pane(state, ctx, c),
         Command::ClockMode(c) => crate::server::clock::clock_mode(state, ctx, c),
         Command::PipePane(c) => pane::pipe_pane(state, ctx, c),
@@ -439,7 +437,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             server::sources::register(state, c.name.as_deref(), &c.command, None, None);
             Ok(String::new())
         }
-        // M5: buffers (TM.4).
+        // Buffers.
         Command::SetBuffer(c) => buffers::set_buffer(state, ctx, c),
         Command::ShowBuffer(c) => buffers::show_buffer(state, ctx, c),
         Command::LoadBuffer(c) => buffers::load_buffer(state, ctx, c),
@@ -449,7 +447,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::PasteBuffer(c) => buffers::paste_buffer(state, ctx, c),
         Command::ChooseBuffer(c) => buffers::choose_buffer(state, ctx, c),
         Command::CustomizeMode(c) => client::customize_mode(state, ctx, c),
-        // M5: copy mode (TM.1).
+        // Copy mode.
         Command::CopyMode(c) => copy::copy_mode(state, ctx, c),
         Command::Agent(c) => agent_cmd::run(state, ctx, c),
         Command::ChooseAgent => {

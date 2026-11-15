@@ -487,7 +487,7 @@ pub(crate) fn respawn(
     extra_env: Vec<(String, String)>,
 ) -> Result<(), String> {
     // As tmux's `window_pane_reset_mode_all`: a respawned pane leaves its
-    // modes, and its copy is freed (M5).
+    // modes, and its copy is freed.
     state.copy.remove(pane);
     let model = &state.model;
     let p = model
@@ -561,7 +561,7 @@ pub(crate) fn respawn(
 /// literals as UTF-8, `-H` as raw bytes, all queued in one write.
 fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, String> {
     let pane = state.model.resolve_pane(&c.target, ctx)?;
-    // M5 (TM.1): `-N`, `-X` and keys for a pane in copy mode, as tmux
+    // `-N`, `-X` and keys for a pane in copy mode, as tmux
     // 3.7b's `cmd_send_keys_exec`.
     let in_mode = state.copy.is_active(pane);
     let mut repeat = 1;

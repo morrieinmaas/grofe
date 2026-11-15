@@ -21,7 +21,7 @@
 //!   unmodified keys are screen-256color's), or
 //!   the kitty keyboard protocol for the flags the pane has pushed.
 //!
-//! [`InputHook`]s (M3: the prompt, the mouse) see every input before the
+//! [`InputHook`]s (the prompt, the mouse) see every input before the
 //! tables; running them is the caller's job (`clients::route`), since the
 //! registry lives in T2.5a's clients.
 
@@ -332,7 +332,7 @@ pub enum Routed {
 }
 
 /// A hook that sees every input of every client before the key tables
-/// (M3: the prompt, the mouse; registered in `register_builtins`). `None`
+/// (the prompt, the mouse; registered in `register_builtins`). `None`
 /// passes the input on; the first hook to answer `Some` wins (R1).
 ///
 /// Hooks are stateless: what they remember lives in a typed field of
@@ -1199,7 +1199,7 @@ pub enum BindingSource {
     File { path: PathBuf, line: usize },
     /// `bind-key` or `source-file` at runtime: outside the config table.
     Runtime,
-    /// A plugin, by name (M6; unused in M3).
+    /// A plugin, by name (registered by the plugin host).
     Plugin(String),
 }
 
@@ -1549,7 +1549,7 @@ impl KeyTables {
 /// confirmations spell tmux's `#P`/`#W` as native formats. Left unbound:
 /// `o` (needs `+`/`-` target offsets, FE.1's), `m`/`M` (marking), `C` and
 /// `t` (out of scope, spec §4.5), `<`/`>` (tmux's window and pane menus),
-/// `*` (`new-pane`). Copy mode (M5) binds `[`, `PPage` and the `copy-mode-vi` table.
+/// `*` (`new-pane`). Copy mode binds `[`, `PPage` and the `copy-mode-vi` table.
 pub fn default_bindings() -> KeyTables {
     let mut t = KeyTables::default();
     let mut bind = |key: &str, argv: &[&str], repeat: bool, note: &str| {
@@ -1661,7 +1661,7 @@ pub fn default_bindings() -> KeyTables {
             &format!("Resize the pane {dir}"),
         );
     }
-    // D10: the stock keys whose verbs M3.6 adds.
+    // D10: the stock keys whose verbs are the structure verbs.
     bind(
         ";",
         &["last-pane"],
@@ -1903,7 +1903,7 @@ pub fn default_bindings() -> KeyTables {
             &format!("{verb} the {layout} layout"),
         );
     }
-    // M5 stub: copy mode's keys (TM.1 builds the mode).
+    // Copy mode's keys.
     bind("[", &["copy-mode"], false, "Enter copy mode");
     bind(
         "PPage",
@@ -5014,7 +5014,7 @@ mod tests {
     }
 
     /// tmux 3.7b's stock prefix bindings (`list-keys -T prefix` on a
-    /// private server) for the commands M2 has, with new panes and windows
+    /// private server) for the commands grofe has, with new panes and windows
     /// in the active pane's cwd (spec §5.3).
     #[test]
     fn default_bindings_are_tmux_stock_for_the_m2_commands() {
@@ -5075,7 +5075,7 @@ mod tests {
 
     /// D10, recorded on tmux 3.7b (`list-keys -T prefix`, `list-keys -N`
     /// on a private `-f /dev/null` server): the stock keys whose verbs
-    /// M3.6 adds, with tmux's notes. Formats tmux spells short (`#P`, `#W`)
+    /// the structure commands add, with tmux's notes. Formats tmux spells short (`#P`, `#W`)
     /// are native (`#{pane_index}`).
     #[test]
     fn default_bindings_add_the_m36_stock_keys_with_notes() {
