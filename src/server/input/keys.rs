@@ -287,6 +287,9 @@ pub enum Routed {
     /// item's), each command's argv, for dispatch in order (R12), in the
     /// dialect it was written in (spec §4.5). An alias expands then.
     Command(Vec<Vec<String>>, Dialect),
+    /// [`Routed::Command`] from a prompt or menu a key's binding opened,
+    /// with that key: its commands are logged as run by it.
+    Keyed(Vec<Vec<String>>, Dialect, Option<String>),
     /// A key binding's stored commands, as [`Routed::Command`] but with
     /// aliases already expanded when the key was bound, as tmux stores a
     /// parsed command list: a press does not expand them again.

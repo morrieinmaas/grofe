@@ -15,7 +15,12 @@ pub(super) enum Press {
 /// Runs what a key of the chooser asks for.
 pub(super) fn apply(state: &mut State, client: ClientId, routed: Routed) {
     match routed {
-        Routed::Command(cmds, dialect) => clients::run_binding(state, client, &cmds, dialect),
+        Routed::Command(cmds, dialect) => {
+            clients::run_binding(state, client, &cmds, dialect, None);
+        }
+        Routed::Keyed(cmds, dialect, key) => {
+            clients::run_binding(state, client, &cmds, dialect, key);
+        }
         Routed::Bound(cmds, dialect) => {
             clients::run_commands_for(state, client, &cmds, dialect, true, None, None);
         }

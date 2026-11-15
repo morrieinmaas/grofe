@@ -1159,10 +1159,7 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
                         clients::in_input_order(state, id, Box::new(run));
                         Routed::Consumed
                     }
-                    None if shown.ctx.client.is_none() => {
-                        state.command_key = key;
-                        Routed::Command(cmds, dialect)
-                    }
+                    None if shown.ctx.client.is_none() => Routed::Keyed(cmds, dialect, key),
                     None => {
                         let run = move |state: &mut State| {
                             clients::run_binding_in(state, id, &cmds, dialect, pane, key)

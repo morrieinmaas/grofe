@@ -1027,10 +1027,13 @@ impl InputHook for PromptHook {
                 let prompt = state.prompts.close(client)?;
                 let command = prompt.command(&prompt.line());
                 match cmd::split_command_string(&command) {
-                    Ok(cmds) if !cmds.is_empty() => {
-                        state.command_key = prompt.key.clone();
-                        clients::run_binding(state, client, &cmds, prompt.dialect)
-                    }
+                    Ok(cmds) if !cmds.is_empty() => clients::run_binding(
+                        state,
+                        client,
+                        &cmds,
+                        prompt.dialect,
+                        prompt.key.clone(),
+                    ),
                     Ok(_) => {}
                     Err(e) => clients::show_message(state, client, &e.to_string()),
                 }
@@ -1133,8 +1136,7 @@ impl InputHook for PromptHook {
                 };
                 match command.map(|c| cmd::split_command_string(&c)) {
                     Some(Ok(cmds)) if !cmds.is_empty() => {
-                        state.command_key = prompt.key.clone();
-                        Routed::Command(cmds, prompt.dialect)
+                        Routed::Keyed(cmds, prompt.dialect, prompt.key.clone())
                     }
                     Some(Err(e)) => {
                         clients::show_message(state, client, &e.to_string());
@@ -1946,9 +1948,9 @@ fn run_incremental(state: &mut State, client: ClientId, prefix: char, line: &str
     };
     let command = replace_template(&prompt.template, &format!("{prefix}{line}"));
     let dialect = prompt.dialect;
-    state.command_key = prompt.key.clone();
+    let key = prompt.key.clone();
     match cmd::split_command_string(&command) {
-        Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect),
+        Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect, key),
         Ok(_) => {}
         Err(e) => clients::show_message(state, client, &e.to_string()),
     }
@@ -2799,7 +2801,7 @@ mod tests {
 
     fn command(words: &[&str]) -> Option<Routed> {
         let argv = words.iter().map(|w| w.to_string()).collect();
-        Some(Routed::Command(vec![argv], Dialect::Grofe))
+        Some(Routed::Keyed(vec![argv], Dialect::Grofe, None))
     }
 
     /// Recorded on tmux 3.7b: `-1` answers with the character typed, a
