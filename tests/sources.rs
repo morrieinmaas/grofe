@@ -142,11 +142,26 @@ fn force_frames(
 }
 
 /// The frame gap to hold a run to: the acceptance limit, or on a machine
-/// whose own baseline is already near it (a loaded CI VM), twice that. A
-/// frame that waited on the source would wait about its 2 s timeout, far
-/// past either.
+/// whose own baseline is already near it (a loaded CI VM), three times
+/// that, but never past a quarter of the source's 2 s timeout. Each gap is
+/// the one worst stall of its run, and a loaded host stalls a run with no
+/// source at all by 2x its quiet worst (77 ms against 35 ms), so a 2x bound
+/// failed on noise. A frame that waited on the source waits until the run
+/// is killed, about 2 s, past the cap whatever the baseline.
 fn frame_bound(baseline: Duration) -> Duration {
-    FRAME_LIMIT.max(baseline * 2)
+    FRAME_LIMIT
+        .max(baseline * 3)
+        .min(Duration::from_millis(500))
+}
+
+/// A loaded run once stalled 80 ms over a 35 ms baseline; a frame held by
+/// the source stalls about 2 s.
+#[test]
+fn the_frame_bound_passes_load_and_fails_a_frame_held_by_the_source() {
+    let ms = Duration::from_millis;
+    assert_eq!(frame_bound(ms(10)), FRAME_LIMIT);
+    assert!(frame_bound(ms(35)) > ms(80));
+    assert!(frame_bound(Duration::from_secs(5)) < ms(1500));
 }
 
 /// Whether any process in group `pgid` is alive (a zombie is not).
@@ -261,7 +276,7 @@ fn a_hung_source_never_delays_a_frame_and_is_killed_at_its_timeout() {
     let pidfile = path(&srv, "pid");
     let mut a = attach(&srv);
     let mut b = attach(&srv);
-    // As long as the measured run below, so both longest gaps sample alike.
+    // At least as long as the measured run below, which ends at the kill.
     let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(8), || false);
     load(
         &srv,
