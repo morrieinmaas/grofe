@@ -1052,3 +1052,58 @@ Replayed by `tests/compat/b4flags.rs`. Done unless marked divergence.
 Done, each with a tmux 3.7b golden under `golden/b4rest/`: clock-mode mouse exit, `source-file -t` and `source-file -` (stdin), menu `-t`, `display-popup -EE`, popup drag/resize/right-click menu, popup style formats, tree mouse and help popup, prompt Tab candidates and paste, `switch-client -Z`, `key X:` lines in `show-messages`, `capture-pane -p` from a binding, `source-file -v` quoting and hold, bell coalescing, `pane-mode-changed` hook, X11 colour names, config escapes, session names, `capture-pane -e` SGR and OSC 8, `message-line`/`message-format`, `fill-character`, `other-pane-width/height`, `tree-mode-preview-format/style`, and the default `P:`/`S:` status rows.
 
 Not done: scrollbars and scroll-to-mouse; popup "To Horizontal/Vertical Pane"; CLI menu during a prompt; frozen pane during a chooser prompt; options `backspace`, `alternate-screen`, `scroll-on-clear`, `key-table` effects; `extended-keys` encoding to modifyOtherKeys panes; z-order of floats after swap-pane/rotate-window; respawn-pane clearing history and `history-limit` trimming; the remaining T3 items (scroll regions vs marks/images, OSC before first frame, same window linked twice, per-link alerts, copy-mode details, drag leaving the pane, client naming, XTSMGRAPHICS, OSC 8 to every client, popup modify mode, hooks client-active/theme/after-queue/after-lock-server).
+
+## Keys, targets, format variables and inert options (tmux parity)
+
+`send-keys` reads key names and encodes them with the same code as key bindings and typed
+keys (`server::input::{parse_key, encode}`). `src/cmd/keys.rs` pins the bytes tmux 3.7b sent
+for each name, recorded on a private `-L` server into a raw pty pane. A name tmux types as
+literal text stays literal: `F13` and above, `C-BSpace`, `C-Escape`, a mouse key, `C-%`.
+
+Target forms in the tmux front end, in the window and the pane part: `!` and `{last}` (the
+last window or pane; `can't find window: !` or `can't find pane: !` when there is none),
+`{next}`, `{previous}`, `+`, `-`, `+N` and `-N` (wrapping). A bare word is read by the kind
+of target the verb wants, so `select-window -t +1` is a window and `select-pane -t !` a
+pane. `tests/tmux_parity.rs` holds the recorded results. The native grammar still refuses
+them. Not read: tmux's pane-position tokens (`{top}`, `{left-of}`, ...).
+
+Format variables tmux 3.7b lists in `display-message -a` for a detached session, which grofe
+has no value for, so they are left out of the list (`tests/tmux_parity.rs`, `NOT_PROVIDED`,
+fails on any other gap):
+
+| Variable | Why not provided |
+|---|---|
+| `command` | grofe's `display-message` does not carry the running command |
+| `config_files` | the loaded files are not kept as a list |
+| `history_all_bytes` | tmux's grid accounting (per-cell allocation) is not modelled |
+| `pane_bg`, `pane_fg` | colours the terminal reported with OSC 10 and 11 are not kept |
+| `pane_key_mode` | grofe has no modifyOtherKeys state per pane |
+| `pane_pb_progress`, `pane_pb_state` | OSC 9;4 progress is not tracked |
+| `pane_tabs` | the emulator keeps its tab stops private |
+| `pane_unseen_changes` | no unseen-output flag per pane |
+| `scroll_region_lower`, `scroll_region_upper` | the emulator keeps the scroll region private |
+| `synchronized_output_flag` | the emulator does not expose mode 2026 |
+| `session_last_attached` | attach times are not recorded |
+| `sixel_support` | grofe's graphics support is the `graphics` option, not a build flag |
+| `window_active_clients` | clients are not counted per window |
+| `window_cell_height`, `window_cell_width` | tmux's fallback cell size is not reported |
+
+Provided with a simplification: `cursor_shape` reads `default` for a steady block (grofe cannot tell it
+from one never set), `cursor_colour` is always `none`, `alternate_saved_x` and
+`alternate_saved_y` are tmux's unset value outside the alternate screen and absent inside it,
+`window_visible_layout` is absent in a zoomed window.
+
+Options grofe stores and never reads (`NO_EFFECT` in `dispatch/options.rs`). `show-options`
+prints them as tmux does; the first `set-option` on one in a server logs
+`<name>: stored, but has no effect in grofe` to `show-messages`, and `show-config --explain`
+marks them:
+
+`aggressive-resize`, `extended-keys`, `extended-keys-format`, `terminal-features`,
+`terminal-overrides`, `assume-paste-time`, `key-table`, `lock-after-time`, `lock-command`,
+`prompt-cursor-colour`, `prompt-cursor-style`, `prompt-command-cursor-style`, `cursor-colour`,
+`cursor-style`, `alternate-screen`, `copy-mode-mark-style`, `copy-mode-selection-style`,
+`copy-mode-current-line-number-style`, `copy-mode-line-number-style`,
+`copy-mode-line-numbers`, `pane-scrollbars`, `pane-scrollbars-style`,
+`pane-scrollbars-position`, `scroll-on-clear`, `xterm-keys`, `backspace`,
+`default-client-command`, `editor`, `history-file`, `input-buffer-size`,
+`prompt-history-limit`, `variation-selector-always-wide`, `codepoint-widths`, `pane-colours`.
