@@ -1,0 +1,93 @@
+/* The docs in the landing page's Gruvbox, light and dark. mdBook's five
+   themes collapse to these two: light and rust are Gruvbox light; coal,
+   navy and ayu are Gruvbox dark. The OS setting picks one until the reader
+   chooses in the theme menu. */
+@import url("https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap");
+
+:root {
+    --mono-font: "JetBrains Mono", ui-monospace, monospace;
+    --code-font-size: 0.875em;
+}
+
+html, body, .sidebar, .menu-title, .chapter {
+    font-family: "Albert Sans", system-ui, sans-serif;
+}
+
+.light, .rust {
+    --bg: #fbf1c7;
+    --fg: #3c3836;
+    --sidebar-bg: #f2e5bc;
+    --sidebar-fg: #3c3836;
+    --sidebar-non-existant: #a89984;
+    --sidebar-active: #076678;
+    --sidebar-spacer: #d5c4a1;
+    --scrollbar: #bdae93;
+    --icons: #7c6f64;
+    --icons-hover: #3c3836;
+    --links: #076678;
+    --inline-code-color: #3c3836;
+    --theme-popup-bg: #f2e5bc;
+    --theme-popup-border: #d5c4a1;
+    --theme-hover: #ebdbb2;
+    --quote-bg: #f2e5bc;
+    --quote-border: #d5c4a1;
+    --warning-border: #b57614;
+    --table-border-color: #d5c4a1;
+    --table-header-bg: #ebdbb2;
+    --table-alternate-bg: #f2e5bc;
+    --searchbar-border-color: #d5c4a1;
+    --searchbar-bg: #fbf1c7;
+    --searchbar-fg: #3c3836;
+    --searchbar-shadow-color: transparent;
+    --searchresults-header-fg: #7c6f64;
+    --searchresults-border-color: #d5c4a1;
+    --searchresults-li-bg: #f2e5bc;
+    --search-mark-bg: #fabd2f;
+    --color-scheme: light;
+}
+
+.coal, .navy, .ayu {
+    --bg: #282828;
+    --fg: #ebdbb2;
+    --sidebar-bg: #32302f;
+    --sidebar-fg: #ebdbb2;
+    --sidebar-non-existant: #7c6f64;
+    --sidebar-active: #83a598;
+    --sidebar-spacer: #504945;
+    --scrollbar: #665c54;
+    --icons: #a89984;
+    --icons-hover: #ebdbb2;
+    --links: #83a598;
+    --inline-code-color: #ebdbb2;
+    --theme-popup-bg: #32302f;
+    --theme-popup-border: #504945;
+    --theme-hover: #3c3836;
+    --quote-bg: #32302f;
+    --quote-border: #504945;
+    --warning-border: #fabd2f;
+    --table-border-color: #504945;
+    --table-header-bg: #3c3836;
+    --table-alternate-bg: #32302f;
+    --searchbar-border-color: #504945;
+    --searchbar-bg: #32302f;
+    --searchbar-fg: #ebdbb2;
+    --searchbar-shadow-color: transparent;
+    --searchresults-header-fg: #a89984;
+    --searchresults-border-color: #504945;
+    --searchresults-li-bg: #32302f;
+    --search-mark-bg: #b57614;
+    --color-scheme: dark;
+}
+
+.light code:not(pre code), .rust code:not(pre code) { background: #ebdbb2; }
+.coal code:not(pre code), .navy code:not(pre code), .ayu code:not(pre code) { background: #3c3836; }
+.light pre, .rust pre { background: #f2e5bc; }
+.coal pre, .navy pre, .ayu pre { background: #32302f; }
+
+/* Only the two real choices in the theme menu. */
+#mdbook-theme-rust, #mdbook-theme-navy, #mdbook-theme-ayu,
+#theme-list #rust, #theme-list #navy, #theme-list #ayu { display: none; }
+#mdbook-theme-light, #theme-list #light { font-size: 0; }
+#mdbook-theme-light::after, #theme-list #light::after { content: "Light"; font-size: 1rem; }
+#mdbook-theme-coal, #theme-list #coal { font-size: 0; }
+#mdbook-theme-coal::after, #theme-list #coal::after { content: "Dark"; font-size: 1rem; }

@@ -28,7 +28,7 @@ fn test_types_cover_api() {
     let names = registered_names(&read("src/lua/api.rs"));
     assert!(names.len() >= 10, "found only {names:?}");
     let types = read("types/grofe.d.luau");
-    let docs = read("docs/lua.md");
+    let docs = read("docs/book/src/lua.md");
     for name in &names {
         assert!(
             types.contains(&format!("{name}:")),
@@ -36,7 +36,7 @@ fn test_types_cover_api() {
         );
         assert!(
             docs.contains(&format!("grofe.{name}")),
-            "{name} missing from docs/lua.md"
+            "{name} missing from docs/book/src/lua.md"
         );
     }
 }
