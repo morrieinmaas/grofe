@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CANOPY_SHA: 433aee7939966bf6037012b8d5e8f4c4eeef2e2e
+  CANOPY_SHA: 07fa17f6b5b8511262eed8b96811dcd727ff0198
   ATHOME_SHA: ed0d87b711f20b484ba469ec0848906d5f27bf71
   FZF_VERSION: 0.74.4
 
