@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::{
-    ConfigHook, ConfigKind, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES,
-    Resolved, closest, list_tmux_name, literal, load, load_with_file, tmux_name,
+    ConfigHook, ConfigKind, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, Resolved,
+    closest, list_tmux_name, literal, load, load_with_file, option_names, tmux_name,
 };
 use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
@@ -175,7 +175,7 @@ fn run(args: &[String]) -> Result<String, String> {
     // the loader keeps no provenance for them.
     match key {
         None => {
-            for (k, _) in OPTION_NAMES {
+            for (k, _) in option_names() {
                 option(&mut out, k);
             }
             for (k, _) in LIST_NAMES {
@@ -280,7 +280,12 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         Some(k) => {
             let mut msg = format!("show-config: unknown key {k}");
-            if let Some(s) = closest(k, OPTION_NAMES.iter().chain(LIST_NAMES).map(|(t, _)| *t)) {
+            if let Some(s) = closest(
+                k,
+                option_names()
+                    .chain(LIST_NAMES.iter().copied())
+                    .map(|(t, _)| t),
+            ) {
                 msg.push_str(&format!(", did you mean {s}?"));
             }
             return Err(msg);

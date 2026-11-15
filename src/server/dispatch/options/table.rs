@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::Ty;
 
 pub const REMAIN_ON_EXIT: &str = "remain-on-exit";
 
@@ -29,6 +30,32 @@ pub(super) struct Builtin {
     pub(super) kind: Kind,
     pub(super) scope: OptionScope,
     pub(super) default: &'static str,
+    /// The TOML key, when it is not `name` (`status.lines` for `status`).
+    pub(super) toml: Option<&'static str>,
+    /// The TOML type, when it is not the kind's: a choice option the TOML
+    /// spells as a boolean or an integer. A bool is `on`/`off`.
+    pub(super) toml_ty: Option<Ty>,
+    /// tmux 3.7b's built-in default where grofe's differs (recorded: `show
+    /// -g`/`-s`/`-gw` on `-f /dev/null` with a clean environment), used under
+    /// tmux identity ([`Options::use_tmux_defaults`]); `status-keys` and
+    /// `mode-keys` follow `$EDITOR` there. Formats are tmux's where the native
+    /// language can say the same thing.
+    // ponytail: `status-right`'s `#{=21:pane_title}` and the format tmux uses
+    // for `pane-active-border-style` have no native spelling, so grofe's stay.
+    pub(super) tmux_default: Option<&'static str>,
+}
+
+impl Builtin {
+    /// A row's unset columns: `..Builtin::PLAIN` after the ones it sets.
+    const PLAIN: Builtin = Builtin {
+        name: "",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "",
+        toml: None,
+        toml_ty: None,
+        tmux_default: None,
+    };
 }
 
 // ponytail: only the options grofe has a use for. `history-limit`,
@@ -50,44 +77,6 @@ pub(super) struct Builtin {
 // synchronized panes). `status-position` takes `top` from TC.11.
 // `set-titles` (off) and `set-titles-string` match tmux's own defaults,
 // the string translated into grofe's `#{...}`-only expander (R15).
-/// tmux 3.7b's built-in defaults where grofe's differ (recorded: `show
-/// -g`/`-s`/`-gw` on `-f /dev/null` with a clean environment), used under
-/// tmux identity ([`Options::use_tmux_defaults`]); `status-keys` and
-/// `mode-keys` follow `$EDITOR` there. Formats are tmux's where the native
-/// language can say the same thing.
-// ponytail: `status-right`'s `#{=21:pane_title}` and the format tmux uses
-// for `pane-active-border-style` have no native spelling, so grofe's stay.
-pub(super) const TMUX_DEFAULTS: &[(&str, &str)] = &[
-    ("base-index", "0"),
-    ("pane-base-index", "0"),
-    ("history-limit", "2000"),
-    ("escape-time", "10"),
-    ("mouse", "off"),
-    ("focus-events", "off"),
-    ("extended-keys", "off"),
-    ("renumber-windows", "off"),
-    (
-        "automatic-rename-format",
-        "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}",
-    ),
-    // MF (spec 2026-11-05-frames.md): tmux's shared borders, which the
-    // TOML config can still turn into frames.
-    ("pane-frames", "off"),
-    ("pane-gap", "0"),
-    ("pane-border-lines", "single"),
-    ("status-right", "\"#{pane_title}\" %H:%M %d-%b-%y"),
-    (
-        "window-status-format",
-        "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
-    ),
-    (
-        "window-status-current-format",
-        "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }",
-    ),
-    // tmux's full-width message bar.
-    ("message-pill", "off"),
-];
-
 /// grofe's own options that tmux's CLI does not know (spec
 /// 2026-11-05-frames.md): through the tmux dialect `set-option` and
 /// `show-options` call them `invalid option`, as tmux would, while the
@@ -171,7 +160,17 @@ pub(super) const ALERT_ACTIONS: &[&str] = &["none", "any", "current", "other"];
 /// The `visual-*` options' choices.
 pub(super) const VISUAL: &[&str] = &["off", "on", "both"];
 
+/// Every built-in option, and the only list of their names, kinds, defaults
+/// and TOML keys. Rows are in the order the config lists its keys (`show-config`
+/// and `import-tmux` write them so): top-level keys above the sectioned ones.
 pub(super) const BUILTINS: &[Builtin] = &[
+    Builtin {
+        name: "prefix",
+        kind: Kind::Key,
+        scope: OptionScope::Session,
+        default: "C-b",
+        ..Builtin::PLAIN
+    },
     Builtin {
         name: "base-index",
         kind: Kind::Number {
@@ -179,62 +178,8 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Session,
         default: "1",
-    },
-    Builtin {
-        name: "history-limit",
-        kind: Kind::Number {
-            max: i32::MAX as i64,
-        },
-        scope: OptionScope::Session,
-        default: "50000",
-    },
-    // TM.4: tmux's server option, at grofe's global scope (as
-    // `escape-time`); at least 1.
-    Builtin {
-        name: "buffer-limit",
-        kind: Kind::Number {
-            max: i32::MAX as i64,
-        },
-        scope: OptionScope::Global,
-        default: "50",
-    },
-    // Copy mode's options, with tmux 3.7b's scopes and defaults
-    // (`copy-command` is a server option there, global here).
-    Builtin {
-        name: "word-separators",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~",
-    },
-    Builtin {
-        name: "wrap-search",
-        kind: Kind::Bool,
-        scope: OptionScope::Window,
-        default: "on",
-    },
-    Builtin {
-        name: "copy-command",
-        kind: Kind::String,
-        scope: OptionScope::Global,
-        default: "",
-    },
-    Builtin {
-        name: "mode-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "noattr,bg=yellow,fg=black",
-    },
-    Builtin {
-        name: "copy-mode-match-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "bg=cyan,fg=black",
-    },
-    Builtin {
-        name: "copy-mode-current-match-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "bg=magenta,fg=black",
+        tmux_default: Some("0"),
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "pane-base-index",
@@ -243,6 +188,45 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Window,
         default: "1",
+        tmux_default: Some("0"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "escape-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "25",
+        toml: Some("escape-time-ms"),
+        tmux_default: Some("10"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "repeat-time",
+        kind: Kind::Number { max: 2_000_000 },
+        scope: OptionScope::Session,
+        default: "500",
+        toml: Some("repeat-time-ms"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "history-limit",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "50000",
+        tmux_default: Some("2000"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "mouse",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+        tmux_default: Some("off"),
+        ..Builtin::PLAIN
     },
     Builtin {
         name: REMAIN_ON_EXIT,
@@ -253,423 +237,8 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Choice(&["off", "on", "failed", "key"]),
         scope: OptionScope::Window,
         default: "off",
-    },
-    Builtin {
-        name: "status",
-        kind: Kind::Choice(&["off", "on", "2", "3", "4", "5"]),
-        scope: OptionScope::Session,
-        default: "on",
-    },
-    Builtin {
-        name: "status-left",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "[#{session_name}] ",
-    },
-    Builtin {
-        name: "status-right",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "\"#{pane_title}\" %H:%M %d-%b-%y#[range=user|agents]#{agents_badge}#[norange]",
-    },
-    Builtin {
-        name: "status-left-length",
-        kind: Kind::Number {
-            max: i16::MAX as i64,
-        },
-        scope: OptionScope::Session,
-        default: "10",
-    },
-    Builtin {
-        name: "status-right-length",
-        kind: Kind::Number {
-            max: i16::MAX as i64,
-        },
-        scope: OptionScope::Session,
-        default: "40",
-    },
-    Builtin {
-        name: "status-style",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "bg=green,fg=black",
-    },
-    Builtin {
-        name: "status-interval",
-        kind: Kind::Number {
-            max: i32::MAX as i64,
-        },
-        scope: OptionScope::Session,
-        default: "15",
-    },
-    Builtin {
-        name: "window-status-format",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
-    },
-    Builtin {
-        name: "window-status-current-format",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
-    },
-    Builtin {
-        name: "agent-glyph-blocked",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "⏸",
-    },
-    Builtin {
-        name: "agent-glyph-error",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "✗",
-    },
-    Builtin {
-        name: "agent-glyph-unseen",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "✓",
-    },
-    Builtin {
-        name: "agent-glyph-working",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "●",
-    },
-    Builtin {
-        name: "notify-muted-glyph",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "🔕",
-    },
-    Builtin {
-        name: "agent-blocked-border-style",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "fg=yellow",
-    },
-    // TC.11: tmux 3.7b's names, scopes, choices and defaults for the rest
-    // of the status line (spec §4.5's status-line row).
-    Builtin {
-        name: "status-justify",
-        kind: Kind::Choice(&["left", "centre", "right", "absolute-centre"]),
-        scope: OptionScope::Session,
-        default: "left",
-    },
-    Builtin {
-        name: "status-left-style",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "default",
-    },
-    Builtin {
-        name: "status-right-style",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "default",
-    },
-    Builtin {
-        name: "window-status-separator",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: " ",
-    },
-    Builtin {
-        name: "window-status-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "default",
-    },
-    Builtin {
-        name: "window-status-current-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "default",
-    },
-    Builtin {
-        name: "window-status-last-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "default",
-    },
-    Builtin {
-        name: "window-status-bell-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "reverse",
-    },
-    // Window alerts (`server::alerts`, TP.10), with tmux's defaults.
-    Builtin {
-        name: "monitor-bell",
-        kind: Kind::Bool,
-        scope: OptionScope::Window,
-        default: "on",
-    },
-    Builtin {
-        name: "monitor-activity",
-        kind: Kind::Bool,
-        scope: OptionScope::Window,
-        default: "off",
-    },
-    Builtin {
-        name: "monitor-silence",
-        kind: Kind::Number {
-            max: i32::MAX as i64,
-        },
-        scope: OptionScope::Window,
-        default: "0",
-    },
-    Builtin {
-        name: "bell-action",
-        kind: Kind::Choice(ALERT_ACTIONS),
-        scope: OptionScope::Session,
-        default: "any",
-    },
-    Builtin {
-        name: "activity-action",
-        kind: Kind::Choice(ALERT_ACTIONS),
-        scope: OptionScope::Session,
-        default: "other",
-    },
-    Builtin {
-        name: "silence-action",
-        kind: Kind::Choice(ALERT_ACTIONS),
-        scope: OptionScope::Session,
-        default: "other",
-    },
-    Builtin {
-        name: "visual-bell",
-        kind: Kind::Choice(VISUAL),
-        scope: OptionScope::Session,
-        default: "off",
-    },
-    Builtin {
-        name: "visual-activity",
-        kind: Kind::Choice(VISUAL),
-        scope: OptionScope::Session,
-        default: "off",
-    },
-    Builtin {
-        name: "visual-silence",
-        kind: Kind::Choice(VISUAL),
-        scope: OptionScope::Session,
-        default: "off",
-    },
-    Builtin {
-        name: "message-style",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        default: "bg=yellow,fg=black,fill=yellow",
-    },
-    // A message as a pill in the status line, coloured by its level, and
-    // the prompt in the same style (grofe identity); `off` is tmux's
-    // full-width bar in `message-style` (TMUX_DEFAULTS).
-    Builtin {
-        name: "message-pill",
-        kind: Kind::Bool,
-        scope: OptionScope::Session,
-        default: "on",
-    },
-    // Where the command prompt opens: on the status line, as tmux's, or as
-    // a box in the middle of the window.
-    Builtin {
-        name: "prompt-position",
-        kind: Kind::Choice(&["status", "centre", "center"]),
-        scope: OptionScope::Session,
-        default: "status",
-    },
-    Builtin {
-        name: "display-time",
-        kind: Kind::Number {
-            max: i32::MAX as i64,
-        },
-        scope: OptionScope::Session,
-        default: "750",
-    },
-    Builtin {
-        name: "prefix",
-        kind: Kind::Key,
-        scope: OptionScope::Session,
-        default: "C-b",
-    },
-    Builtin {
-        name: "escape-time",
-        kind: Kind::Number {
-            max: i32::MAX as i64,
-        },
-        scope: OptionScope::Global,
-        default: "25",
-    },
-    Builtin {
-        name: "repeat-time",
-        kind: Kind::Number { max: 2_000_000 },
-        scope: OptionScope::Session,
-        default: "500",
-    },
-    Builtin {
-        name: "automatic-rename",
-        kind: Kind::Bool,
-        scope: OptionScope::Window,
-        default: "on",
-    },
-    Builtin {
-        name: "automatic-rename-format",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "#{b:pane_current_path}",
-    },
-    Builtin {
-        name: "allow-rename",
-        kind: Kind::Bool,
-        scope: OptionScope::Window,
-        default: "off",
-    },
-    Builtin {
-        name: "set-titles",
-        kind: Kind::Bool,
-        scope: OptionScope::Session,
-        default: "off",
-    },
-    Builtin {
-        name: "set-titles-string",
-        kind: Kind::String,
-        scope: OptionScope::Session,
-        // tmux's default, `#S:#I:#W - "#T" #{session_alerts}`, translated
-        // into grofe's `#{...}`-only expander (R15); `session_alerts`
-        // isn't implemented and expands empty, matching tmux with no
-        // alerts set.
-        default: "#{session_name}:#{window_index}:#{window_name} - \"#{pane_title}\" #{session_alerts}",
-    },
-    Builtin {
-        name: "mouse",
-        kind: Kind::Bool,
-        scope: OptionScope::Session,
-        default: "on",
-    },
-    Builtin {
-        name: "set-clipboard",
-        kind: Kind::Choice(&["off", "external", "on"]),
-        scope: OptionScope::Global,
-        default: "external",
-    },
-    Builtin {
-        name: "focus-events",
-        kind: Kind::Bool,
-        scope: OptionScope::Global,
-        default: "on",
-    },
-    // B1d: clock mode's colour and time format, tmux 3.7b's names, choices
-    // and defaults (`4` is blue; `show` prints it so).
-    Builtin {
-        name: "clock-mode-colour",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "blue",
-    },
-    Builtin {
-        name: "clock-mode-style",
-        kind: Kind::Choice(&["12", "24", "12-with-seconds", "24-with-seconds"]),
-        scope: OptionScope::Window,
-        default: "24",
-    },
-    Builtin {
-        name: "pane-border-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "default",
-    },
-    Builtin {
-        name: "pane-active-border-style",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        // tmux 3.7b's: yellow in a mode, red while panes are synchronized.
-        default: "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}",
-    },
-    // B1c: tmux 3.7b's names, values, window scope and defaults
-    // (options-table.c). `pane-border-status` makes the panes along the
-    // top or bottom edge give up a row to a title line.
-    Builtin {
-        name: "pane-border-status",
-        kind: Kind::Choice(&["off", "top", "bottom"]),
-        scope: OptionScope::Window,
-        default: "off",
-    },
-    // MF adds `rounded` (spec 2026-11-05-frames.md), grofe's default: a
-    // frame's corners, drawn as `single` with frames off. tmux identity
-    // keeps `single` (TMUX_DEFAULTS).
-    Builtin {
-        name: "pane-border-lines",
-        kind: Kind::Choice(&[
-            "single", "double", "heavy", "simple", "number", "spaces", "rounded",
-        ]),
-        scope: OptionScope::Window,
-        default: "rounded",
-    },
-    Builtin {
-        name: "pane-border-indicators",
-        kind: Kind::Choice(&["off", "colour", "arrows", "both"]),
-        scope: OptionScope::Window,
-        default: "colour",
-    },
-    // MF (spec 2026-11-05-frames.md): grofe's own names ([`GROFE_ONLY`]).
-    // Each tiled pane gets its own frame with `pane-gap` cells between
-    // frames and around the outer ones; the title is drawn in the top
-    // edge unless `pane-frame-title` is off. Off and 0 under tmux
-    // identity (TMUX_DEFAULTS).
-    Builtin {
-        name: "pane-frames",
-        kind: Kind::Bool,
-        scope: OptionScope::Window,
-        default: "on",
-    },
-    Builtin {
-        name: "pane-gap",
-        kind: Kind::Number { max: 8 },
-        scope: OptionScope::Window,
-        default: "1",
-    },
-    Builtin {
-        name: "pane-frame-title",
-        kind: Kind::Bool,
-        scope: OptionScope::Window,
-        default: "on",
-    },
-    // The two end glyphs of a framed title's control tab and pane index
-    // under grofe identity: brackets, which any terminal font has; a Nerd
-    // font's thin rounded `\u{e0b7}\u{e0b5}` are the usual choice there,
-    // and anything but two one-cell glyphs gives blank ends.
-    Builtin {
-        name: "pane-frame-tab-ends",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "()",
-    },
-    Builtin {
-        name: "status-position",
-        kind: Kind::Choice(&["top", "bottom"]),
-        scope: OptionScope::Session,
-        default: "bottom",
-    },
-    // TC.12: tmux 3.7b's name, values, window scope and default, so the
-    // `set -p allow-passthrough on` that icat, snacks.nvim and canopy send
-    // works and `show` answers.
-    // ponytail: a no-op. grofe always unwraps `DCS tmux;` and lets out only
-    // what the same bytes sent bare would (passthrough.rs), so there is
-    // nothing for `off` to guard; canopy turns it on anyway.
-    Builtin {
-        name: "allow-passthrough",
-        kind: Kind::Choice(&["off", "on", "all"]),
-        scope: OptionScope::Window,
-        default: "off",
-    },
-    // The server's identity override (spec D12), read once at start.
-    Builtin {
-        name: "compat-identity",
-        kind: Kind::Choice(&["auto", "tmux", "grofe"]),
-        scope: OptionScope::Global,
-        default: "auto",
+        toml_ty: Some(Ty::Bool),
+        ..Builtin::PLAIN
     },
     // Spec §6: whether a starting server restores the snapshot, and the
     // spread of resumed panes' start delays. grofe's own names.
@@ -678,6 +247,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "restore-stagger-ms",
@@ -686,13 +256,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Global,
         default: "1000",
-    },
-    // grofe's own: how many hidden scratchpads the server keeps.
-    Builtin {
-        name: "scratchpad-history",
-        kind: Kind::Number { max: 100 },
-        scope: OptionScope::Global,
-        default: "10",
+        ..Builtin::PLAIN
     },
     // grofe's own names: a server that starts empty takes its sessions
     // from a running tmux, else from tmux-resurrect's newest save, found
@@ -703,45 +267,69 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "off",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "resurrect-dir",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "",
+        ..Builtin::PLAIN
     },
-    // G3: kitty direct placements, animation and sixel (grofe's own name,
-    // like `compat-identity`; `docs/graphics-placement.md`). Off, the
-    // clients get what T3.8 sent.
     Builtin {
-        name: "graphics",
+        name: "automatic-rename",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "automatic-rename-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{b:pane_current_path}",
+        tmux_default: Some("#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "allow-rename",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "set-titles",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "set-titles-string",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        // tmux's default, `#S:#I:#W - "#T" #{session_alerts}`, translated
+        // into grofe's `#{...}`-only expander (R15); `session_alerts`
+        // isn't implemented and expands empty, matching tmux with no
+        // alerts set.
+        default: "#{session_name}:#{window_index}:#{window_name} - \"#{pane_title}\" #{session_alerts}",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "set-clipboard",
+        kind: Kind::Choice(&["off", "external", "on"]),
+        scope: OptionScope::Global,
+        default: "external",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "focus-events",
         kind: Kind::Bool,
         scope: OptionScope::Global,
-        default: "off",
-    },
-    // TC.2b: tmux's name, scope, default and free text (tmux 3.7b stores
-    // any string; `select-layout` reads cells or `N%`, TC.8).
-    Builtin {
-        name: "main-pane-width",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "80",
-    },
-    // TC.8: as `main-pane-width`, for the `main-horizontal` presets.
-    Builtin {
-        name: "main-pane-height",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: "24",
-    },
-    // TC.8: tmux's `window-size`. `resize-window` sets `manual`, which
-    // stops clients resizing the window; grofe sizes every other value as
-    // `latest` (spec D6).
-    Builtin {
-        name: "window-size",
-        kind: Kind::Choice(&["largest", "smallest", "manual", "latest"]),
-        scope: OptionScope::Window,
-        default: "latest",
+        default: "on",
+        tmux_default: Some("off"),
+        ..Builtin::PLAIN
     },
     // FE.1: the corpus's tmux options grofe stores and never reads
     // (`NO_EFFECT`), with tmux 3.7b's kinds and scopes (recorded) and spec
@@ -761,66 +349,65 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "default-command",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "default-shell",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "/bin/sh",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "default-terminal",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "tmux-256color",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "extended-keys",
         kind: Kind::Choice(&["off", "on", "always"]),
         scope: OptionScope::Global,
         default: "on",
+        tmux_default: Some("off"),
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "extended-keys-format",
         kind: Kind::Choice(&["csi-u", "xterm"]),
         scope: OptionScope::Global,
         default: "xterm",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "mode-keys",
         kind: Kind::Choice(&["emacs", "vi"]),
         scope: OptionScope::Window,
         default: "vi",
-    },
-    Builtin {
-        name: "pane-border-format",
-        kind: Kind::String,
-        scope: OptionScope::Window,
-        default: PANE_BORDER_FORMAT,
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "renumber-windows",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",
-    },
-    Builtin {
-        name: "status-keys",
-        kind: Kind::Choice(&["emacs", "vi"]),
-        scope: OptionScope::Session,
-        default: "emacs",
+        tmux_default: Some("off"),
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "synchronize-panes",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
+        ..Builtin::PLAIN
     },
     // FE.1: what `select-pane -P` sets on a pane, as tmux 3.7b does
     // (recorded; free text, unchecked). B1c draws them: the colours of the
@@ -830,12 +417,14 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "window-active-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     // B1a: options plugins and themes set, tmux 3.7b's kinds, scopes and
     // defaults (options-table.c). `prefix2`, `status-bg`, `status-fg`,
@@ -849,48 +438,612 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Key,
         scope: OptionScope::Session,
         default: "None",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "status-bg",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "status-fg",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "window-status-activity-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "reverse",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "focus-follows-mouse",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "off",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "default-size",
         kind: Kind::Size,
         scope: OptionScope::Session,
         default: "80x24",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "exit-empty",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "detach-on-destroy",
         kind: Kind::Choice(&["off", "on", "no-detached", "previous", "next"]),
         scope: OptionScope::Session,
         default: "on",
+        ..Builtin::PLAIN
+    },
+    // TC.2b: tmux's name, scope, default and free text (tmux 3.7b stores
+    // any string; `select-layout` reads cells or `N%`, TC.8).
+    Builtin {
+        name: "main-pane-width",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "80",
+        ..Builtin::PLAIN
+    },
+    // TC.8: as `main-pane-width`, for the `main-horizontal` presets.
+    Builtin {
+        name: "main-pane-height",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "24",
+        ..Builtin::PLAIN
+    },
+    // TC.8: tmux's `window-size`. `resize-window` sets `manual`, which
+    // stops clients resizing the window; grofe sizes every other value as
+    // `latest` (spec D6).
+    Builtin {
+        name: "window-size",
+        kind: Kind::Choice(&["largest", "smallest", "manual", "latest"]),
+        scope: OptionScope::Window,
+        default: "latest",
+        ..Builtin::PLAIN
+    },
+    // MF (spec 2026-11-05-frames.md): grofe's own names ([`GROFE_ONLY`]).
+    // Each tiled pane gets its own frame with `pane-gap` cells between
+    // frames and around the outer ones; the title is drawn in the top
+    // edge unless `pane-frame-title` is off. Off and 0 under tmux
+    // identity (`tmux_default`).
+    Builtin {
+        name: "pane-frames",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+        tmux_default: Some("off"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "pane-gap",
+        kind: Kind::Number { max: 8 },
+        scope: OptionScope::Window,
+        default: "1",
+        tmux_default: Some("0"),
+        ..Builtin::PLAIN
+    },
+    // grofe's own: how many hidden scratchpads the server keeps.
+    Builtin {
+        name: "scratchpad-history",
+        kind: Kind::Number { max: 100 },
+        scope: OptionScope::Global,
+        default: "10",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "pane-frame-title",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    // The two end glyphs of a framed title's control tab and pane index
+    // under grofe identity: brackets, which any terminal font has; a Nerd
+    // font's thin rounded `\u{e0b7}\u{e0b5}` are the usual choice there,
+    // and anything but two one-cell glyphs gives blank ends.
+    Builtin {
+        name: "pane-frame-tab-ends",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "()",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "agent-glyph-blocked",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "⏸",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "agent-glyph-error",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "✗",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "agent-glyph-unseen",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "✓",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "agent-glyph-working",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "●",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "notify-muted-glyph",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "🔕",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "agent-blocked-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "fg=yellow",
+        ..Builtin::PLAIN
+    },
+    // Where the command prompt opens: on the status line, as tmux's, or as
+    // a box in the middle of the window.
+    Builtin {
+        name: "prompt-position",
+        kind: Kind::Choice(&["status", "centre", "center"]),
+        scope: OptionScope::Session,
+        default: "status",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status",
+        kind: Kind::Choice(&["off", "on", "2", "3", "4", "5"]),
+        scope: OptionScope::Session,
+        default: "on",
+        toml: Some("status.lines"),
+        toml_ty: Some(Ty::Int),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-position",
+        kind: Kind::Choice(&["top", "bottom"]),
+        scope: OptionScope::Session,
+        default: "bottom",
+        toml: Some("status.position"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "bg=green,fg=black",
+        toml: Some("status.style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-left",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "[#{session_name}] ",
+        toml: Some("status.left"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-right",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "\"#{pane_title}\" %H:%M %d-%b-%y#[range=user|agents]#{agents_badge}#[norange]",
+        toml: Some("status.right"),
+        tmux_default: Some("\"#{pane_title}\" %H:%M %d-%b-%y"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-left-length",
+        kind: Kind::Number {
+            max: i16::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "10",
+        toml: Some("status.left-length"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-right-length",
+        kind: Kind::Number {
+            max: i16::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "40",
+        toml: Some("status.right-length"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-interval",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "15",
+        toml: Some("status.interval"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "window-status-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
+        toml: Some("status.window.format"),
+        tmux_default: Some("#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "window-status-current-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
+        toml: Some("status.window.current-format"),
+        tmux_default: Some("#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }"),
+        ..Builtin::PLAIN
+    },
+    // TC.11: tmux 3.7b's names, scopes, choices and defaults for the rest
+    // of the status line (spec §4.5's status-line row).
+    Builtin {
+        name: "status-justify",
+        kind: Kind::Choice(&["left", "centre", "right", "absolute-centre"]),
+        scope: OptionScope::Session,
+        default: "left",
+        toml: Some("status.justify"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-left-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "default",
+        toml: Some("status.left-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-right-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "default",
+        toml: Some("status.right-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "window-status-separator",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: " ",
+        toml: Some("status.window.separator"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "window-status-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+        toml: Some("status.window.style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "window-status-current-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+        toml: Some("status.window.current-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "window-status-last-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+        toml: Some("status.window.last-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "window-status-bell-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "reverse",
+        toml: Some("status.window.bell-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "message-style",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "bg=yellow,fg=black,fill=yellow",
+        toml: Some("message.style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "display-time",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "750",
+        toml: Some("message.display-time-ms"),
+        ..Builtin::PLAIN
+    },
+    // A message as a pill in the status line, coloured by its level, and
+    // the prompt in the same style (grofe identity); `off` is tmux's
+    // full-width bar in `message-style` (`tmux_default`).
+    Builtin {
+        name: "message-pill",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+        toml: Some("message.pill"),
+        tmux_default: Some("off"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "pane-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "default",
+        toml: Some("pane-border.style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "pane-active-border-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        // tmux 3.7b's: yellow in a mode, red while panes are synchronized.
+        default: "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}",
+        toml: Some("pane-border.active-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "pane-border-format",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: PANE_BORDER_FORMAT,
+        toml: Some("pane-border.format"),
+        ..Builtin::PLAIN
+    },
+    // B1c: tmux 3.7b's names, values, window scope and defaults
+    // (options-table.c). `pane-border-status` makes the panes along the
+    // top or bottom edge give up a row to a title line.
+    Builtin {
+        name: "pane-border-status",
+        kind: Kind::Choice(&["off", "top", "bottom"]),
+        scope: OptionScope::Window,
+        default: "off",
+        toml: Some("pane-border.status"),
+        ..Builtin::PLAIN
+    },
+    // MF adds `rounded` (spec 2026-11-05-frames.md), grofe's default: a
+    // frame's corners, drawn as `single` with frames off. tmux identity
+    // keeps `single` (`tmux_default`).
+    Builtin {
+        name: "pane-border-lines",
+        kind: Kind::Choice(&[
+            "single", "double", "heavy", "simple", "number", "spaces", "rounded",
+        ]),
+        scope: OptionScope::Window,
+        default: "rounded",
+        toml: Some("pane-border.lines"),
+        tmux_default: Some("single"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "pane-border-indicators",
+        kind: Kind::Choice(&["off", "colour", "arrows", "both"]),
+        scope: OptionScope::Window,
+        default: "colour",
+        toml: Some("pane-border.indicators"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "status-keys",
+        kind: Kind::Choice(&["emacs", "vi"]),
+        scope: OptionScope::Session,
+        default: "emacs",
+        toml: Some("status.keys"),
+        ..Builtin::PLAIN
+    },
+    // The server's identity override (spec D12), read once at start.
+    Builtin {
+        name: "compat-identity",
+        kind: Kind::Choice(&["auto", "tmux", "grofe"]),
+        scope: OptionScope::Global,
+        default: "auto",
+        ..Builtin::PLAIN
+    },
+    // G3: kitty direct placements, animation and sixel (grofe's own name,
+    // like `compat-identity`; `docs/graphics-placement.md`). Off, the
+    // clients get what T3.8 sent.
+    Builtin {
+        name: "graphics",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    // TC.12: tmux 3.7b's name, values, window scope and default, so the
+    // `set -p allow-passthrough on` that icat, snacks.nvim and canopy send
+    // works and `show` answers.
+    // ponytail: a no-op. grofe always unwraps `DCS tmux;` and lets out only
+    // what the same bytes sent bare would (passthrough.rs), so there is
+    // nothing for `off` to guard; canopy turns it on anyway.
+    Builtin {
+        name: "allow-passthrough",
+        kind: Kind::Choice(&["off", "on", "all"]),
+        scope: OptionScope::Window,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    // Window alerts (`server::alerts`, TP.10), with tmux's defaults.
+    Builtin {
+        name: "monitor-bell",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "monitor-activity",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "monitor-silence",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Window,
+        default: "0",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "bell-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "any",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "activity-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "other",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "silence-action",
+        kind: Kind::Choice(ALERT_ACTIONS),
+        scope: OptionScope::Session,
+        default: "other",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "visual-bell",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "visual-activity",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "visual-silence",
+        kind: Kind::Choice(VISUAL),
+        scope: OptionScope::Session,
+        default: "off",
+        ..Builtin::PLAIN
+    },
+    // TM.4: tmux's server option, at grofe's global scope (as
+    // `escape-time`); at least 1.
+    Builtin {
+        name: "buffer-limit",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "50",
+        ..Builtin::PLAIN
+    },
+    // B1d: clock mode's colour and time format, tmux 3.7b's names, choices
+    // and defaults (`4` is blue; `show` prints it so).
+    Builtin {
+        name: "clock-mode-colour",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "blue",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "clock-mode-style",
+        kind: Kind::Choice(&["12", "24", "12-with-seconds", "24-with-seconds"]),
+        scope: OptionScope::Window,
+        default: "24",
+        ..Builtin::PLAIN
+    },
+    // Copy mode's options, with tmux 3.7b's scopes and defaults
+    // (`copy-command` is a server option there, global here).
+    Builtin {
+        name: "word-separators",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "wrap-search",
+        kind: Kind::Bool,
+        scope: OptionScope::Window,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "copy-command",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "mode-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "noattr,bg=yellow,fg=black",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "copy-mode-match-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=cyan,fg=black",
+        toml: Some("copy-mode.match-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "copy-mode-current-match-style",
+        kind: Kind::String,
+        scope: OptionScope::Window,
+        default: "bg=magenta,fg=black",
+        toml: Some("copy-mode.current-match-style"),
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "prefix-timeout",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "0",
+        ..Builtin::PLAIN
     },
     // B2a: the options tmux 3.7b has that grofe rejected, with tmux's kinds,
     // scopes and defaults (options-table.c). Those in `NO_EFFECT` are stored
@@ -902,24 +1055,28 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Session,
         default: "1",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "destroy-unattached",
         kind: Kind::Choice(&["off", "on", "keep-last", "keep-group"]),
         scope: OptionScope::Session,
         default: "off",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "display-panes-active-colour",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "red",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "display-panes-colour",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "blue",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "display-panes-time",
@@ -928,18 +1085,21 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Session,
         default: "1000",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "initial-repeat-time",
         kind: Kind::Number { max: 2_000_000 },
         scope: OptionScope::Session,
         default: "0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "key-table",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "root",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "lock-after-time",
@@ -948,36 +1108,42 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Session,
         default: "0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "lock-command",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "lock -np",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "message-command-style",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "bg=black,fg=yellow,fill=black",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "message-format",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "message-line",
         kind: Kind::Choice(&["0", "1", "2", "3", "4"]),
         scope: OptionScope::Session,
         default: "0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "prompt-cursor-colour",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "none",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "prompt-cursor-style",
@@ -992,6 +1158,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
         ]),
         scope: OptionScope::Session,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "prompt-command-cursor-style",
@@ -1006,12 +1173,14 @@ pub(super) const BUILTINS: &[Builtin] = &[
         ]),
         scope: OptionScope::Session,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "cursor-colour",
         kind: Kind::Colour,
         scope: OptionScope::Window,
         default: "none",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "cursor-style",
@@ -1026,24 +1195,28 @@ pub(super) const BUILTINS: &[Builtin] = &[
         ]),
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "menu-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "menu-selected-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=yellow,fg=black",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "menu-border-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "menu-border-lines",
@@ -1052,132 +1225,154 @@ pub(super) const BUILTINS: &[Builtin] = &[
         ]),
         scope: OptionScope::Window,
         default: "single",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "pane-status-current-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "pane-status-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "session-status-current-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "session-status-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "allow-set-title",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "alternate-screen",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "copy-mode-mark-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=red,fg=black",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "copy-mode-position-format",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#[align=right]#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}[#{copy_position}/#{copy_position_limit}]#{?search_timed_out, (timed out),#{?search_count, (#{search_count}#{?search_count_partial,+,} results),}}",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "copy-mode-position-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{E:mode-style}",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "copy-mode-selection-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{E:mode-style}",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "copy-mode-current-line-number-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "fg=yellow",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "copy-mode-line-number-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "fg=white,dim",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "copy-mode-line-numbers",
         kind: Kind::Choice(&["off", "default", "absolute", "relative", "hybrid"]),
         scope: OptionScope::Window,
         default: "off",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "fill-character",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "other-pane-height",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "other-pane-width",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "pane-scrollbars",
         kind: Kind::Choice(&["off", "modal", "on"]),
         scope: OptionScope::Window,
         default: "off",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "pane-scrollbars-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=black,fg=white,width=1,pad=0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "pane-scrollbars-position",
         kind: Kind::Choice(&["right", "left"]),
         scope: OptionScope::Window,
         default: "right",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "popup-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "popup-border-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "popup-border-lines",
@@ -1186,96 +1381,112 @@ pub(super) const BUILTINS: &[Builtin] = &[
         ]),
         scope: OptionScope::Window,
         default: "single",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "remain-on-exit-format",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "scroll-on-clear",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "tiled-layout-max-columns",
         kind: Kind::Number { max: 65_535 },
         scope: OptionScope::Window,
         default: "0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "tree-mode-preview-format",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{?pane_format,#{pane_index}:#{pane_title},#{window_index}:#{window_name}}",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "tree-mode-preview-style",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "fg=#{?#{||:#{&&:#{pane_format},#{pane_active}},#{&&:#{window_format},#{window_active}}},#{display-panes-active-colour},#{display-panes-colour}}",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "window-pane-current-status-format",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#P:[#T]#{?pane_flags,#{pane_flags}, }",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "window-pane-status-format",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#P:[#T]#{?pane_flags,#{pane_flags}, }",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "xterm-keys",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "backspace",
         kind: Kind::Key,
         scope: OptionScope::Global,
         default: "C-?",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "default-client-command",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "new-session",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "editor",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "/usr/bin/vi",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "exit-unattached",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "off",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "get-clipboard",
         kind: Kind::Choice(&["off", "buffer", "request", "both"]),
         scope: OptionScope::Global,
         default: "buffer",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "history-file",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "input-buffer-size",
         kind: Kind::Number { max: 4_294_967_295 },
         scope: OptionScope::Global,
         default: "1048576",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "message-limit",
@@ -1284,6 +1495,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Global,
         default: "1000",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "prompt-history-limit",
@@ -1292,20 +1504,14 @@ pub(super) const BUILTINS: &[Builtin] = &[
         },
         scope: OptionScope::Global,
         default: "100",
-    },
-    Builtin {
-        name: "prefix-timeout",
-        kind: Kind::Number {
-            max: i32::MAX as i64,
-        },
-        scope: OptionScope::Global,
-        default: "0",
+        ..Builtin::PLAIN
     },
     Builtin {
         name: "variation-selector-always-wide",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",
+        ..Builtin::PLAIN
     },
 ];
 
@@ -1316,9 +1522,8 @@ pub fn builtin_scope(name: &str) -> Option<OptionScope> {
         .or_else(|| list_builtin(name).map(|l| l.scope))
 }
 
-/// Every built-in option's name tmux's CLI knows, in table order (T3.1
-/// walks it to check its TOML name table is complete, FE.1 its tmux
-/// one): all but [`grofe_only_names`].
+/// Every built-in option's name tmux's CLI knows, in table order: all but
+/// [`grofe_only_names`].
 pub fn builtin_names() -> impl Iterator<Item = &'static str> {
     BUILTINS
         .iter()
@@ -1331,11 +1536,28 @@ pub fn grofe_only_names() -> impl Iterator<Item = &'static str> {
     GROFE_ONLY.iter().copied()
 }
 
-/// The kind of built-in option `name`, for the config's TOML types.
+/// The kind of built-in option `name`, for the config's TOML-type test.
+#[cfg(test)]
 pub(crate) fn kind_of(name: &str) -> Option<Kind> {
     builtin(name).map(|b| b.kind)
 }
 
 pub(super) fn builtin(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
+}
+
+/// Every built-in option as `(TOML key, option name)`, in table order.
+pub fn toml_names() -> impl Iterator<Item = (&'static str, &'static str)> {
+    BUILTINS.iter().map(|b| (b.toml.unwrap_or(b.name), b.name))
+}
+
+/// The TOML type of built-in option `name`: its override, else from its kind.
+pub(crate) fn toml_ty_of(name: &str) -> Option<Ty> {
+    builtin(name).map(|b| {
+        b.toml_ty.unwrap_or(match b.kind {
+            Kind::Bool => Ty::Bool,
+            Kind::Number { .. } => Ty::Int,
+            _ => Ty::Str,
+        })
+    })
 }

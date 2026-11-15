@@ -2,7 +2,7 @@
 //! tables, so it cannot go stale. Run with `GROFE_BLESS_DOCS=1` to rewrite
 //! the generated part after changing an option.
 
-use grofe::config::{Env, LIST_NAMES, OPTION_NAMES, Resolved, load, toml_type_name};
+use grofe::config::{Env, LIST_NAMES, Resolved, load, option_names, toml_type_name};
 use std::fs;
 use std::path::Path;
 
@@ -28,7 +28,7 @@ fn generated() -> String {
     let mut out = String::new();
     out.push_str("### Options\n\n");
     out.push_str("| TOML key | Type | Default | tmux option |\n|---|---|---|---|\n");
-    let mut options: Vec<_> = OPTION_NAMES.to_vec();
+    let mut options: Vec<_> = option_names().collect();
     options.sort();
     for (key, tmux) in options {
         let ty = toml_type_name(key);
@@ -70,10 +70,9 @@ fn config_reference_matches_the_options_tables() {
 
 #[test]
 fn every_option_is_documented_once() {
-    let mut keys: Vec<&str> = OPTION_NAMES
-        .iter()
-        .chain(LIST_NAMES)
-        .map(|(k, _)| *k)
+    let mut keys: Vec<&str> = option_names()
+        .chain(LIST_NAMES.iter().copied())
+        .map(|(k, _)| k)
         .collect();
     let total = keys.len();
     keys.sort();
