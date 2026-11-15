@@ -197,10 +197,8 @@ fn main() -> ExitCode {
                 }
                 let snapshot = paths::snapshot_path(&Env::from_process(), &socket);
                 if snapshot.exists() {
-                    // SAFETY: the CLI has started no thread yet, so nothing
-                    // reads the environment concurrently. The server it
-                    // starts inherits the variable.
-                    unsafe { std::env::set_var(server::restore::RESTORE_ENV, "1") };
+                    // The server it starts gets `--restore`.
+                    server::restore::request();
                 } else {
                     eprintln!(
                         "grofe: no snapshot to restore at {}; starting an empty server",
@@ -537,7 +535,7 @@ fn run_foreground(globals: &Globals) -> Option<ExitCode> {
     })
 }
 
-/// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]
+/// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty] [--restore]
 /// [--identity tmux] [--file <path>]`: the detached server process.
 /// `--identity tmux` says the CLI that started it ran as `tmux` (spec
 /// D12); `--file` is that CLI's `tmux -f`.
@@ -549,6 +547,10 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
     while let Some(arg) = it.next() {
         if arg == "--exit-when-empty" {
             exit_when_empty = true;
+            continue;
+        }
+        if arg == "--restore" {
+            server::restore::request();
             continue;
         }
         match (arg.as_str(), it.next()) {
@@ -1227,6 +1229,9 @@ fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
         .stderr(Stdio::null());
     if exit_when_empty {
         cmd.arg("--exit-when-empty");
+    }
+    if server::restore::requested() {
+        cmd.arg("--restore");
     }
     // The identity is the starting CLI's (spec D12): only a CLI run as
     // `tmux` sends a tmux dialect.
