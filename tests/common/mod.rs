@@ -750,6 +750,13 @@ pub fn try_wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> Resu
     }
 }
 
+/// Sleeps `span` where a test asserts that something does not happen: there
+/// is no state to wait for, so this is a real sleep, and the one place a
+/// negative wait lives.
+pub fn quiet_period(span: Duration) {
+    thread::sleep(span);
+}
+
 /// Runs `cmd` with piped stdout/stderr and null stdin; panics if it does not
 /// exit, or its output pipes do not reach EOF, within `timeout`.
 pub fn run_bounded(mut cmd: Command, timeout: Duration) -> CmdOutput {

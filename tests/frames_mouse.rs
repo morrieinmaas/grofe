@@ -117,11 +117,17 @@ fn sgr(button: u8, (x, y): (u16, u16), release: bool) -> String {
     format!("\x1b[<{button};{};{}{end}", x + 1, y + 1)
 }
 
+/// Waits out the click timeout, so the next press is a plain press. The
+/// timeout is the thing under test, so this is a real sleep.
+fn past_click_timeout() {
+    std::thread::sleep(Duration::from_millis(350));
+}
+
 /// A left drag from `from` through `path`, released at its last cell,
 /// with `mods` (0 or [`CTRL`]) held throughout.
 fn drag(a: &mut Harness, mods: u8, from: (u16, u16), path: &[(u16, u16)]) {
     // Past the click timeout, so the press is a plain press.
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(mods, from, false));
     let mut last = from;
     for &at in path {
@@ -145,7 +151,7 @@ fn middle(srv: &TestServer, pane: &str) -> (u16, u16) {
 
 /// The window's layout is still `want` once the server had time to act.
 fn stays(srv: &TestServer, want: &[String]) {
-    std::thread::sleep(Duration::from_millis(400));
+    common::quiet_period(Duration::from_millis(400));
     assert_eq!(layout(srv), want);
 }
 
@@ -236,7 +242,7 @@ fn a_dragged_pane_follows_the_pointer_until_the_release() {
     let old = (r0.0 - 1, r0.1 - 1);
     let grab = title(&srv, "%0");
     a.wait_until("%0's frame", WAIT, |s| cell_at(s, old) == Some('╭'));
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, grab, false));
     a.send(sgr(32, (grab.0 + 1, grab.1), false));
     let to = (30, 6);
@@ -344,7 +350,7 @@ fn a_right_click_or_escape_cancels_a_move() {
     let old = (r0.0 - 1, r0.1 - 1);
     let mid = middle(&srv, "%1");
     for cancel in [sgr(2, mid, false), "\x1b".to_string()] {
-        std::thread::sleep(Duration::from_millis(350));
+        past_click_timeout();
         a.send(sgr(0, title(&srv, "%0"), false));
         a.send(sgr(32, (mid.0 - 1, mid.1), false));
         a.send(sgr(32, mid, false));
@@ -509,7 +515,7 @@ fn the_program_learns_its_size_once_on_release() {
     try_wait_until(|| lines() >= 1, WAIT).expect("the trap is set");
     let mut a = attach(&srv);
     // Whatever the attach itself caused has landed.
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     let before = lines();
     let (l0, t0, w0, h0) = rect(&srv, "%0");
     let mut path: Vec<(u16, u16)> = (0..20)
@@ -519,7 +525,7 @@ fn the_program_learns_its_size_once_on_release() {
     drag(&mut a, 0, title(&srv, "%2"), &path);
     try_wait_until(|| rect(&srv, "%2").0 < rect(&srv, "%0").0, WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", layout(&srv)));
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(
         lines(),
         before + 1,
@@ -535,7 +541,7 @@ fn a_zoomed_window_starts_no_move() {
     ok(&srv, &["resize-pane", "-Z", "-t", "%0"]);
     let zoomed = rect(&srv, "%0");
     drag(&mut a, 0, title(&srv, "%0"), &[(60, 10), (70, 12)]);
-    std::thread::sleep(Duration::from_millis(400));
+    common::quiet_period(Duration::from_millis(400));
     assert_eq!(var(&srv, "%0", "#{window_zoomed_flag}"), "1");
     assert_eq!(rect(&srv, "%0"), zoomed);
 }
@@ -568,7 +574,7 @@ fn frame_and_gap_cells_are_borders_of_their_pane() {
         ((0, row), "%0"),
     ] {
         ok(&srv, &["set", "-g", "@hit", "none"]);
-        std::thread::sleep(Duration::from_millis(350));
+        past_click_timeout();
         a.send(sgr(0, cell, false));
         a.send(sgr(0, cell, true));
         let got = try_wait_until(|| ok(&srv, &["show", "-gv", "@hit"]).trim() == want, WAIT);
@@ -719,7 +725,7 @@ fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
     let (srv, mut a) = preview_server();
     let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
     red_corners(&mut a, &[corner(r0)]);
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, title(&srv, "%0"), false));
     // Over %1's middle: a swap, so the preview is %1's own place.
     let mid = middle(&srv, "%1");
@@ -768,7 +774,7 @@ fn the_drop_preview_goes_when_the_move_is_cancelled() {
     let (srv, mut a) = preview_server();
     let before = layout(&srv);
     let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, title(&srv, "%0"), false));
     let mid = middle(&srv, "%1");
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
@@ -791,7 +797,7 @@ fn a_drop_on_the_pane_itself_clears_the_preview() {
     let (srv, mut a) = preview_server();
     let before = layout(&srv);
     let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, title(&srv, "%0"), false));
     let mid = middle(&srv, "%1");
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
@@ -803,7 +809,7 @@ fn a_drop_on_the_pane_itself_clears_the_preview() {
     stays(&srv, &before);
     // A redraw of the whole screen draws no preview either.
     ok(&srv, &["refresh-client"]);
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     red_corners(&mut a, &[corner(r0)]);
 }
 
@@ -820,7 +826,7 @@ fn tab_at(a: &mut Harness, row: u16, tab: &str) -> u16 {
 }
 
 fn click(a: &mut Harness, at: (u16, u16)) {
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, at, false));
     a.send(sgr(0, at, true));
 }

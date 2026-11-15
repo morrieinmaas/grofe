@@ -15,7 +15,7 @@ use std::process::Stdio;
 use std::thread::sleep;
 use std::time::Duration;
 
-use common::{TestServer, wait_child, try_wait_until};
+use common::{TestServer, try_wait_until, wait_child};
 
 use crate::harness::Harness;
 
@@ -214,7 +214,8 @@ fn switch_client_t_is_for_the_next_key_only() {
         .expect("the mytable binding ran");
     assert_eq!(display(&srv, "main", "#{client_key_table}"), "root");
     a.send("x");
-    try_wait_until(|| srv.capture("main").contains('x'), WAIT).expect("the next x reached the pane");
+    try_wait_until(|| srv.capture("main").contains('x'), WAIT)
+        .expect("the next x reached the pane");
 }
 
 /// Case 5: `display-message` without `-p` shows on the status line and is
@@ -258,7 +259,8 @@ fn display_message_d_sets_the_delay_and_hides_the_cursor() {
     a.wait_until("the message", WAIT, |t| last_row(t).trim_end() == "held");
     a.wait_for_output(b"\x1b[?25l", from);
     // Past `display-time` (750 ms by default) it still shows.
-    sleep(Duration::from_millis(1500));
+    // Negative wait: the message must outlive display-time.
+    common::quiet_period(Duration::from_millis(1500));
     assert_eq!(last_row(&a.text()).trim_end(), "held");
     a.send("x");
     wait_last_row_starts(&mut a, "[main]");
@@ -490,6 +492,7 @@ fn wait_for_s_releases_a_waiting_wait_for() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let mut waiter = cmd.spawn().expect("spawn wait-for");
+    // The waiter has no observable state until it blocks; this is a real sleep.
     sleep(Duration::from_millis(300));
     assert!(
         waiter.try_wait().expect("try_wait").is_none(),
@@ -529,6 +532,7 @@ fn wait_for_holds_the_rest_of_the_request() {
     .stderr(Stdio::null());
     let mut waiter = cmd.spawn().expect("spawn wait-for");
     let mut stdout = waiter.stdout.take().expect("stdout");
+    // The waiter has no observable state until it blocks; this is a real sleep.
     sleep(Duration::from_millis(300));
     assert!(
         srv.run(&["has-session", "-t", "after"]).status.code() == Some(1),
@@ -550,12 +554,15 @@ fn wait_for_holds_the_rest_of_the_request() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let mut waiter = cmd.spawn().expect("spawn wait-for");
+    // The waiter has no observable state until it blocks; this is a real sleep.
     sleep(Duration::from_millis(300));
     waiter.kill().expect("kill waiter");
     waiter.wait().expect("reap waiter");
-    sleep(Duration::from_millis(200));
+    // Negative wait: the dead waiter must not consume the signal.
+    common::quiet_period(Duration::from_millis(200));
     srv.cmd(&["wait-for", "-S", "d"]).expect("wait-for -S");
-    sleep(Duration::from_millis(300));
+    // Negative wait: the signal must not wake anything.
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(
         srv.run(&["has-session", "-t", "gone"]).status.code(),
         Some(1)

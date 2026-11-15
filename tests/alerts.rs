@@ -180,7 +180,8 @@ fn every_bell_fires_alert_bell_in_its_window() {
     t.ok(&["select-window", "-t", "a:0"]);
     t.ok(&["setw", "-g", "monitor-bell", "off"]);
     write_tty(&one, b"\x07");
-    std::thread::sleep(Duration::from_millis(500));
+    // Negative wait: no alert may fire.
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(t.flags(), "0 *\n1 -\n");
     assert_eq!(t.lines().len(), 3);
 }
@@ -197,7 +198,8 @@ fn activity_alerts_once_and_only_in_another_window() {
     write_tty(&zero, b"z");
     let both = try_wait_until(|| t.flags() == "0 ##*\n1 ##\n", Duration::from_secs(10));
     assert!(both.is_ok(), "{}", t.flags());
-    std::thread::sleep(Duration::from_millis(300));
+    // Negative wait: no alert may fire.
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(t.lines(), ["alert-activity s=a w=@1 ctx=a:1.0 flags=##"]);
     // Selecting a window clears its flags, and counts as activity in it
     // (tmux's `session_set_current`): with no client attached that sets
@@ -207,7 +209,8 @@ fn activity_alerts_once_and_only_in_another_window() {
     t.ok(&["select-window", "-t", "a:0"]);
     assert_eq!(t.flags(), "0 ##*\n1 ##-\n");
     write_tty(&one, b"w");
-    std::thread::sleep(Duration::from_millis(500));
+    // Negative wait: no alert may fire.
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(t.lines().len(), 1, "{:?}", t.lines());
 }
 
@@ -219,6 +222,7 @@ fn silence_alerts_once_after_monitor_silence_seconds() {
     let lines = t.wait_lines(1);
     assert_eq!(lines, ["alert-silence s=a w=@1 ctx=a:1.0 flags=~"]);
     assert_eq!(t.flags(), "0 ~*\n1 ~\n");
+    // Real time: monitor-silence is a timer, the thing under test.
     std::thread::sleep(Duration::from_millis(1500));
     assert_eq!(t.lines().len(), 1, "{:?}", t.lines());
     // Output starts the wait again; 0 turns it off.
@@ -229,6 +233,7 @@ fn silence_alerts_once_after_monitor_silence_seconds() {
     t.ok(&["setw", "-g", "monitor-silence", "0"]);
     t.ok(&["select-window", "-t", "a:1"]);
     t.ok(&["select-window", "-t", "a:0"]);
+    // Real time: monitor-silence is a timer, the thing under test.
     std::thread::sleep(Duration::from_millis(1500));
     assert_eq!(t.lines().len(), 2);
 }

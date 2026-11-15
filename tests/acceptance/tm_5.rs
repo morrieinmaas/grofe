@@ -199,7 +199,7 @@ fn osc52_goes_to_the_clients_showing_the_pane() {
     let osc = copy_osc52("hello world\n");
     a.wait_for_output(&osc, 0);
     c.wait_for_output(&osc, 0);
-    sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(count(b.output(), b"\x1b]52;"), 0);
 }
 
@@ -460,7 +460,7 @@ fn the_selection_never_reaches_the_command_line() {
     );
     wait_file(&clip, &format!("{line}\n"));
     // The pipe is done once the file is whole; give a stray `touch` time.
-    sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(!pwned.exists(), "the selection ran as a command");
 }
 
@@ -601,7 +601,7 @@ fn a_panes_store_goes_to_the_clients_showing_it() {
     ])
     .unwrap();
     a.wait_for_output(format!("\x1b]52;s;{}\x07", b64("bad")).as_bytes(), 0);
-    sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(count(b.output(), b"\x1b]52;"), 0);
     assert_eq!(buffers(&srv), ["bad", "prim"]);
 }
@@ -681,7 +681,7 @@ fn load_buffer_w_sends_the_file_to_the_target_client() {
     ])
     .expect("load-buffer -w");
     b.wait_for_output(&copy_osc52("loaded\n"), 0);
-    sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(count(a.output(), b"\x1b]52;"), 0);
     assert_eq!(buffers(&srv), ["loaded\\n"]);
 }

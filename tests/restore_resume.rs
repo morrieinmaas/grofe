@@ -828,6 +828,6 @@ fn kill_server_inside_the_delay_starts_nothing() {
     );
     restore(&srv, &snap);
     kill(&srv);
-    std::thread::sleep(Duration::from_millis(6000));
+    common::quiet_period(Duration::from_millis(6000));
     assert!(!out.exists(), "the resume ran after kill-server");
 }

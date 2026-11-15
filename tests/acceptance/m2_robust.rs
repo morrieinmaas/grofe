@@ -259,6 +259,7 @@ fn read_only_commands_do_not_redraw_clients() {
     // Longer than NAME_INTERVAL, so automatic-rename has settled.
     drain(&mut client, &mut reader, Duration::from_millis(700));
     // The clock has moved on since the last redraw.
+    // Real time: the status clock must tick over, the thing under test.
     std::thread::sleep(Duration::from_millis(1100));
 
     let reads: &[&[&str]] = &[

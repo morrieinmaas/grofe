@@ -97,6 +97,7 @@ fn the_zoom_button_in_a_pane_title_zooms_the_pane() {
     // The zoomed pane's title now offers `[u]`, to unzoom.
     a.wait_for("[u]");
     let x = col_of(&mut a, 0, "[u]");
+    // Past the click timeout, so the press is a plain press.
     std::thread::sleep(Duration::from_millis(400));
     click(&mut a, x + 1, 1);
     let got = try_wait_until(|| zoomed(&srv) == "0", WAIT);

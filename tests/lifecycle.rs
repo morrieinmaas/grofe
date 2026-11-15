@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{TestServer, exists, process_gone, wait_child, try_wait_until};
+use common::{TestServer, exists, process_gone, try_wait_until, wait_child};
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
@@ -330,7 +330,7 @@ fn a_successful_first_new_session_keeps_the_server() {
     let srv = TestServer::unstarted();
     assert_reached_server(&srv.run(&["new-session", "-d", "sleep", "30"]));
     let pid = logged_server_pid(&srv);
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(!process_gone(pid));
     assert!(srv.is_running(), "log:\n{}", srv.log());
 }
@@ -340,7 +340,7 @@ fn explicit_start_server_stays_up_after_a_failed_new_session() {
     let srv = TestServer::start();
     let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(srv.is_running(), "log:\n{}", srv.log());
     assert_eq!(srv.cmd(&["list-sessions"]).unwrap(), "");
 }
@@ -375,7 +375,7 @@ fn an_empty_auto_started_server_waits_for_open_connections() {
 
     let out = srv.run(FAILING_NEW_SESSION);
     assert!(!out.status.success(), "{out:?}");
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(
         srv.is_running(),
         "exited with a connection open; log:\n{}",
@@ -558,7 +558,7 @@ fn sighup_is_ignored_and_sigint_stops_the_server() {
         .expect("new-session");
     let pid = server_pid(&srv);
     kill(pid, Signal::SIGHUP).expect("SIGHUP");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!process_gone(pid), "SIGHUP stopped the server");
     assert!(
         srv.cmd(&["list-sessions"])

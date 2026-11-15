@@ -254,6 +254,7 @@ fn neovim_edits_and_writes_a_file() {
     a.wait_for("hello from grofe");
     a.send("\x1b");
     // Past escape-time and nvim's own ttimeout, so `:` is not Meta-:.
+    // Past escape-time and nvim ttimeout, so `:` is not Meta-:.
     sleep(Duration::from_millis(300));
     a.send(":wq\r");
     if let Err(e) = try_wait_until(
@@ -388,7 +389,7 @@ fn rename_window_and_new_window_n_stop_automatic_rename() {
     srv.cmd(&["send-keys", "-t", "main", "cd /tmp", "Enter"])
         .expect("send-keys");
     // Past a sample and a rename check.
-    sleep(Duration::from_millis(2500));
+    common::quiet_period(Duration::from_millis(2500));
     assert_eq!(window_names(&srv, "main"), "mine\n");
 
     srv.cmd(&["new-window", "-t", "main", "-n", "fixed", "exec sh"])

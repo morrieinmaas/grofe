@@ -131,7 +131,7 @@ fn bind_line(srv: &TestServer, event: &str, fmt: &str, log: &Path) {
 /// no more come, and returns the new ones.
 fn new_lines(log: &Path, seen: &mut usize, want: usize) -> Vec<String> {
     let _ = try_wait_until(|| log_lines(log).len() >= *seen + want, WAIT);
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     let lines = log_lines(log);
     let new = lines[(*seen).min(lines.len())..].to_vec();
     *seen = lines.len();
@@ -284,7 +284,7 @@ fn once(log: &Path) -> String {
 }
 
 fn quiet(log: &Path) {
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert_eq!(log_lines(log), Vec::<String>::new(), "the hook ran");
 }
 

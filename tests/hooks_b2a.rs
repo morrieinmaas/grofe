@@ -51,7 +51,7 @@ fn a_window_hook_runs_for_its_own_window_and_hides_the_global_one() {
     assert!(try_wait_until(|| log_lines(&log).len() == 1, WAIT).is_ok());
     ok(&srv, &["rename-window", "-t", "a:1", "mine"]);
     assert!(try_wait_until(|| log_lines(&log).len() == 2, WAIT).is_ok());
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert_eq!(log_lines(&log), ["global other", "local mine"]);
 
     // Unsetting the window's hook lets the global one back in.
@@ -76,7 +76,7 @@ fn a_session_hook_stays_with_its_session() {
     ok(&srv, &["rename-session", "-t", "b", "bb"]);
     ok(&srv, &["rename-session", "-t", "a", "aa"]);
     assert!(try_wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert_eq!(log_lines(&log), ["renamed aa"]);
     assert_eq!(
         ok(&srv, &["show-hooks", "-t", "aa", "session-renamed"])
@@ -123,7 +123,7 @@ fn command_error_runs_for_a_failed_command() {
     ok(&srv, &["list-sessions"]);
     assert!(srv.cmd(&["rename-window", "-t", "nope", "x"]).is_err());
     assert!(try_wait_until(|| !log_lines(&log).is_empty(), WAIT).is_ok());
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert_eq!(log_lines(&log), ["command-error"]);
 }
 

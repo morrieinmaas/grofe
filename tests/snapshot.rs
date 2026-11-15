@@ -151,10 +151,12 @@ fn with_nothing_changing_the_file_is_left_alone() {
     srv.cmd(&["split-window", "-t", "main"]).expect("split");
     wait_snapshot(&srv, "two panes", |s| panes(s).len() == 2);
     // Let the shells settle (prompts, first samples).
+    // Real time: the shells have no observable "settled" state.
     std::thread::sleep(Duration::from_secs(2));
     let path = srv.snapshot_path();
     let before = fs::metadata(&path).expect("metadata");
-    std::thread::sleep(Duration::from_secs(5));
+    // Negative wait: the snapshot must not be rewritten while idle.
+    common::quiet_period(Duration::from_secs(5));
     let after = fs::metadata(&path).expect("metadata");
     assert_eq!(before.ino(), after.ino(), "the file was replaced");
     assert_eq!(before.mtime(), after.mtime());
@@ -255,7 +257,8 @@ fn signalled_with_its_panes_keeps_the_sessions(signal: Signal) {
     srv.wait_for(|| !srv.is_running(), Duration::from_secs(10))
         .unwrap_or_else(|_| panic!("the server goes after {signal:?}"));
     // Anything still in flight would have landed by now.
-    std::thread::sleep(Duration::from_millis(1500));
+    // Negative wait: nothing may land after the server exits.
+    common::quiet_period(Duration::from_millis(1500));
     let snap = snapshot(&srv).expect("a snapshot");
     assert_eq!(snap_uids(&snap), live, "{signal:?}");
     assert_eq!(snap.sessions.len(), 2);
@@ -297,7 +300,8 @@ fn an_empty_server_never_overwrites_the_snapshot() {
     let srv = srv.restart();
     // Restore is off under the harness: this server is empty, and stays
     // so; its kill-server must not wipe the old state either.
-    std::thread::sleep(Duration::from_secs(2));
+    // Negative wait: the empty server must stay empty.
+    common::quiet_period(Duration::from_secs(2));
     assert_eq!(
         snapshot(&srv).map(|s| s.sessions),
         Some(before.sessions.clone())
@@ -401,6 +405,7 @@ fn a_crash_at_any_point_leaves_a_state_that_was_written() {
             break;
         }
         if rng.below(10) == 0 {
+            // Pacing between the random operations, not a wait for a state.
             std::thread::sleep(Duration::from_millis(300));
         }
     }
@@ -572,7 +577,8 @@ fn signalled_while_its_panes_die_of_it(signal: Signal) {
         died.expect("the panes die of the signal");
         srv.wait_for(|| !srv.is_running(), Duration::from_secs(10))
             .unwrap_or_else(|_| panic!("the server goes after {signal:?}"));
-        std::thread::sleep(Duration::from_millis(500));
+        // Negative wait: nothing may land after the server exits.
+        common::quiet_period(Duration::from_millis(500));
         let snap = snapshot(&srv).expect("a snapshot");
         assert_eq!(snap_uids(&snap), live, "{signal:?}, round {round}");
     }

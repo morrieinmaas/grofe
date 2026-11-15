@@ -939,7 +939,7 @@ exec = true
     );
     up_ok(&srv, "once");
     try_wait_until(|| count.exists(), WAIT).unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(fs::read_to_string(&count).unwrap(), "sw\n", "started once");
     let w = windows(&srv, "once");
     assert_eq!(w.len(), 1, "{w:?}");
@@ -992,7 +992,7 @@ fn on_stop_runs_once_when_the_server_goes_and_no_watcher_outlives_it() {
     try_wait_until(|| d.join("log").exists(), WAIT).expect("on_stop ran");
     try_wait_until(|| watchers(&srv).is_empty(), WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", watchers(&srv)));
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(fs::read_to_string(d.join("log")).unwrap(), "stop\n");
 }
 

@@ -38,7 +38,7 @@ use alacritty_terminal::term::Config;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, Processor, Rgb};
-use common::{CMD_TIMEOUT, TestServer, wait_child, try_wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until, wait_child};
 use grofe::paths::{self, Env};
 use grofe::server::TEST_PANIC_ENV;
 

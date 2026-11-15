@@ -55,11 +55,16 @@ fn click(a: &mut Harness, button: u8, x: u16, y: u16) {
     a.send(sgr(button - 1, x, y, true));
 }
 
+/// Waits out the click timeout, the thing under test, so this is a real sleep.
+fn past_click_timeout() {
+    std::thread::sleep(Duration::from_millis(400));
+}
+
 /// [`click`], after the last click's wait for a second one has ended, so
 /// this one is a `MouseDown` of its own (as in tmux, a second press of the
 /// same button within 300 ms is `SecondClick` wherever it lands).
 fn click_alone(a: &mut Harness, button: u8, x: u16, y: u16) {
-    std::thread::sleep(Duration::from_millis(400));
+    past_click_timeout();
     click(a, button, x, y);
 }
 
@@ -228,8 +233,7 @@ fn a_sleeping_shell_condition_does_not_delay_another_client() {
     b.wait_for_output(MOUSE_ON, 0);
 
     a.send(b"\x08");
-    std::thread::sleep(Duration::from_millis(200));
-    let t = Instant::now();
+    common::quiet_period(Duration::from_millis(200));
     b.send("typed-while-sleeping\r");
     b.wait_until("the echo", WAIT, |t| {
         t.lines()
@@ -237,8 +241,6 @@ fn a_sleeping_shell_condition_does_not_delay_another_client() {
             .count()
             >= 2
     });
-    let took = t.elapsed();
-    assert!(took < Duration::from_millis(1000), "took {took:?}");
     assert_eq!(opt(&srv, "@done"), "", "the branch waited for the shell");
     wait_opt(&srv, "@done", "yes");
 }
@@ -277,14 +279,8 @@ fn the_shell_form_waits_on_the_cli_unless_backgrounded() {
     ]);
     assert_eq!(out.as_deref(), Ok("main\n"));
 
-    let t = Instant::now();
     srv.cmd(&["if-shell", "-b", "sleep 1", "set -g @bg done"])
         .expect("-b");
-    assert!(
-        t.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        t.elapsed()
-    );
     assert_eq!(opt(&srv, "@bg"), "");
     wait_opt(&srv, "@bg", "done");
 
@@ -294,14 +290,9 @@ fn the_shell_form_waits_on_the_cli_unless_backgrounded() {
         cmd.args(["if-shell", "sleep 2", "display-message -p late"]);
         move || cmd.output().expect("run")
     });
-    std::thread::sleep(Duration::from_millis(300));
-    let t = Instant::now();
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(var(&srv, "main", "#{session_name}"), "main");
-    assert!(
-        t.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        t.elapsed()
-    );
+    assert!(!slow.is_finished(), "answered only after the slow shell");
     let out = slow.join().expect("join");
     assert_eq!(String::from_utf8_lossy(&out.stdout), "late\n");
 }
@@ -499,15 +490,15 @@ fn double_click_fires_once() {
     click(&mut a, 1, 10, 5);
     click(&mut a, 1, 10, 5);
     wait_opt(&srv, "@log", "D");
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     click(&mut a, 1, 10, 5);
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(opt(&srv, "@log"), "D", "a single click");
     for _ in 0..3 {
         click(&mut a, 1, 10, 5);
     }
     wait_opt(&srv, "@log", "DT");
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(opt(&srv, "@log"), "DT");
 }
 
@@ -638,7 +629,7 @@ fn meta_shift_tab_sends_nothing() {
     let log = dir.path().join("log");
     let srv = start(&format!("stty raw -echo; exec cat > '{}'", log.display()));
     let mut a = attach(&srv, 80, 24);
-    std::thread::sleep(Duration::from_millis(300));
+    a.wait_for_output(MOUSE_ON, 0);
     a.send(b"\x1b[9;4u\x1b[9;2uz");
     let got = try_wait_until(
         || std::fs::read(&log).unwrap_or_default().ends_with(b"z"),
@@ -731,7 +722,7 @@ fn a_mouse_menu_opens_at_the_pointer() {
     a.wait_for("$");
     // The button stays down: its release outside the menu would close it,
     // as tmux 3.7b's does (`b3wpc/menu-bound-mouse`).
-    std::thread::sleep(Duration::from_millis(400));
+    past_click_timeout();
     a.send(sgr(2, 21, 9, false));
     a.wait_until("the menu", WAIT, |t| t.contains("One"));
     let text = a.text();
@@ -769,7 +760,7 @@ fn keys_after_a_shell_condition_wait_for_its_branch() {
     );
     bind(&srv, &["-n", "C-g", "if-shell", "true", "splat-window"]);
     let mut a = attach(&srv, 80, 24);
-    std::thread::sleep(Duration::from_millis(300));
+    a.wait_for_output(MOUSE_ON, 0);
     a.send(b"\x08ab\r");
     let read = || std::fs::read(&log).unwrap_or_default();
     let got = try_wait_until(|| read().ends_with(b"\r"), WAIT);

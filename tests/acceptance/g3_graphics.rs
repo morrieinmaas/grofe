@@ -442,7 +442,7 @@ fn a_popup_hides_a_placement_and_a_late_client_gets_it() {
     );
     // A client without kitty graphics gets none of it.
     let mut d = attach(&srv, &[]);
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     let out = String::from_utf8_lossy(d.output()).into_owned();
     assert!(!out.contains("a=p,") && !out.contains("a=t,"), "{out:?}");
 }

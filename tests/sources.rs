@@ -445,13 +445,15 @@ fn many_runs_leave_no_zombies_or_open_fds() {
     load(&srv, &config);
     try_wait_until(|| lines(&runs) >= 50, Duration::from_secs(20)).expect("50 runs");
     load(&srv, "");
-    try_wait_until(|| zombies_of(pid) == 0 && open_fds(pid) <= baseline, WAIT).unwrap_or_else(|_| {
-        panic!(
-            "{} zombies, {} fds (baseline {baseline})",
-            zombies_of(pid),
-            open_fds(pid)
-        )
-    });
+    try_wait_until(|| zombies_of(pid) == 0 && open_fds(pid) <= baseline, WAIT).unwrap_or_else(
+        |_| {
+            panic!(
+                "{} zombies, {} fds (baseline {baseline})",
+                zombies_of(pid),
+                open_fds(pid)
+            )
+        },
+    );
 }
 
 /// A source that spews output without a newline is cut at the line limit

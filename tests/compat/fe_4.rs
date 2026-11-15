@@ -642,6 +642,7 @@ fn a_tmux_binding_s_prompt_and_confirm_run_in_tmux_s_dialect() {
     });
     client.press(b"\x02u");
     client.press(b"n");
+    // Negative wait: "n" must not confirm.
     thread::sleep(Duration::from_millis(300));
     assert!(!names().contains("confirmed"), "n cancels: {}", names());
     client.press(b"\x02u");

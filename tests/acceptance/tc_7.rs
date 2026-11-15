@@ -590,7 +590,7 @@ fn a_menu_over_an_open_popup_does_nothing() {
     assert!(status.success());
     a.send("a");
     a.wait_for("a");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!a.text().contains("Pick"), "{}", a.text());
     assert_ne!(window_name(&srv), "one");
     a.send("\r\x04");

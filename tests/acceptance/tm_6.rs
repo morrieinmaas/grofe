@@ -723,7 +723,8 @@ fn a_bindings_shell_and_its_hooks_shell_hold_the_client() {
     srv.cmd(&["bind-key", "-n", "F6", "new-window -d ; set -ga @log C"])
         .expect("bind F6");
     a.send("\x1b[17~w\r");
-    try_wait_until(|| pane_var(&srv, "main", "#{session_windows}") == "2", WAIT).expect("the window");
+    try_wait_until(|| pane_var(&srv, "main", "#{session_windows}") == "2", WAIT)
+        .expect("the window");
     srv.cmd(&["refresh-client"]).ok();
     assert_eq!(opt(&srv, "@log"), "");
     assert!(
@@ -805,7 +806,7 @@ fn a_client_gone_mid_drag_stops_its_drag() {
     .expect("the client went");
     // Ten timer periods with no scroll, measured from here.
     let at = scrolled();
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(scrolled(), at, "the drag timer outlived its client");
     assert_eq!(pane_var(&srv, "main", "#{pane_in_mode}"), "1");
 }

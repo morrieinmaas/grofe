@@ -14,7 +14,9 @@
 use std::path::Path;
 
 use crate::harness::{Harness, require_tool};
-use crate::plugin_rig::{PREFIX, Rig, WAIT, read_golden, recording_tmux, try_wait_until, write_golden};
+use crate::plugin_rig::{
+    PREFIX, Rig, WAIT, read_golden, recording_tmux, try_wait_until, write_golden,
+};
 
 const TASK: &str = "tp7";
 const GOLDEN: &str = "tp_7";

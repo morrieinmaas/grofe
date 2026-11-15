@@ -442,6 +442,14 @@ fn read_until(stream: &mut UnixStream, needle: &str, timeout: Duration) -> bool 
     false
 }
 
+/// Waits until the server lists `n` clients.
+fn clients_attached(srv: &TestServer, n: usize) {
+    common::wait_until("clients to attach", common::CMD_TIMEOUT, || {
+        srv.cmd(&["list-clients"])
+            .is_ok_and(|out| out.lines().count() == n)
+    });
+}
+
 /// A client whose frame was dropped while it lagged gets the screen as it
 /// is once it reads again, even when nothing changes after that (fix round
 /// 1). A huge raw client that never reads is letterboxed by a small one,
@@ -464,17 +472,18 @@ fn a_lagging_client_catches_up_with_a_pane_that_went_quiet() {
     ])
     .expect("new-session");
     let mut big = raw_attach(&srv, (1000, 300), None, &[]);
-    sleep(Duration::from_millis(300));
+    clients_attached(&srv, 1);
     // The small client attaches last, so it owns the size: `big`
     // letterboxes.
     let mut small = Harness::spawn(attach(&srv, "main"), 80, 24);
     wait_pane_size(&srv, "80x24");
-    sleep(Duration::from_millis(500));
+    clients_attached(&srv, 2);
     srv.cmd(&["send-keys", "-t", "main", "Enter"])
         .expect("send-keys");
     small.wait_for("FINAL-MARK");
     // No command until `big` reads: every command redraws every client,
     // which would hide a dropped frame that is never retried.
+    // Nothing to wait for: the point is that no command runs, so sleep.
     sleep(Duration::from_millis(500));
     assert!(
         read_until(&mut big, "FINAL-MARK", Duration::from_secs(10)),

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 mod common;
 
-use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, wait_child, try_wait_until};
+use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, try_wait_until, wait_child};
 use grofe::protocol::{Dialect, Hello, decode_hello};
 
 const TMUX_NESTED: &str = "sessions should be nested with care, unset $TMUX to force";

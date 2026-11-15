@@ -311,6 +311,7 @@ fn the_pane_menu_floats_and_unfloats_the_pane_clicked() {
         move || var(srv, "%0", "#{pane_floating_flag}") == want
     };
     // %1 is active; the click is on %0, cell (10, 5).
+    // Past the click timeout, so the press is a plain press.
     std::thread::sleep(Duration::from_millis(400));
     client.send(right_press(11, 6));
     client.wait_until("the tiled pane's menu", WAIT, |t| t.contains("Float"));
@@ -322,6 +323,7 @@ fn the_pane_menu_floats_and_unfloats_the_pane_clicked() {
     // is over it.
     let (l, t, _, _) = rect(&srv, "%0");
     assert_eq!((l, t), (2, 1));
+    // Past the click timeout, so the press is a plain press.
     std::thread::sleep(Duration::from_millis(400));
     client.send(right_press(11, 5));
     client.wait_until("the floating pane's menu", WAIT, |t| t.contains("Unfloat"));
@@ -361,6 +363,7 @@ fn the_pane_menu_leaves_a_click_to_a_pane_that_asked_for_the_mouse() {
     client.wait_for_output(MOUSE_ON, 0);
     client.wait_for("[main]");
     // %1 starts at column 41, so client cell (51, 6) is its cell (10, 6).
+    // Past the click timeout, so the press is a plain press.
     std::thread::sleep(Duration::from_millis(400));
     client.send(right_press(51, 6));
     client.send("\x1b[<2;51;6m");

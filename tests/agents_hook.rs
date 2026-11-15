@@ -195,7 +195,7 @@ fn hook_and_cli_text_reach_the_server_sanitised() {
         .cmd(&["display-message", "-p", "-t", &pane, "#{agent_msg}"])
         .expect("display");
     assert_eq!(shown.trim_end(), want);
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!x.exists(), "agent text ran a command");
     let _ = std::fs::remove_dir_all(&short);
 }

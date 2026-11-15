@@ -742,6 +742,7 @@ fn build(srv: &TestServer) {
         .unwrap_or_else(|_| panic!("cd in {pane}"));
     }
     // T4.1 writes within a second of a change and samples cwds.
+    // Real time: the snapshot writer runs on its own timer.
     std::thread::sleep(Duration::from_secs(3));
 }
 

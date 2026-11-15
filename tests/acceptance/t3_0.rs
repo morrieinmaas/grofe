@@ -12,7 +12,7 @@ mod common;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{TestServer, wait_child, try_wait_until};
+use common::{TestServer, try_wait_until, wait_child};
 use grofe::server::TEST_PANIC_ENV;
 
 use crate::harness::{Harness, require_tool};

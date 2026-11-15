@@ -79,7 +79,8 @@ fn agent_count(srv: &TestServer) -> usize {
 }
 
 fn wait_agents(srv: &TestServer, n: usize) {
-    try_wait_until(|| agent_count(srv) == n, WAIT).unwrap_or_else(|e| panic!("{e}: want {n} agents"));
+    try_wait_until(|| agent_count(srv) == n, WAIT)
+        .unwrap_or_else(|e| panic!("{e}: want {n} agents"));
 }
 
 #[test]

@@ -102,7 +102,7 @@ fn natively_a_right_click_opens_nothing() {
     let (_srv, mut client) = server("grofe");
     right_click(&mut client, 8, 23);
     right_click(&mut client, 20, 5);
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::quiet_period(std::time::Duration::from_millis(500));
     let screen = client.text();
     assert!(!screen.contains("New At End"), "{screen}");
     assert!(!screen.contains("Vertical Split"), "{screen}");

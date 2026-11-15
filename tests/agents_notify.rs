@@ -123,7 +123,7 @@ fn notify_command_runs_recording_script_with_argv() {
         "got {:?}",
         lines[2]
     );
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert!(!touched.exists(), "the $(...) must never run");
 }
 
@@ -147,7 +147,7 @@ fn mute_suppresses_command() {
         notify_list(&srv).contains("muted-one"),
         "tray still gets it"
     );
-    std::thread::sleep(QUIET);
+    common::quiet_period(QUIET);
     assert!(!out.exists(), "no command while muted");
     srv.cmd(&["notify", "unmute"]).expect("unmute");
     report(&srv, second, "blocked", "loud-two");

@@ -93,7 +93,8 @@ fn prefix_colon_runs_a_command_typed_in_the_prompt() {
     a.send("split-window -h");
     wait_last_row(&mut a, ":split-window -h");
     a.send("\r");
-    try_wait_until(|| pane_origins(&srv).len() == 2, WAIT).unwrap_or_else(|e| panic!("no split: {e}"));
+    try_wait_until(|| pane_origins(&srv).len() == 2, WAIT)
+        .unwrap_or_else(|e| panic!("no split: {e}"));
     let origins = pane_origins(&srv);
     assert_eq!(origins[0], (0, 0), "{origins:?}");
     assert!(
@@ -147,7 +148,8 @@ fn line_editing_and_history() {
     a.send("\x1b[D".repeat(9) + "-");
     wait_last_row(&mut a, ":split-window -h");
     a.send("\r");
-    try_wait_until(|| pane_origins(&srv).len() == 2, WAIT).unwrap_or_else(|e| panic!("no split: {e}"));
+    try_wait_until(|| pane_origins(&srv).len() == 2, WAIT)
+        .unwrap_or_else(|e| panic!("no split: {e}"));
     let origins = pane_origins(&srv);
     assert!(origins[1].0 > 0 && origins[1].1 == 0, "{origins:?}");
 
@@ -228,7 +230,8 @@ fn a_binding_runs_a_shell_command() {
         .expect("bind-key");
     let mut a = attach(&srv);
     a.send("\x02X");
-    try_wait_until(|| file.exists(), Duration::from_secs(2)).unwrap_or_else(|e| panic!("C-b X: {e}"));
+    try_wait_until(|| file.exists(), Duration::from_secs(2))
+        .unwrap_or_else(|e| panic!("C-b X: {e}"));
 }
 
 #[test]

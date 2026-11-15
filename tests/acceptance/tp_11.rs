@@ -36,7 +36,9 @@ use std::path::Path;
 use base64::Engine as _;
 
 use crate::harness::Harness;
-use crate::plugin_rig::{PREFIX, Rig, WAIT, read_golden, recording_tmux, try_wait_until, write_golden};
+use crate::plugin_rig::{
+    PREFIX, Rig, WAIT, read_golden, recording_tmux, try_wait_until, write_golden,
+};
 
 const TASK: &str = "tp11";
 const GOLDEN: &str = "tp_11";

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use common::{TestServer, wait_child, try_wait_until};
+use common::{TestServer, try_wait_until, wait_child};
 
 use crate::harness::Harness;
 
@@ -173,7 +173,7 @@ fn a_popup_opens_on_the_client_it_names_only() {
         &["-c", &name, "-w", "30", "-h", "5", "echo only-b; exec cat"],
     );
     b.wait_for("│only-b");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!a.text().contains("only-b"), "A shows B's popup");
     b.send("\x03");
     b.wait_until("the popup to close", WAIT, |t| !t.contains("only-b"));
@@ -341,7 +341,7 @@ fn close_on_exit_and_the_close_keys() {
     );
     a.wait_for("│ready");
     a.send("\x1b");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(
         a.text().contains("│ready"),
         "Escape closed a running -E popup"
@@ -359,7 +359,7 @@ fn close_on_exit_and_the_close_keys() {
     );
     b.wait_for("│done");
     b.send("q");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(b.text().contains("│done"), "q closed the popup");
     b.send("\x03");
     b.wait_until("the popup to close", WAIT, |t| !t.contains("│done"));
@@ -745,7 +745,7 @@ fn floating_panes_stack_and_rise_when_selected() {
     a.wait_until("F1 on top", WAIT, |t| rows(t)[..10] == raised[..]);
     srv.cmd(&["select-pane", "-t", tiled.trim_end()])
         .expect("select tiled");
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(
         rows(&a.text())[..10],
         raised[..],
@@ -1033,7 +1033,7 @@ fn a_window_keeps_its_floating_pane_after_its_last_tiled_one() {
         "#{pane_id} #{pane_active} #{pane_floating_flag} #{window_panes} #{pane_left} #{pane_top}",
     );
     assert_eq!(panes, format!("{float} 1 1 1 5 2\n"));
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(a.text().contains("│FL"));
     assert_eq!(
         srv.cmd(&["split-window", "-t", &float]),

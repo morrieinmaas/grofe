@@ -7,7 +7,6 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::thread;
 use std::time::Duration;
 
 use common::{CmdOutput, PROMPT, TestServer};
@@ -129,7 +128,9 @@ fn a_resume_set_less_than_a_second_ago_is_not_saved_yet() {
         line_for(&out, &a).starts_with(&format!("main:0.0 {a} not saved yet")),
         "{out:?}"
     );
-    thread::sleep(Duration::from_secs(2));
+    common::wait_until("the resume to be saved", common::CMD_TIMEOUT, || {
+        code(&check(&srv)) == Some(0)
+    });
     let out = check(&srv);
     assert_eq!(code(&out), Some(0), "{out:?}");
     assert_eq!(line_for(&out, &a), format!("main:0.0 {a} will resume"));

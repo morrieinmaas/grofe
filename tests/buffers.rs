@@ -412,7 +412,7 @@ fn choose_buffer_d_deletes_and_prefix_equals_opens_it_zoomed() {
         srv.cmd(&["delete-buffer", "-b", name]).unwrap();
     }
     srv.cmd(&["choose-buffer"]).unwrap();
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!a.text().contains("(sort: "));
 }
 

@@ -310,7 +310,8 @@ fn the_fifth_crash_within_the_window_disables_the_plugin() {
     wait_state(&srv, "p", "disabled");
     assert_eq!(row(&srv, "p").pid, None);
     // Longer than the next backoff (16 x 50 ms) would have been.
-    std::thread::sleep(Duration::from_millis(1200));
+    // Negative wait: no restart may follow.
+    common::quiet_period(Duration::from_millis(1200));
     assert_eq!(row(&srv, "p").state, "disabled");
     assert_eq!(lines(&starts), 5, "nothing spawned after the fifth crash");
     let log = fs::read_to_string(srv.log_path()).unwrap_or_default();
@@ -518,7 +519,8 @@ fn a_disabled_plugin_is_off_and_plugin_restart_refuses_it() {
     let srv = start_with(srv, &plugin_table("p", &p, "enabled = false"), None);
     let r = row(&srv, "p");
     assert_eq!((r.state.as_str(), r.pid, r.restarts), ("off", None, 0));
-    std::thread::sleep(Duration::from_millis(300));
+    // Negative wait: a disabled plugin must stay off.
+    common::quiet_period(Duration::from_millis(300));
     assert!(!started.exists(), "an off plugin is never started");
     let err = srv.cmd(&["plugin-restart", "p"]).expect_err("off");
     assert!(err.contains("off"), "{err}");
