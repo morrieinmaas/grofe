@@ -5,10 +5,9 @@
 The tmux compatibility layer answers what the tools and scripts it was tested
 against send, but some things are not there yet or never will be:
 
-- **Plugins.** TPM itself does not run. `import-tmux` turns its `run` line
-  into a `run-shell` of each installed plugin's `*.tmux`, in TPM's order, so
-  the plugins you already have load unchanged; nothing is cloned or updated.
-  Resurrect and continuum are left out, since grofe's own persistence
+- **Plugins.** TPM itself does not run; `grofe pack` replaces it (see
+  [Move your plugins to grofe pack](#move-your-plugins-to-grofe-pack)).
+  Resurrect and continuum are not needed, since grofe's own persistence
   replaces them. A plugin's `*.tmux` and `*.conf` files are read as tmux
   config only when the request comes through the `tmux` name or the server
   has tmux identity.
@@ -34,7 +33,37 @@ grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
 `user.toml`. Options, key bindings, hooks and status formats come across,
 including `#()` segments, which become cached status sources. Anything that
 cannot come across is listed with the reason. TPM's `run` line becomes a
-direct load of each plugin you have installed.
+`run-shell` of each plugin TPM already installed, in TPM's order, so your
+plugins keep loading on the first day; nothing is cloned or updated that
+way.
+
+## Move your plugins to grofe pack
+
+`grofe pack` is grofe's plugin manager and replaces TPM. A tmux plugin (a
+repository with `*.tmux` files and no `grofe-plugin.toml`) is declared like
+any other plugin, and each of its `*.tmux` files runs through `run-shell`
+when the config loads. For each `set -g @plugin '<owner>/<repo>'` line, add a
+`[[pack]]` table, then remove the TPM `run` line from the converted config:
+
+```toml
+[[pack]]
+src = "github:tmux-plugins/tmux-yank"
+
+[[pack]]
+src = "github:tmux-plugins/tmux-open"
+rev = "master"                 # optional: a branch, tag or commit to track
+```
+
+```sh
+grofe pack sync     # clone what is missing, at the commits in the lock
+grofe reload        # load what was installed
+```
+
+`grofe pack` pins every plugin to an exact commit in `pack-lock.toml` next to
+your config; commit that file to keep machines in step. `grofe pack update`
+shows the commits each plugin would gain before it moves the lock, and
+`grofe pack list` shows every plugin and its state. See
+[Lua scripting and packs](lua.md#grofe-pack) for the details.
 
 ## Bring your sessions along
 

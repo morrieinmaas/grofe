@@ -1,9 +1,14 @@
 # Plugins
 
-Your tmux plugins load as they are (see
-[Switching from tmux](switching-from-tmux.md)). grofe adds two kinds of its
-own: Luau scripts that run inside the server, and supervised plugins,
-separate programs in any language.
+grofe has three kinds of plugin:
+
+- **tmux plugins and Luau plugins**, installed from git by `grofe pack`, which
+  replaces TPM and pins each plugin to a commit in `pack-lock.toml` (see
+  [Move your plugins to grofe pack](switching-from-tmux.md#move-your-plugins-to-grofe-pack)
+  and [Lua scripting and packs](lua.md));
+- **Luau scripts** of your own in `init.luau`, which run inside the server;
+- **supervised plugins**, separate programs in any language that the server
+  starts and restarts.
 
 ## Luau scripting and packs
 

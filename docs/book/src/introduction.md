@@ -13,7 +13,7 @@ it removes are the parts you keep fighting: sessions that die with the
 machine, a config language nobody can debug, and a status line that forks a
 shell on every redraw.
 
-> grofe is an early preview (0.1). It is in daily use by its author and
+> grofe is an early preview. It is in daily use by its author and
 > passes a large tmux compatibility suite, but expect rough edges and keep
 > real tmux installed while you try it.
 

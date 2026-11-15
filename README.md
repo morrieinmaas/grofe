@@ -28,7 +28,7 @@ side and let grofe keep track of them.
 - **Scriptable.** Luau scripts and `grofe pack` plugins run inside a time
   and memory budget, and `grofe control` speaks JSON to anything else.
 
-> grofe is an early preview (0.1). It is in daily use and passes a large tmux
+> grofe is an early preview. It is in daily use and passes a large tmux
 > compatibility suite, but expect rough edges and keep real tmux installed
 > while you try it.
 
@@ -99,11 +99,14 @@ Your sessions come back the next time it starts.
 grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
 ```
 
-Options, key bindings, hooks, status formats and your TPM plugins come
-across, and anything that cannot is listed with the reason. The first grofe
-server then takes its sessions from your running tmux. Scripts and tools that
-talk to tmux (`fzf --tmux`, vim-tmux-navigator) keep working, and grofe can
-run under the name `tmux`. See
+Options, key bindings, hooks and status formats come across, and anything
+that cannot is listed with the reason. `grofe pack` replaces TPM: declare
+each plugin as a `[[pack]]` table and grofe clones it and pins it to a commit
+in `pack-lock.toml`; until you do, the plugins TPM already installed keep
+loading. The first grofe server then takes its sessions from your running
+tmux. Scripts and tools that talk to tmux (`fzf --tmux`,
+vim-tmux-navigator) keep working, and grofe can run under the name `tmux`.
+See
 [Switching from tmux](https://morrieinmaas.github.io/grofe/docs/switching-from-tmux.html)
 for the gaps.
 
