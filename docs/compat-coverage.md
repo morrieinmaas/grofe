@@ -9,77 +9,22 @@ excludes it. `scripts/check-corpus.sh` fails when a form maps to no row.
 
 ## How the corpus is built
 
-The owner's live tmux is never touched: no recorder on the owner's `PATH`, no
-restart of the owner's server, and canopy's live use of tmux is left alone
-(plan addendum, owner constraint of 2026-09-28). So the corpus comes from two
-places instead.
-
-**Static extraction** (`scripts/corpus.py extract`) reads the owner's sources
-and never runs anything. It scans shell scripts, tmux config files, canopy's
-key table and the string literals of Rust, Lua, Vim script and Python code for
-tmux invocations, follows stored command strings (bind bodies, `if-shell`
-branches, hooks, menu items, `command-alias` values) and the shell strings
-they carry (`run-shell`, popups, `#()` jobs) to the calls inside them, and
-keeps a candidate only when its verb is a tmux 3.7b command or alias. Call
-sites that build argv in code the scanner cannot follow are transcribed by
-hand in `scripts/corpus-manual.txt`, each block naming its file. Sources:
-
-- canopy: `tmux/` (config layers and `keys.tsv`), `bin/`, `lib/`,
-  `adapters/`, and the vendored resurrect and continuum it loads;
-- athome: `dot_config/tmux/`, `dot_config/canopy/user.conf.tmpl`,
-  `dot_config/themes/`, `dot_local/bin/{tsess,cockpit,theme}`, the nvim
-  navigation config, the zsh aliases and functions, gh-dash's config, the
-  systemd unit, and the chezmoi scripts that install the plugins and canopy;
-- the loaded TPM plugins: tpm, sensible, yank, tmux-fzf, vim-tmux-navigator,
-  sessionx, which-key, opensessions, fzf-url, claude-session-manager (the
-  other clones in the plugin directory are not loaded and are not read);
-- Neovim: vim-tmux-navigator's Vim side and snacks.nvim's image terminal
-  support, both of which call `tmux` themselves.
-
-A branch that only runs on a tmux older than 3.7b is dropped (tmux-yank's
-`bind -t vi-copy` for tmux before 2.4). A flag that 3.7b lacks but the
-owner's setup still sends is kept and marked `!` in its form.
-
-**Container recording** (`scripts/record-container-corpus.sh`) builds
-`containers/compat/Containerfile`: a Debian base pinned by digest, tmux 3.7b
-from source (checked by hash and `tmux -V`), off the `PATH`, with the owner's
-fzf, smug and opensessions versions (each download checked by sha256). It
-copies canopy's runtime files, the athome files and the loaded plugins into a
-staging directory (a git tree's own files only), refuses to continue if the
-copy holds a denylisted string (`scripts/corpus.py screen`, the same list the
-check uses, below), and mounts it read-only in a container with no network.
-`scenario.sh` and `drive.py` refuse to run outside a container, inside tmux
-(`TMUX` set) or without a private `TMUX_TMPDIR`. Inside, `containers/compat/scenario.sh` lays the setup out under a
-container user's home as chezmoi and canopy do, installs
-`scripts/tmux-argv-recorder.sh` as the only `tmux` on `PATH`, starts the
-server through it, and `containers/compat/drive.py` exercises the setup
-through an attached client on a pty: every root, prefix and key-table binding
-whose command reaches a shell (popups and prompts closed after each), the
-owner's scripts typed into a pane (canopy-agent's five states, canopy's
-read-only commands, `theme`, `cockpit`, `tsess`, smug), the status line's
-`#()` jobs, and the calls the owner makes from outside tmux. At the end it
-dumps the server's key tables and hooks, since those stored commands are tmux
-argv too.
-
-The recorder classifies each call by where it came from: `job` (the server is
-an ancestor and there is no terminal: `run-shell`, hooks, `if-shell`, `#()`),
-`pane` (a pane or popup process), or `cli` (anything else, including a
-daemon a job started that has since detached from the server, such as
-opensessions' server). A non-empty
-`container-job.argv` is the proof that the server's own calls went through the
-recorder.
+The corpus comes from a private corpus of real configs, scripts and plugins
+(static extraction) and from a recording of a real tmux 3.7b server driven in
+a container. The inputs are private; `docs/archive/owner-corpus.md` has the
+how-to for building and regenerating it.
 
 ## Files
 
 | File | What it holds |
 |---|---|
 | `tests/compat/corpus/static-cli.argv` | invocations of the `tmux` binary found statically, with the global flags |
-| `tests/compat/corpus/static-conf.argv` | commands from tmux config files and canopy's key table (no global flags) |
+| `tests/compat/corpus/static-conf.argv` | commands from tmux config files and a key table (no global flags) |
 | `tests/compat/corpus/container-cli.argv` | recorded calls from outside tmux |
 | `tests/compat/corpus/container-pane.argv` | recorded calls from processes in panes and popups |
 | `tests/compat/corpus/container-job.argv` | recorded calls from `run-shell`, hooks, `if-shell` and `#()` jobs |
 | `tests/compat/corpus/container-stored.argv` | the recorded server's key bindings (`list-keys`) and hooks (`show-hooks -g`, as `set-hook`) |
-| `tests/compat/corpus/sources.tsv` | for every line, where it came from (`<repo>:<path>`, `manual:<path>` or `container:<origin>`) |
+| `tests/compat/corpus/sources.tsv` | for every line, where it came from (`private:<path>`, `manual:<path>` or `container:<origin>`) |
 | `tests/compat/corpus/tmux-list-commands.txt` | tmux 3.7b's `list-commands`, recorded in the container: the flag table forms are parsed with |
 
 A line is one invocation: the argv after `tmux`, shell-quoted (`shlex`
@@ -92,7 +37,7 @@ tab is written as `\n` or `\t`. Files are sorted and deduplicated.
 rules (`normalize_argv` in `scripts/corpus.py`), so both halves dedupe
 against each other:
 
-- the recording's home directory, and any `/Users/<name>` or `/home/<name>`,
+- the recording's home directory, and any home-directory path,
   become `~`; this machine's hostnames become `<host>`, and its user and
   ssh host names and private denylist terms `<redacted>`; email addresses
   become `<email>`; mktemp suffixes under `/tmp` become `XXXXXX` and digit
@@ -118,56 +63,6 @@ against each other:
 Formats, option names, hook names, key names and shell strings are kept (with
 the substitutions above), since the front end's tasks need them.
 
-## Regenerating
-
-```sh
-GROFE_COMPAT_CANOPY=<canopy checkout> GROFE_COMPAT_ATHOME=<athome checkout> \
-GROFE_COMPAT_NVIM_PACK=<nvim pack dir> uv run scripts/corpus.py extract
-GROFE_COMPAT_CANOPY=<canopy checkout> GROFE_COMPAT_ATHOME=<athome checkout> \
-  scripts/record-container-corpus.sh
-uv run scripts/corpus.py coverage     # rewrites the generated section below
-scripts/check-corpus.sh
-```
-
-## Publishability
-
-`scripts/check-corpus.sh` scans every file under `tests/compat/corpus/`,
-`scripts/compat-rows.tsv`, `scripts/corpus-manual.txt`, everything under
-`containers/compat/` and this page, and fails on any denylisted string. The
-list is built on the machine running the check, never stored:
-
-- this machine's home directory (anywhere, not only under `/Users` or
-  `/home`) and git email, matched as substrings;
-- its hostnames, user name (`$USER`, `id -un`), git user name, and the
-  `Host`/`HostName` values of `~/.ssh/config` and the files it includes
-  (public forges and loopback excepted), matched as whole words in any case;
-  a found name equal to a word the corpus uses on its own (`main`, `rec`,
-  `tmux` and the like) is skipped, since it cannot identify a machine;
-- the terms in `GROFE_COMPAT_DENYLIST`, a file outside the repository with
-  one term per line (for example `~/.secrets/grofe/denylist`, holding client
-  and employer names), matched as whole words; the terms themselves are
-  never committed.
-
-It also fails on any email address and any `/Users/<name>` or
-`/home/<name>` path (the container user `rec` excepted). Normalization
-scrubs the same names out of recordings (`<host>`, `<redacted>`), and the
-staging copy for the container is screened with the same list.
-
-A form the corpus gains needs a line in `scripts/compat-rows.tsv`, which says
-which spec 4.5 row owns it; the check refuses a row id that names nothing in
-the spec.
-
-## The tmux-live-guard hook
-
-`~/.claude/hooks/tmux-live-guard.sh` blocks an agent's shell command that
-matches `tmux ... kill-(server|session|window|pane)` without `-L` or `-S`. The
-match is on the command text, so once `tmux` on `PATH` resolves to grofe
-(alias day, plan M3.6) it keeps matching and guards the owner's grofe server
-exactly as it guards tmux today. It does not match the native spelling
-(`grofe kill-server`), nor the owner's shell alias `tk` (`tmux kill-server`,
-in the corpus from athome's `aliases.zsh`), which never reaches an agent's
-command text in that form.
-
 ## What the corpus says about spec 4.5
 
 Every form maps to a row. The corpus recorded on 2026-09-28 (tmux 3.7b, fzf
@@ -182,7 +77,7 @@ settled all of them (the M3.6 addendum's rulings M36-R1 to M36-R10).
   `wait-for` and `wait-for -S` (TC.9), the `list-commands` answer (FE.1),
   and `pane_floating_flag` (TC.3). A real `fzf --tmux` run works end to end
   (FE.4).
-- **The owner's own binding sends a bare `=` target.** `user.conf`'s
+- **The owner's binding sends a bare `=` target.** `user.conf`'s
   `MouseDown1Status` else branch is `switch-client -t =`, on purpose (it
   reproduces tmux's default). Inside a mouse key's commands a bare `=` now
   means the target under the pointer (M36-R3, TC.10); elsewhere it is still
@@ -578,13 +473,13 @@ read back what tmux did.
 | `root` | `C-MouseDown1Status` | mouse | grofe | tmux identity only: `swap-window -t @`, the same for the window clicked |
 | `root` | `MouseDown1ScrollbarUp` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
 | `root` | `MouseDown1ScrollbarDown` | mouse | grofe | tmux identity only, and it never fires: grofe draws no pane scrollbar |
-| `root` | `C-h` | native | both | vim-tmux-navigator, bound on tmux by canopy's `conf.d/40-nav.conf` (a `ps` fork per key), is TP.2's native `40-canopy-nav.toml` on grofe (no `ps` fork per key) |
+| `root` | `C-h` | native | both | vim-tmux-navigator, bound on tmux by a private config layer (a `ps` fork per key), is a native key fragment on grofe (no `ps` fork per key) |
 | `root` | `C-j` | native | both | the same |
 | `root` | `C-k` | native | both | the same |
 | `root` | `C-l` | native | both | the same |
 | `root` | `C-\\` | native | both | the same |
-| `prefix` | `r` | native | both | canopy-reload runs grofe's `reload`, which validates every layer first (canopy `grofe/keys.tsv`) |
-| `prefix` | `M-s` | native | both | the grofe fragment runs `"$CANOPY_STORE/..."`, which the shell expands from the server's environment; tmux expanded the same path when it read the config |
+| `prefix` | `r` | native | both | a private reload script runs grofe's `reload`, which validates every layer first |
+| `prefix` | `M-s` | native | both | the grofe fragment runs a path under an environment variable, which the shell expands from the server's environment; tmux expanded the same path when it read the config |
 | `prefix` | `\"` | native | grofe | grofe's own default table splits in the active pane's directory (spec §5.3); under the tmux name it is tmux's stock `split-window` |
 | `prefix` | `\%` | native | grofe | the same, `split-window -h` |
 | `prefix` | `&` | native | grofe | grofe's own default table spells tmux's `#W` as `#{window_name}`, the same text |
@@ -668,25 +563,25 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 
 | Form | Lines | Stored | Files | Spec 4.5 row | Verb named | Unnamed flags | Sources |
 |---|---|---|---|---|---|---|---|
-| `%endif` | 1 | 0 | sf1 | oos:`%if` |  |  | canopy:tmux/conf.d/00-core.conf |
-| `%if` | 2 | 0 | sf2 | oos:`%if` |  |  | canopy:tmux/conf.d/00-core.conf |
-| `(alias) show-wk-menu-root` | 3 | 3 | sc3 | area:Bindings |  |  | athome:home/dot_config/tmux/executable_wk-keys-fix.sh, plugin:tmux-which-key/plugin/build.py, plugin:tmux-which-key/plugin/init.example.tmux (+1) |
-| `attach-session` | 1 | 0 | sc1 | cmd:M2 | yes |  | athome:home/dot_zsh/aliases.zsh |
+| `%endif` | 1 | 0 | sf1 | oos:`%if` |  |  | private |
+| `%if` | 2 | 0 | sf2 | oos:`%if` |  |  | private |
+| `(alias) show-wk-menu-root` | 3 | 3 | sc3 | area:Bindings |  |  | plugin:tmux-which-key/plugin/build.py, plugin:tmux-which-key/plugin/init.example.tmux, plugin:tmux-which-key/plugin/init.tmux (+1) |
+| `attach-session` | 1 | 0 | sc1 | cmd:M2 | yes |  | private |
 | `attach-session -d -t` | 1 | 0 | cc1 | cmd:M2 | yes | `-d`, `-t` | container:cli |
-| `attach-session -t` | 5 | 0 | cc1 cp1 sc3 | cmd:M2 | yes | `-t` | athome:home/dot_zsh/functions.zsh, container:cli, container:pane (+2) |
-| `bind-key` | 72 | 0 | cj25 sc22 sf25 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:plugins/tmux-resurrect/resurrect.tmux, canopy:tmux/conf.d/40-nav.conf (+11) |
+| `attach-session -t` | 5 | 0 | cc1 cp1 sc3 | cmd:M2 | yes | `-t` | container:cli, container:pane, plugin:tmux-claude-session-manager/scripts/launch.sh (+2) |
+| `bind-key` | 72 | 0 | cj25 sc22 sf25 | area:Bindings | yes |  | container:job, plugin:opensessions/opensessions.tmux, plugin:tmux-claude-session-manager/claude_session_manager.tmux (+8) |
 | `bind-key -N` | 1 | 0 | cj1 | area:Bindings | yes |  | container:job |
-| `bind-key -T` | 361 | 0 | cj24 cs311 sc21 sf5 | area:Bindings | yes |  | athome:home/dot_config/tmux/executable_wk-keys-fix.sh, canopy:tmux/conf.d/40-nav.conf, container:job (+7) |
-| `bind-key -n` | 15 | 0 | cj5 sc4 sf6 | area:Bindings | yes | `-n` | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/40-nav.conf, container:job (+3) |
-| `bind-key -r` | 6 | 0 | sf6 | area:Bindings | yes |  | canopy:tmux/keys.tsv |
+| `bind-key -T` | 361 | 0 | cj24 cs311 sc21 sf5 | area:Bindings | yes |  | container:job, container:list-keys, plugin:opensessions/opensessions.tmux (+6) |
+| `bind-key -n` | 15 | 0 | cj5 sc4 sf6 | area:Bindings | yes | `-n` | container:job, plugin:opensessions/opensessions.tmux, plugin:tmux-sessionx/sessionx.tmux (+2) |
+| `bind-key -r` | 6 | 0 | sf6 | area:Bindings | yes |  | private |
 | `bind-key -r -T` | 22 | 0 | cs22 | area:Bindings | yes |  | container:list-keys |
 | `break-pane` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `break-pane -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/pane.sh |
-| `capture-pane -J -p -t` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/save.sh |
+| `capture-pane -J -p -t` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | private |
 | `capture-pane -e -J -p` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-fzf-url/fzf-url.sh |
 | `capture-pane -e -J -p -S` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-fzf-url/fzf-url.sh |
-| `capture-pane -e -J -p -S -t` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/save.sh |
-| `capture-pane -e -p -t` | 8 | 0 | cp2 sc6 | area:Listing and inspection | yes |  | athome:home/dot_local/bin/executable_tsess, container:pane, plugin:tmux-claude-session-manager/scripts/picker.sh (+3) |
+| `capture-pane -e -J -p -S -t` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | private |
+| `capture-pane -e -p -t` | 8 | 0 | cp2 sc6 | area:Listing and inspection | yes |  | container:pane, plugin:tmux-claude-session-manager/scripts/picker.sh, plugin:tmux-fzf/scripts/.preview (+3) |
 | `choose-buffer -Z` | 1 | 1 | cs1 | area:Buffers and copy | yes | `-Z` | container:list-keys |
 | `choose-client -Z` | 1 | 1 | cs1 | area:Sessions and clients | yes |  | container:list-keys |
 | `choose-tree -w -Z` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
@@ -720,91 +615,91 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `display-menu -t[=] -T -x[M] -y[M]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
 | `display-menu -t[=] -T -x[M] -y[W]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
 | `display-menu -t[=] -T -x[W] -y[W]` | 2 | 2 | cs2 | oos:Mouse argv forms |  |  | container:list-keys |
-| `display-message` | 31 | 3 | cc2 cj13 cp1 cs2 sc10 sf3 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/check_tmux_version.sh, canopy:plugins/tmux-resurrect/scripts/helpers.sh, canopy:plugins/tmux-resurrect/scripts/tmux_spinner.sh (+14) |
-| `display-message -F -p` | 3 | 0 | cj1 sc2 | area:Listing and inspection | yes |  | canopy:plugins/tmux-continuum/continuum.tmux, container:job, plugin:tmux-yank/scripts/copy_pane_pwd.sh |
-| `display-message -F -p -t` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:plugins/tmux-resurrect/scripts/save.sh |
+| `display-message` | 31 | 3 | cc2 cj13 cp1 cs2 sc10 sf3 | area:Listing and inspection | yes |  | container:cli, container:job, container:list-keys (+11) |
+| `display-message -F -p` | 3 | 0 | cj1 sc2 | area:Listing and inspection | yes |  | container:job, plugin:tmux-yank/scripts/copy_pane_pwd.sh, private |
+| `display-message -F -p -t` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | private |
 | `display-message -c -p` | 2 | 0 | cc1 sc1 | area:Listing and inspection | yes | `-c` | container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `display-message -p` | 43 | 1 | cc3 cj9 cp3 sc24 sf4 | area:Listing and inspection | yes |  | canopy:bin/canopy-config, canopy:bin/canopy-reboot-check, canopy:bin/canopy-status (+26) |
-| `display-message -p -t` | 23 | 0 | cc2 cj3 cp4 sc14 | area:Listing and inspection | yes |  | canopy:bin/canopy-adopt, canopy:bin/canopy-agent, canopy:bin/canopy-reboot-check (+12) |
+| `display-message -p` | 43 | 1 | cc3 cj9 cp3 sc24 sf4 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+22) |
+| `display-message -p -t` | 23 | 0 | cc2 cj3 cp4 sc14 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+9) |
 | `display-panes` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
 | `display-popup -B -d -E -h -w` | 2 | 0 | cj2 | area:Overlays | yes | `-B` | container:job |
 | `display-popup -B -d -E -h -w -x[C] -y[C]` | 2 | 0 | cj2 | area:Overlays | yes | `-B` | container:job |
-| `display-popup -E -h -w` | 5 | 2 | cj1 cs1 sc2 sf1 | area:Overlays | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, container:job, container:list-keys (+2) |
-| `display-popup -b -E -h -T -w` | 4 | 4 | cs2 sf2 | area:Overlays | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, container:list-keys |
-| `display-popup -b -E -h -w` | 4 | 4 | cs2 sf2 | area:Overlays | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, container:list-keys |
+| `display-popup -E -h -w` | 5 | 2 | cj1 cs1 sc2 sf1 | area:Overlays | yes |  | container:job, container:list-keys, plugin:tmux-claude-session-manager/scripts/launch.sh (+2) |
+| `display-popup -b -E -h -T -w` | 4 | 4 | cs2 sf2 | area:Overlays | yes |  | container:list-keys, private |
+| `display-popup -b -E -h -w` | 4 | 4 | cs2 sf2 | area:Overlays | yes |  | container:list-keys, private |
 | `display-popup -c -E -h -w` | 2 | 0 | cj1 sc1 | area:Overlays | yes |  | container:job, plugin:tmux-claude-session-manager/scripts/list.sh |
 | `display-popup -d` | 1 | 0 | sc1 | area:Overlays | yes |  | plugin:tmux-fzf/scripts/.fzf-tmux |
-| `display-popup -d -E -h -w` | 3 | 2 | cs1 sc1 sf1 | area:Overlays | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, container:list-keys, manual:plugin:opensessions/apps/tui-rs/src/main.rs |
+| `display-popup -d -E -h -w` | 3 | 2 | cs1 sc1 sf1 | area:Overlays | yes |  | container:list-keys, manual:plugin:opensessions/apps/tui-rs/src/main.rs, private |
 | `display-popup -h -w -x[C] -y[C]` | 1 | 0 | sc1 | area:Overlays | yes |  | plugin:tmux-fzf/scripts/menu.sh |
 | `find-window -Z` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
-| `has-session -t` | 14 | 0 | cc1 cj1 cp2 sc10 | area:Sessions and clients | yes |  | athome:home/dot_local/bin/executable_cockpit, athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/restore.sh (+8) |
-| `if-shell` | 21 | 16 | cj5 cs5 sc1 sf10 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/30-plugins.conf, canopy:tmux/conf.d/40-nav.conf (+3) |
-| `if-shell -F` | 21 | 17 | cs9 sc1 sf11 | area:Bindings | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/40-nav.conf, container:list-keys (+1) |
+| `has-session -t` | 14 | 0 | cc1 cj1 cp2 sc10 | area:Sessions and clients | yes |  | container:cli, container:job, container:pane (+6) |
+| `if-shell` | 21 | 16 | cj5 cs5 sc1 sf10 | area:Bindings | yes |  | container:job, container:list-keys, plugin:vim-tmux-navigator/vim-tmux-navigator.tmux (+1) |
+| `if-shell -F` | 21 | 17 | cs9 sc1 sf11 | area:Bindings | yes |  | container:list-keys, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim, private |
 | `if-shell -F -t` | 1 | 0 | cp1 | area:Bindings | yes |  | container:pane |
 | `if-shell -F -t[=]` | 4 | 4 | cs4 | oos:Mouse argv forms |  |  | container:list-keys |
 | `join-pane` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `join-pane -b -d -f -h -l -s -t` | 1 | 0 | cj1 | area:Windows and panes | yes | `-f`, `-l` | container:job |
 | `join-pane -d -s -t` | 2 | 0 | cj1 sc1 | area:Windows and panes | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `kill-pane` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
-| `kill-pane -t` | 8 | 0 | cc1 cj1 sc6 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+5) |
+| `kill-pane -t` | 8 | 0 | cc1 cj1 sc6 | cmd:M1 | yes |  | container:cli, container:job, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) (+5) |
 | `kill-pane -t[=]` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
-| `kill-server` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl, athome:home/dot_config/systemd/user/canopy-tmux.service.tmpl, athome:home/dot_zsh/aliases.zsh (+2) |
-| `kill-session -t` | 4 | 0 | cc1 sc3 | cmd:M1 | yes | `-t` | athome:home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl, canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli (+4) |
+| `kill-server` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | container:pane, private |
+| `kill-session -t` | 4 | 0 | cc1 sc3 | cmd:M1 | yes | `-t` | container:cli, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+3) |
 | `kill-window` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
 | `kill-window -t` | 3 | 0 | cc1 sc2 | cmd:M1 | yes | `-t` | container:cli, plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs, plugin:tmux-fzf/scripts/.fzf-tmux |
 | `last-pane` | 1 | 0 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `last-window` | 1 | 1 | sc1 | cmd:M2 | yes |  | plugin:tmux-sensible/sensible.tmux |
 | `link-window -a -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/window.sh |
 | `list-buffers` | 2 | 1 | cs1 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-fzf/scripts/clipboard.sh |
-| `list-clients` | 3 | 0 | cj1 cp1 sc1 | cmd:M2 | yes |  | canopy:bin/canopy-reboot-check, canopy:plugins/tmux-continuum/scripts/helpers.sh, container:job (+1) |
+| `list-clients` | 3 | 0 | cj1 cp1 sc1 | cmd:M2 | yes |  | container:job, container:pane, private |
 | `list-clients -F` | 4 | 0 | cj1 sc3 | area:Sessions and clients | yes |  | container:job, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:tmux-claude-session-manager/scripts/list.sh |
 | `list-clients -F -t` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs |
 | `list-commands` | 2 | 0 | cp1 sc1 | area:Overlays | yes |  | container:pane, plugin:tmux-fzf/scripts/command.sh |
-| `list-keys` | 2 | 0 | cj1 sc1 | cmd:M3 | yes |  | athome:home/dot_config/tmux/executable_keys-popup.sh, container:job, plugin:tmux-fzf/scripts/keybinding.sh (+1) |
+| `list-keys` | 2 | 0 | cj1 sc1 | cmd:M3 | yes |  | container:job, plugin:tmux-fzf/scripts/keybinding.sh, plugin:tmux-sensible/sensible.tmux (+1) |
 | `list-keys -1 -N` | 1 | 1 | cs1 | area:Overlays | yes | `-N` | container:list-keys |
 | `list-panes -F` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-fzf/scripts/.fzf-tmux |
 | `list-panes -F -s -t` | 3 | 0 | cc1 cj1 sc1 | area:Listing and inspection | yes | `-s` | container:cli, container:job, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `list-panes -F -t` | 18 | 0 | cc1 cj7 cp1 sc9 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+9) |
-| `list-panes -a` | 2 | 0 | cj1 sc1 | area:Listing and inspection | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job |
-| `list-panes -a -F` | 17 | 0 | cc3 cj4 cp1 sc9 | area:Listing and inspection | yes |  | canopy:bin/canopy-adopt, canopy:bin/canopy-reboot-check, canopy:lib/pane.sh (+10) |
+| `list-panes -F -t` | 18 | 0 | cc1 cj7 cp1 sc9 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+9) |
+| `list-panes -a` | 2 | 0 | cj1 sc1 | area:Listing and inspection | yes |  | container:job, private |
+| `list-panes -a -F` | 17 | 0 | cc3 cj4 cp1 sc9 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+6) |
 | `list-panes -a -f -F` | 6 | 0 | cc1 cj4 sc1 | area:Listing and inspection | yes |  | container:cli, container:job, plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs |
-| `list-sessions` | 5 | 0 | cc1 cj1 cp1 sc2 | area:Listing and inspection | yes |  | athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl, athome:home/dot_zsh/aliases.zsh, athome:home/dot_zsh/functions.zsh (+9) |
-| `list-sessions -F` | 14 | 0 | cc3 cj3 cp1 sc7 | area:Listing and inspection | yes |  | athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/save.sh, container:cli (+6) |
+| `list-sessions` | 5 | 0 | cc1 cj1 cp1 sc2 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+6) |
+| `list-sessions -F` | 14 | 0 | cc3 cj3 cp1 sc7 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+5) |
 | `list-sessions -f -F` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-sessionx/scripts/preview.sh |
 | `list-windows` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | plugin:tmux-fzf/scripts/pane.sh, plugin:tmux-fzf/scripts/window.sh |
-| `list-windows -F -t` | 10 | 0 | cj1 cp1 sc8 | area:Listing and inspection | yes |  | athome:home/dot_local/bin/executable_cockpit, athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/restore.sh (+5) |
-| `list-windows -a -F` | 8 | 0 | cc2 cj2 sc4 | area:Listing and inspection | yes |  | athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/save.sh, container:cli (+4) |
+| `list-windows -F -t` | 10 | 0 | cj1 cp1 sc8 | area:Listing and inspection | yes |  | container:job, container:pane, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh (+2) |
+| `list-windows -a -F` | 8 | 0 | cc2 cj2 sc4 | area:Listing and inspection | yes |  | container:cli, container:job, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+3) |
 | `load-buffer` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf-url/fzf-url.sh |
 | `move-pane -s` | 1 | 0 | sc1 | area:Windows and panes | **no** |  | plugin:tmux-fzf/scripts/pane.sh |
 | `move-window -a -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/window.sh |
 | `move-window -r` | 2 | 2 | cs2 | area:Windows and panes | yes |  | container:list-keys |
 | `move-window -r -s -t` | 1 | 0 | cc1 | area:Windows and panes | yes |  | container:cli |
-| `move-window -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
+| `move-window -s -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | private |
 | `move-window -t` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `new-pane` | 1 | 1 | cs1 | area:Overlays | yes |  | container:list-keys |
 | `new-pane -c -F -P -t -x -X -y -Y` | 1 | 0 | cp1 | area:Overlays | yes |  | container:pane |
-| `new-session` | 3 | 2 | cs2 sc1 | cmd:M1 | yes |  | athome:home/dot_zsh/aliases.zsh, container:list-keys |
+| `new-session` | 3 | 2 | cs2 sc1 | cmd:M1 | yes |  | container:list-keys, private |
 | `new-session -A -d -s` | 1 | 0 | cc1 | area:Sessions and clients | yes |  | container:cli |
-| `new-session -A -s` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | athome:home/dot_zsh/aliases.zsh |
+| `new-session -A -s` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | private |
 | `new-session -c -d -F -P` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `new-session -c -d -F -P -s` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `new-session -c -d -n -P -s` | 1 | 0 | cc1 | cmd:M1 | yes | `-n`, `-P` | container:cli |
 | `new-session -c -d -n -s` | 1 | 0 | sc1 | cmd:M1 | yes | `-n` | plugin:tmux-sessionx/scripts/sessionx.sh |
-| `new-session -c -d -s` | 8 | 0 | cj1 sc7 | cmd:M1 | yes |  | athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job (+3) |
-| `new-session -d` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | athome:home/dot_config/systemd/user/canopy-tmux.service.tmpl, canopy:lib/tmux.sh, container:pane (+1) |
+| `new-session -c -d -s` | 8 | 0 | cj1 sc7 | cmd:M1 | yes |  | container:job, plugin:opensessions/apps/tui/scripts/sessionizer.sh, plugin:tmux-claude-session-manager/scripts/launch.sh (+2) |
+| `new-session -d` | 3 | 0 | cp1 sc2 | cmd:M1 | yes |  | container:pane, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, private |
 | `new-session -d -F -P` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `new-session -d -F -P -s` | 1 | 0 | sc1 | cmd:M1 | yes | `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `new-session -d -s` | 3 | 0 | sc3 | cmd:M1 | yes |  | athome:home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl, plugin:tmux-fzf/scripts/session.sh, plugin:tmux-sessionx/scripts/sessionx.sh |
-| `new-session -d -s -t` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
+| `new-session -d -s` | 3 | 0 | sc3 | cmd:M1 | yes |  | plugin:tmux-fzf/scripts/session.sh, plugin:tmux-sessionx/scripts/sessionx.sh, private |
+| `new-session -d -s -t` | 1 | 0 | sc1 | area:Sessions and clients | yes |  | private |
 | `new-session -d -s -x -y` | 3 | 0 | cc1 cj1 sc1 | cmd:M1 | yes |  | container:cli, container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
-| `new-window` | 6 | 5 | cs5 sc1 | cmd:M1 | yes |  | athome:home/.chezmoitemplates/gh-dash/config.yml, container:list-keys |
+| `new-window` | 6 | 5 | cs5 sc1 | cmd:M1 | yes |  | container:list-keys, private |
 | `new-window -a` | 3 | 3 | cs3 | cmd:M1 | yes | `-a` | container:list-keys |
-| `new-window -c` | 4 | 4 | cs2 sf2 | cmd:M1 | yes | `-c` | canopy:tmux/keys.tsv, container:list-keys |
+| `new-window -c` | 4 | 4 | cs2 sf2 | cmd:M1 | yes | `-c` | container:list-keys, private |
 | `new-window -c -d -F -n -P -t` | 1 | 0 | cc1 | area:Windows and panes | yes | `-c`, `-F`, `-P` | container:cli |
-| `new-window -c -d -t` | 2 | 0 | sc2 | cmd:M1 | yes | `-c`, `-d`, `-t` | canopy:plugins/tmux-resurrect/scripts/restore.sh |
+| `new-window -c -d -t` | 2 | 0 | sc2 | cmd:M1 | yes | `-c`, `-d`, `-t` | private |
 | `new-window -d -F -P` | 1 | 0 | sc1 | cmd:M1 | yes | `-d`, `-F`, `-P` | plugin:tmux-fzf/scripts/.fzf-tmux |
 | `new-window -d -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-d`, `-t` | plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
-| `new-window -n` | 4 | 4 | cs2 sf2 | area:Windows and panes | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, container:list-keys |
+| `new-window -n` | 4 | 4 | cs2 sf2 | area:Windows and panes | yes |  | container:list-keys, private |
 | `next-layout` | 1 | 1 | cs1 | area:Windows and panes | **no** |  | container:list-keys |
 | `next-window` | 5 | 5 | cj1 cs3 sc1 | cmd:M2 | yes |  | container:job, container:list-keys, plugin:tmux-sensible/sensible.tmux |
 | `next-window -a` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
@@ -816,116 +711,116 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `refresh-client -D` | 1 | 1 | cs1 | area:Sessions and clients | yes | `-D` | container:list-keys |
 | `refresh-client -L` | 1 | 1 | cs1 | area:Sessions and clients | yes | `-L` | container:list-keys |
 | `refresh-client -R` | 1 | 1 | cs1 | area:Sessions and clients | yes | `-R` | container:list-keys |
-| `refresh-client -S` | 2 | 0 | cp1 sc1 | area:Sessions and clients | yes |  | athome:home/dot_config/themes/executable_apply-tmux.sh, athome:home/dot_config/tmux/executable_pet-pick.sh, container:pane |
+| `refresh-client -S` | 2 | 0 | cp1 sc1 | area:Sessions and clients | yes |  | container:pane, private |
 | `refresh-client -U` | 1 | 1 | cs1 | area:Sessions and clients | yes | `-U` | container:list-keys |
 | `refresh-client -c` | 1 | 1 | cs1 | area:Sessions and clients | yes |  | container:list-keys |
 | `rename-session` | 3 | 3 | cs3 | cmd:M2 | yes |  | container:list-keys |
 | `rename-session -t` | 2 | 0 | sc2 | cmd:M2 | yes | `-t` | plugin:tmux-fzf/scripts/session.sh, plugin:tmux-sessionx/sessionx.tmux |
 | `rename-window` | 1 | 1 | cs1 | cmd:M2 | yes |  | container:list-keys |
-| `rename-window -t` | 9 | 3 | cj4 cs3 sc2 | cmd:M2 | yes | `-t` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, container:list-keys (+1) |
-| `resize-pane -D` | 5 | 4 | cs3 sc1 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys, plugin:tmux-fzf/scripts/pane.sh |
-| `resize-pane -L` | 5 | 4 | cs3 sc1 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys, plugin:tmux-fzf/scripts/pane.sh |
+| `rename-window -t` | 9 | 3 | cj4 cs3 sc2 | cmd:M2 | yes | `-t` | container:job, container:list-keys, plugin:tmux-fzf/scripts/window.sh (+1) |
+| `resize-pane -D` | 5 | 4 | cs3 sc1 sf1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/pane.sh, private |
+| `resize-pane -L` | 5 | 4 | cs3 sc1 sf1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/pane.sh, private |
 | `resize-pane -M` | 1 | 1 | cs1 | oos:Mouse argv forms |  |  | container:list-keys |
-| `resize-pane -R` | 5 | 4 | cs3 sc1 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys, plugin:tmux-fzf/scripts/pane.sh |
-| `resize-pane -U` | 4 | 3 | cs2 sc1 sf1 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys, plugin:tmux-fzf/scripts/pane.sh |
+| `resize-pane -R` | 5 | 4 | cs3 sc1 sf1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/pane.sh, private |
+| `resize-pane -U` | 4 | 3 | cs2 sc1 sf1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/pane.sh, private |
 | `resize-pane -Z` | 6 | 5 | cs5 sc1 | cmd:M1 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/.fzf-tmux |
-| `resize-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
-| `resize-pane -t -Z` | 3 | 1 | cp1 sc2 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:plugins/tmux-resurrect/scripts/save.sh, container:pane |
+| `resize-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | private |
+| `resize-pane -t -Z` | 3 | 1 | cp1 sc2 | cmd:M1 | yes |  | container:pane, private |
 | `resize-pane -t -x` | 6 | 0 | cc1 cj1 sc4 | area:Windows and panes | yes |  | container:cli, container:job, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) (+3) |
 | `resize-window -t -x -y` | 2 | 0 | cj1 sc1 | area:Windows and panes | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/sidebar-common.sh |
 | `respawn-pane -c -k` | 1 | 1 | sf1 | area:Windows and panes | yes | `-c` | plugin:tmux-which-key/plugin/init.tmux |
 | `respawn-pane -k` | 3 | 3 | cs3 | area:Windows and panes | yes |  | container:list-keys |
-| `respawn-pane -k -t` | 2 | 0 | sc2 | area:Windows and panes | yes |  | canopy:bin/canopy-adopt, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) |
+| `respawn-pane -k -t` | 2 | 0 | sc2 | area:Windows and panes | yes |  | manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it), private |
 | `respawn-window -k` | 3 | 3 | cs3 | area:Windows and panes | **no** |  | container:list-keys |
 | `rotate-window` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `rotate-window -D` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
-| `run-shell` | 108 | 104 | cj38 cs36 sc22 sf12 | cmd:M3 | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:plugins/tmux-resurrect/resurrect.tmux, canopy:tmux/conf.d/30-plugins.conf (+13) |
-| `run-shell -b` | 38 | 35 | cj17 cs15 sc5 sf1 | area:Hooks and environment | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, container:job, container:list-keys (+5) |
+| `run-shell` | 108 | 104 | cj38 cs36 sc22 sf12 | cmd:M3 | yes |  | container:job, container:list-keys, container:show-hooks (+10) |
+| `run-shell -b` | 38 | 35 | cj17 cs15 sc5 sf1 | area:Hooks and environment | yes |  | container:job, container:list-keys, container:show-hooks (+5) |
 | `run-shell -d` | 6 | 2 | cs6 | cmd:M3 | yes | `-d` | container:list-keys |
-| `select-layout` | 5 | 2 | cs2 sc1 sf2 | cmd:M3 | yes |  | canopy:tmux/keys.tsv, container:list-keys, plugin:tmux-fzf/scripts/pane.sh |
+| `select-layout` | 5 | 2 | cs2 sc1 sf2 | cmd:M3 | yes |  | container:list-keys, plugin:tmux-fzf/scripts/pane.sh, private |
 | `select-layout -E` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
-| `select-layout -t` | 12 | 0 | cc2 cj7 sc3 | cmd:M3 | yes | `-t` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+2) |
+| `select-layout -t` | 12 | 0 | cc2 cj7 sc3 | cmd:M3 | yes | `-t` | container:cli, container:job, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) (+2) |
 | `select-pane` | 12 | 12 | cs12 | cmd:M1 | yes |  | container:list-keys |
-| `select-pane -D` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
+| `select-pane -D` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | container:job, container:list-keys, private |
 | `select-pane -D -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
-| `select-pane -L` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
+| `select-pane -L` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | container:job, container:list-keys, private |
 | `select-pane -L -t` | 2 | 1 | sc2 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -L -t -Z` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -M` | 1 | 1 | cs1 | area:Windows and panes | yes |  | container:list-keys |
 | `select-pane -P! -t` | 2 | 0 | sc2 | cmd:M1 | yes | `-P!` | plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
-| `select-pane -R` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
+| `select-pane -R` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | container:job, container:list-keys, private |
 | `select-pane -R -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
-| `select-pane -U` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, canopy:tmux/keys.tsv, container:job (+1) |
-| `select-pane -l` | 6 | 6 | cj2 cs2 sf2 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, container:job, container:list-keys |
+| `select-pane -U` | 9 | 9 | cj2 cs4 sf3 | cmd:M1 | yes |  | container:job, container:list-keys, private |
+| `select-pane -l` | 6 | 6 | cj2 cs2 sf2 | cmd:M1 | yes |  | container:job, container:list-keys, private |
 | `select-pane -l -t` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -m` | 7 | 7 | cs7 | area:Windows and panes | yes |  | container:list-keys |
-| `select-pane -t` | 14 | 0 | cj2 cp1 cs1 sc9 sf1 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/process_restore_helpers.sh, canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:tmux/keys.tsv (+10) |
-| `select-pane -t -T` | 13 | 0 | cc1 cj9 sc3 | cmd:M1 | yes | `-T` | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:cli, container:job (+2) |
+| `select-pane -t` | 14 | 0 | cj2 cp1 cs1 sc9 sf1 | cmd:M1 | yes |  | container:job, container:list-keys, container:pane (+8) |
+| `select-pane -t -T` | 13 | 0 | cc1 cj9 sc3 | cmd:M1 | yes | `-T` | container:cli, container:job, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) (+2) |
 | `select-pane -t -U` | 1 | 0 | sc1 | cmd:M1 | yes |  | manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim |
 | `select-pane -t[=]` | 5 | 5 | cs5 | oos:Mouse argv forms |  |  | container:list-keys |
-| `select-window -t` | 17 | 11 | cs11 sc6 | area:Windows and panes | yes |  | athome:home/dot_local/bin/executable_tsess, container:list-keys, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+4) |
-| `send-keys` | 37 | 21 | cj6 cs6 sc19 sf6 | cmd:M1 | yes |  | canopy:tmux/conf.d/40-nav.conf, container:job, container:list-keys (+3) |
+| `select-window -t` | 17 | 11 | cs11 sc6 | area:Windows and panes | yes |  | container:list-keys, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:tmux-claude-session-manager/scripts/picker.sh (+4) |
+| `send-keys` | 37 | 21 | cj6 cs6 sc19 sf6 | cmd:M1 | yes |  | container:job, container:list-keys, plugin:tmux-yank/scripts/copy_line.sh (+3) |
 | `send-keys -F -X` | 2 | 2 | cs2 | area:Buffers and copy | yes |  | container:list-keys |
 | `send-keys -M` | 7 | 6 | cs7 | oos:Mouse argv forms |  |  | container:list-keys |
 | `send-keys -N` | 18 | 18 | cs18 | cmd:M1 | yes | `-N` | container:list-keys |
 | `send-keys -N -X` | 5 | 0 | cs4 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-yank/scripts/copy_line.sh |
 | `send-keys -X` | 182 | 164 | cj6 cs158 sc18 | area:Buffers and copy | yes |  | container:job, container:list-keys, plugin:tmux-fzf/scripts/copy-mode.sh (+2) |
 | `send-keys -l` | 6 | 6 | cs6 | cmd:M1 | yes |  | container:list-keys |
-| `send-keys -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-t` | canopy:plugins/tmux-resurrect/scripts/process_restore_helpers.sh |
+| `send-keys -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-t` | private |
 | `send-keys -t[=] -X` | 3 | 3 | cs3 | oos:Mouse argv forms |  |  | container:list-keys |
-| `send-prefix` | 3 | 3 | cs1 sc1 sf1 | cmd:M2 | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/keys.tsv, container:list-keys (+1) |
+| `send-prefix` | 3 | 3 | cs1 sc1 sf1 | cmd:M2 | yes |  | container:list-keys, plugin:tmux-sensible/sensible.tmux, private |
 | `set-buffer` | 10 | 9 | cs9 sc1 | area:Buffers and copy | yes |  | container:list-keys, plugin:tmux-yank/scripts/copy_pane_pwd.sh |
 | `set-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf/scripts/clipboard.sh |
-| `set-environment -g` | 7 | 0 | cj1 sc2 sf4 | area:Hooks and environment | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, athome:home/dot_config/tmux/tmux.conf.tmpl, container:job (+2) |
+| `set-environment -g` | 7 | 0 | cj1 sc2 sf4 | area:Hooks and environment | yes |  | container:job, plugin:opensessions/opensessions.tmux, plugin:tpm/tpm (+1) |
 | `set-environment -g -u` | 6 | 0 | cj1 sc5 | area:Hooks and environment | yes |  | container:job, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:opensessions/opensessions.tmux |
 | `set-environment -h` | 1 | 0 | sf1 | area:Hooks and environment | yes |  | plugin:tmux-which-key/plugin/init.tmux |
 | `set-environment -t` | 2 | 0 | cc2 | area:Hooks and environment | yes | `-t` | container:cli |
 | `set-hook -g` | 24 | 0 | cj12 cs10 sc2 | area:Hooks and environment | yes |  | container:job, container:show-hooks, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+1) |
 | `set-hook -g -u` | 3 | 0 | sc3 | area:Hooks and environment | yes |  | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `set-option -F -g` | 5 | 0 | sf5 | area:Options by tmux name | yes |  | plugin:tmux-which-key/plugin/init.tmux |
-| `set-option -a -g` | 2 | 0 | sf2 | area:Options by tmux name | yes |  | canopy:tmux/conf.d/00-core.conf |
-| `set-option -a -s` | 4 | 0 | sf4 | area:Options by tmux name | yes |  | canopy:tmux/conf.d/00-core.conf |
-| `set-option -g` | 133 | 0 | cj15 cp8 sc28 sf82 | area:Options by tmux name | yes |  | athome:home/dot_config/canopy/user.conf.tmpl, athome:home/dot_config/themes/executable_apply-tmux.sh, athome:home/dot_config/tmux/executable_wk-keys-fix.sh (+11) |
-| `set-option -g -q` | 21 | 0 | cc2 cj10 sc9 | area:Options by tmux name | yes |  | canopy:plugins/tmux-continuum/scripts/helpers.sh, canopy:plugins/tmux-resurrect/resurrect.tmux, canopy:plugins/tmux-resurrect/scripts/check_tmux_version.sh (+7) |
+| `set-option -a -g` | 2 | 0 | sf2 | area:Options by tmux name | yes |  | private |
+| `set-option -a -s` | 4 | 0 | sf4 | area:Options by tmux name | yes |  | private |
+| `set-option -g` | 133 | 0 | cj15 cp8 sc28 sf82 | area:Options by tmux name | yes |  | container:job, container:pane, plugin:tmux-claude-session-manager/scripts/list.sh (+4) |
+| `set-option -g -q` | 21 | 0 | cc2 cj10 sc9 | area:Options by tmux name | yes |  | container:cli, container:job, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+4) |
 | `set-option -g -u` | 2 | 0 | sc2 | area:Options by tmux name | yes |  | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `set-option -p` | 1 | 0 | sc1 | area:Options by tmux name | yes |  | nvim:snacks.nvim/lua/snacks/image/terminal.lua |
-| `set-option -p -t` | 16 | 0 | cp7 sc9 | area:Options by tmux name | yes |  | canopy:bin/canopy-agent, container:pane, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) |
+| `set-option -p -t` | 16 | 0 | cp7 sc9 | area:Options by tmux name | yes |  | container:pane, manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it), private |
 | `set-option -s` | 2 | 0 | sc2 | area:Options by tmux name | yes |  | plugin:tmux-sensible/sensible.tmux |
-| `set-option -t` | 4 | 0 | cj2 sc2 | area:Options by tmux name | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, plugin:tmux-claude-session-manager/scripts/launch.sh |
-| `set-option -t -u` | 4 | 0 | cj3 sc1 | area:Options by tmux name | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job |
-| `set-window-option -g` | 6 | 0 | cj1 sc1 sf4 | area:Options by tmux name | **no** |  | athome:home/dot_config/canopy/user.conf.tmpl, canopy:tmux/conf.d/00-core.conf, container:job (+1) |
-| `set-window-option -t` | 4 | 0 | cc1 sc3 | area:Options by tmux name | **no** |  | athome:home/dot_local/bin/executable_cockpit, container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
+| `set-option -t` | 4 | 0 | cj2 sc2 | area:Options by tmux name | yes |  | container:job, plugin:tmux-claude-session-manager/scripts/launch.sh, private |
+| `set-option -t -u` | 4 | 0 | cj3 sc1 | area:Options by tmux name | yes |  | container:job, private |
+| `set-window-option -g` | 6 | 0 | cj1 sc1 sf4 | area:Options by tmux name | **no** |  | container:job, plugin:tmux-sensible/sensible.tmux, private |
+| `set-window-option -t` | 4 | 0 | cc1 sc3 | area:Options by tmux name | **no** |  | container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, private |
 | `show-buffer -b` | 1 | 0 | sc1 | area:Buffers and copy | yes |  | plugin:tmux-fzf/scripts/clipboard.sh |
 | `show-environment -g` | 15 | 0 | cj6 cp1 sc8 | area:Hooks and environment | yes |  | container:job, container:pane, plugin:opensessions/apps/tui/scripts/sessionizer.sh (+4) |
 | `show-messages` | 1 | 1 | cs1 | area:Sessions and clients | yes |  | container:list-keys |
-| `show-messages -J -T` | 2 | 0 | cp1 sc1 | area:Sessions and clients | yes |  | athome:home/dot_local/bin/executable_theme, container:pane |
-| `show-options -g` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | athome:home/dot_config/tmux/executable_net.sh, athome:home/dot_config/tmux/executable_wk-keys-fix.sh, nvim:snacks.nvim/lua/snacks/image/terminal.lua |
+| `show-messages -J -T` | 2 | 0 | cp1 sc1 | area:Sessions and clients | yes |  | container:pane, private |
+| `show-options -g` | 3 | 0 | sc3 | area:Listing and inspection | yes |  | nvim:snacks.nvim/lua/snacks/image/terminal.lua, private |
 | `show-options -g -q` | 10 | 0 | cj9 sc1 | area:Listing and inspection | yes |  | container:job, plugin:vim-tmux-navigator/vim-tmux-navigator.tmux |
-| `show-options -g -q -v` | 142 | 0 | cc9 cj101 cp6 sc26 | area:Listing and inspection | yes |  | canopy:bin/canopy-reboot-check, canopy:lib/tmux.sh, canopy:plugins/strategies/canopy_save_command.sh (+25) |
-| `show-options -g -v` | 22 | 0 | cc5 cj10 cp1 sc6 | area:Listing and inspection | yes |  | athome:home/dot_config/tmux/executable_battery.sh, athome:home/dot_config/tmux/executable_wk-keys-fix.sh, canopy:bin/canopy-doctor (+5) |
+| `show-options -g -q -v` | 142 | 0 | cc9 cj101 cp6 sc26 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+20) |
+| `show-options -g -v` | 22 | 0 | cc5 cj10 cp1 sc6 | area:Listing and inspection | yes |  | container:cli, container:job, container:pane (+2) |
 | `show-options -g -v -w` | 1 | 0 | sc1 | area:Listing and inspection | yes | `-w` | plugin:tmux-yank/scripts/copy_line.sh |
 | `show-options -g -w` | 1 | 0 | sc1 | area:Listing and inspection | yes | `-w` | plugin:tpm/scripts/helpers/tmux_echo_functions.sh |
 | `show-options -p` | 4 | 0 | cj2 sc2 | area:Listing and inspection | yes |  | container:job, plugin:tmux-fzf/scripts/.fzf-tmux |
 | `show-options -q -t -v` | 1 | 0 | sc1 | area:Listing and inspection | yes |  | plugin:tmux-claude-session-manager/scripts/picker.sh |
 | `show-options -s -v` | 3 | 0 | cj2 sc1 | area:Listing and inspection | yes | `-s` | container:job, plugin:tmux-sensible/sensible.tmux |
 | `show-window-options` | 2 | 0 | sc2 | area:Listing and inspection | **no** |  | plugin:tmux-fzf/scripts/.fzf-tmux |
-| `show-window-options -t -v` | 9 | 0 | cc4 cj4 sc1 | area:Listing and inspection | **no** |  | canopy:plugins/tmux-resurrect/scripts/save.sh, container:cli, container:job |
-| `source-file` | 10 | 3 | cj1 cp1 cs1 sc4 sf3 | cmd:M3 | yes |  | athome:home/.chezmoiscripts/run_onchange_18-install-canopy.sh.tmpl, canopy:lib/tmux.sh, canopy:tmux/keys.tsv (+8) |
-| `source-file -q` | 5 | 0 | sf5 | cmd:M3 | yes | `-q` | athome:home/dot_config/tmux/tmux.conf.tmpl, canopy:tmux/tmux.conf |
+| `show-window-options -t -v` | 9 | 0 | cc4 cj4 sc1 | area:Listing and inspection | **no** |  | container:cli, container:job, private |
+| `source-file` | 10 | 3 | cj1 cp1 cs1 sc4 sf3 | cmd:M3 | yes |  | container:job, container:list-keys, container:pane (+5) |
+| `source-file -q` | 5 | 0 | sf5 | cmd:M3 | yes | `-q` | private |
 | `split-window` | 1 | 1 | cs1 | cmd:M1 | yes |  | container:list-keys |
 | `split-window -b -c -l -v` | 4 | 0 | sc4 | cmd:M1 | yes | `-b` | plugin:tmux-fzf/scripts/process.sh |
 | `split-window -b -f -F -h -l -P -t` | 2 | 0 | cc1 sc1 | cmd:M1 | yes | `-b`, `-f`, `-F`, `-P` | container:cli, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `split-window -b -l -v` | 2 | 0 | sc2 | cmd:M1 | yes | `-b` | plugin:tmux-fzf/scripts/session.sh, plugin:tmux-fzf/scripts/window.sh |
 | `split-window -c` | 1 | 0 | sc1 | cmd:M1 | yes |  | plugin:tmux-fzf/scripts/.fzf-tmux |
 | `split-window -c -d -F -P -t` | 1 | 0 | cc1 | cmd:M1 | yes | `-d`, `-F`, `-P` | container:cli |
-| `split-window -c -h` | 4 | 2 | cs2 sf2 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys |
-| `split-window -c -t` | 2 | 0 | sc2 | cmd:M1 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh |
-| `split-window -c -v` | 4 | 2 | cs2 sf2 | cmd:M1 | yes |  | canopy:tmux/keys.tsv, container:list-keys |
+| `split-window -c -h` | 4 | 2 | cs2 sf2 | cmd:M1 | yes |  | container:list-keys, private |
+| `split-window -c -t` | 2 | 0 | sc2 | cmd:M1 | yes |  | private |
+| `split-window -c -v` | 4 | 2 | cs2 sf2 | cmd:M1 | yes |  | container:list-keys, private |
 | `split-window -d -F -h -l -P -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-d`, `-F`, `-P` | manual:claude-code/TmuxBackend (agent teams, as tuios's TestClaudeCodeTeammateSequence pins it) |
 | `split-window -f -F -h -l -P -t` | 1 | 0 | sc1 | cmd:M1 | yes | `-f`, `-F`, `-P` | manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs |
 | `split-window -h` | 4 | 4 | cs4 | cmd:M1 | yes |  | container:list-keys |
 | `split-window -v` | 3 | 3 | cs3 | cmd:M1 | yes |  | container:list-keys |
-| `start-server` | 5 | 0 | cj2 sc3 | area:Sessions and clients | yes |  | athome:home/.chezmoiscripts/run_onchange_after_14-install-tmux-plugins.sh.tmpl, container:job, plugin:tpm/scripts/helpers/plugin_functions.sh |
+| `start-server` | 5 | 0 | cj2 sc3 | area:Sessions and clients | yes |  | container:job, plugin:tpm/scripts/helpers/plugin_functions.sh, private |
 | `suspend-client` | 1 | 1 | cs1 | area:Sessions and clients | yes |  | container:list-keys |
 | `swap-pane` | 3 | 3 | cs3 | area:Windows and panes | yes |  | container:list-keys |
 | `swap-pane -D` | 5 | 4 | cs4 sc1 | area:Windows and panes | yes |  | container:list-keys, plugin:tmux-fzf/scripts/.fzf-tmux |
@@ -938,18 +833,18 @@ One row per distinct form. *Lines* counts corpus lines holding it; *stored* coun
 | `swap-window -t` | 7 | 7 | cs7 | area:Windows and panes | yes |  | container:list-keys |
 | `switch-client -T` | 8 | 6 | cj3 cs2 sc3 | area:Sessions and clients | yes |  | container:job, container:list-keys, plugin:opensessions/integrations/tmux-plugin/scripts/even-horizontal.sh (+4) |
 | `switch-client -c -t` | 6 | 0 | cc1 cj1 sc4 | area:Sessions and clients | yes |  | container:cli, container:job, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs (+2) |
-| `switch-client -l` | 2 | 2 | cs1 sf1 | cmd:M2 | yes |  | canopy:tmux/keys.tsv, container:list-keys |
-| `switch-client -n` | 5 | 4 | cs3 sc1 sf1 | cmd:M2 | yes |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, canopy:tmux/keys.tsv, container:list-keys |
-| `switch-client -p` | 4 | 4 | cs3 sf1 | cmd:M2 | yes |  | canopy:tmux/keys.tsv, container:list-keys |
-| `switch-client -t` | 19 | 0 | cj6 sc13 | cmd:M2 | yes | `-t` | athome:home/dot_local/bin/executable_tsess, canopy:plugins/tmux-resurrect/scripts/process_restore_helpers.sh, canopy:plugins/tmux-resurrect/scripts/restore.sh (+8) |
-| `switch-client -t[=]` | 2 | 2 | cs1 sf1 | oos:Mouse argv forms |  |  | athome:home/dot_config/canopy/user.conf.tmpl, container:list-keys |
-| `tmux (bare)` | 1 | 0 | sc1 | area:Invocation |  |  | canopy:bin/canopy-reboot-check, nvim:snacks.nvim/lua/snacks/image/terminal.lua, nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+8) |
-| `tmux -L` | 4 | 0 | cp2 sc2 | area:Invocation |  |  | canopy:lib/tmux.sh, container:pane |
-| `tmux -L -f` | 2 | 0 | cp1 sc1 | area:Invocation |  |  | canopy:lib/tmux.sh, container:pane |
-| `tmux -S` | 27 | 0 | cj6 sc21 | area:Invocation |  |  | canopy:plugins/tmux-resurrect/scripts/restore.sh, container:job, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim (+1) |
-| `tmux -V` | 4 | 0 | cc1 cj1 cp1 sc1 | area:Invocation |  |  | canopy:bin/canopy-caps, canopy:bin/canopy-doctor, canopy:lib/tmux.sh (+10) |
+| `switch-client -l` | 2 | 2 | cs1 sf1 | cmd:M2 | yes |  | container:list-keys, private |
+| `switch-client -n` | 5 | 4 | cs3 sc1 sf1 | cmd:M2 | yes |  | container:list-keys, private |
+| `switch-client -p` | 4 | 4 | cs3 sf1 | cmd:M2 | yes |  | container:list-keys, private |
+| `switch-client -t` | 19 | 0 | cj6 sc13 | cmd:M2 | yes | `-t` | container:job, manual:plugin:opensessions/packages/runtime-rs/src/tmux_provider.rs, plugin:opensessions/apps/tui/scripts/sessionizer.sh (+6) |
+| `switch-client -t[=]` | 2 | 2 | cs1 sf1 | oos:Mouse argv forms |  |  | container:list-keys, private |
+| `tmux (bare)` | 1 | 0 | sc1 | area:Invocation |  |  | nvim:snacks.nvim/lua/snacks/image/terminal.lua, nvim:vim-tmux-navigator/plugin/tmux_navigator.vim, plugin:opensessions/apps/tui-rs/src/main.rs (+8) |
+| `tmux -L` | 4 | 0 | cp2 sc2 | area:Invocation |  |  | container:pane, private |
+| `tmux -L -f` | 2 | 0 | cp1 sc1 | area:Invocation |  |  | container:pane, private |
+| `tmux -S` | 27 | 0 | cj6 sc21 | area:Invocation |  |  | container:job, manual:nvim:vim-tmux-navigator/plugin/tmux_navigator.vim, plugin:opensessions/packages/runtime-rs/src/tmux_scripting.rs (+1) |
+| `tmux -V` | 4 | 0 | cc1 cj1 cp1 sc1 | area:Invocation |  |  | container:cli, container:job, container:pane (+6) |
 | `tmux -c` | 1 | 0 | sc1 | area:Invocation |  | `-c` | plugin:tmux-fzf/scripts/menu.sh |
-| `unbind-key` | 6 | 0 | sc5 sf1 | cmd:M3 | yes |  | canopy:tmux/conf.d/00-core.conf, plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:tmux-sensible/sensible.tmux |
+| `unbind-key` | 6 | 0 | sc5 sf1 | cmd:M3 | yes |  | plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh, plugin:tmux-sensible/sensible.tmux, private |
 | `unbind-key -T` | 5 | 0 | sc5 | cmd:M3 | yes | `-T` | plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh |
 | `unbind-key -n` | 2 | 0 | sc2 | cmd:M3 | yes | `-n` | plugin:opensessions/integrations/tmux-plugin/scripts/uninstall.sh |
 | `unlink-window -k -t` | 1 | 0 | sc1 | area:Windows and panes | yes |  | plugin:tmux-fzf/scripts/window.sh |
@@ -1011,7 +906,7 @@ Server, session, window and pane options the corpus sets or reads (`set`, `setw`
 | `window-status-separator` | 2 | yes |
 | `window-style` | 1 | no |
 
-User options, grouped by prefix: `@batt*` (1), `@canopy_*` (15), `@claude_*` (15), `@continuum-*` (14), `@copy_*` (3), `@custom_*` (1), `@fzf-*` (9), `@net*` (1), `@opensessions-*` (6), `@opensessions_*` (3), `@override_*` (1), `@pet*` (1), `@pill_*` (6), `@resurrect-*` (33), `@sessionx-*` (84), `@theme_*` (26), `@tmux-*` (5), `@tmux_*` (1), `@tpm-*` (3), `@tpm_*` (2), `@vim_*` (8), `@wk_*` (17).
+User options, grouped by prefix: `@batt*` (1), `@claude_*` (15), `@continuum-*` (14), `@copy_*` (3), `@custom_*` (1), `@fzf-*` (9), `@net*` (1), `@opensessions-*` (6), `@opensessions_*` (3), `@override_*` (1), `@pet*` (1), `@pill_*` (6), `@private_*` (15), `@resurrect-*` (33), `@sessionx-*` (84), `@theme_*` (26), `@tmux-*` (5), `@tmux_*` (1), `@tpm-*` (3), `@tpm_*` (2), `@vim_*` (8), `@wk_*` (17).
 
 ### Hooks
 

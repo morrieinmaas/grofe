@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # readme.sh: TE.3's alias-day run, the in-container half. The "Alias
-# day" steps, extracted from docs/alias-day.md and run as written, in a clean
+# day" steps, extracted from docs/archive/alias-day.md and run as written, in a clean
 # systemd container (tests/e2e/Containerfile.alias-day, a fresh one per
 # run). Run by scripts/release-gate.sh as the test user, never on a host.
 #
 # What runs: every fenced block between `<!-- alias-day: begin -->` and
-# `<!-- alias-day: end -->` in docs/alias-day.md, region by region, each with
+# `<!-- alias-day: end -->` in docs/archive/alias-day.md, region by region, each with
 # `bash -euxo pipefail` in the test user's home, on the PATH a login zsh
 # has (athome's ~/.zsh/path.zsh), so any failing command fails its step.
 # The steps the doc marks for the owner alone (step 1's athome edit and
@@ -41,7 +41,7 @@ awk -v dir="$OUT" '
 
 steps=("$OUT"/step-*.sh)
 if [ ! -e "${steps[0]}" ]; then
-  echo "FAIL no <!-- alias-day: begin --> region in docs/alias-day.md"
+  echo "FAIL no <!-- alias-day: begin --> region in docs/archive/alias-day.md"
   exit 1
 fi
 all="$(cat "${steps[@]}")"
