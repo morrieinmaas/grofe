@@ -303,6 +303,8 @@ pub struct State {
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
+    /// The resume binding sampling timer, while one runs (`resume::watch`).
+    pub(crate) resume_timer: Option<tokio::task::AbortHandle>,
     /// Restored panes whose process runs their saved resume, by pane and
     /// spawn generation (`restore`).
     pub(crate) from_resume: Vec<(crate::types::PaneId, u64)>,
@@ -707,6 +709,7 @@ async fn serve(
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        resume_timer: None,
         from_resume: Vec::new(),
         exit: false,
         exit_when_empty,
@@ -1446,6 +1449,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        resume_timer: None,
         from_resume: Vec::new(),
         exit: false,
         exit_when_empty: false,
