@@ -1,0 +1,23 @@
+# Rendered from grofe's packaging/aur/PKGBUILD.tmpl by packaging/render.sh.
+pkgname=grofe-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Terminal multiplexer for people who like tmux"
+arch=('x86_64' 'aarch64')
+url="https://github.com/termage/grofe"
+license=('Apache-2.0')
+provides=('grofe')
+conflicts=('grofe')
+options=('!debug')
+_base="https://github.com/termage/grofe/releases/download/v${pkgver}"
+source_x86_64=("${_base}/grofe-v${pkgver}-x86_64-unknown-linux-musl.tar.gz")
+source_aarch64=("${_base}/grofe-v${pkgver}-aarch64-unknown-linux-musl.tar.gz")
+sha256sums_x86_64=('@SHA256_X86_64_UNKNOWN_LINUX_MUSL@')
+sha256sums_aarch64=('@SHA256_AARCH64_UNKNOWN_LINUX_MUSL@')
+
+package() {
+  cd "grofe-v${pkgver}-${CARCH}-unknown-linux-musl"
+  install -Dm755 grofe "${pkgdir}/usr/bin/grofe"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/grofe/README.md"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/grofe/LICENSE"
+}

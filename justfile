@@ -44,3 +44,38 @@ ci *legs:
 # The release gate (TE.3); needs canopy and athome clones
 gate canopy athome:
     GROFE_E2E_CANOPY_REPO="{{ canopy }}" GROFE_E2E_ATHOME_REPO="{{ athome }}" scripts/release-gate.sh
+
+# Regenerate CHANGELOG.md, naming the unreleased changes <version> (git-cliff)
+changelog version:
+    git cliff --config cliff.toml v0.1.0..HEAD --tag "v{{ trim_start_match(version, "v") }}" -o CHANGELOG.md
+
+# Bump to <version>, regenerate the changelog, commit and tag locally (never pushes)
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v="{{ trim_start_match(version, "v") }}"
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "release: $v is not x.y.z" >&2; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { echo "release: the working tree is not clean" >&2; exit 1; }
+    ! git rev-parse -q --verify "refs/tags/v$v" >/dev/null || { echo "release: tag v$v exists" >&2; exit 1; }
+    awk -v v="$v" '!done && /^version = "/ { $0 = "version = \"" v "\""; done = 1 } 1' Cargo.toml >Cargo.toml.new
+    mv Cargo.toml.new Cargo.toml
+    cargo update --workspace --offline
+    just changelog "$v"
+    git add Cargo.toml Cargo.lock CHANGELOG.md
+    git commit -m "chore(release): v$v"
+    git tag -a "v$v" -m "grofe v$v"
+    echo "Tagged v$v. Publish it with: git push origin HEAD \"v$v\""
+
+# Build a .deb for a target triple into target/dist (cargo-deb)
+deb target="x86_64-unknown-linux-musl":
+    cargo build --release --locked --target {{ target }}
+    cargo deb --target {{ target }} --no-build -o target/dist/
+
+# Build a .rpm for a target triple into target/dist (cargo-generate-rpm)
+rpm target="x86_64-unknown-linux-musl":
+    cargo build --release --locked --target {{ target }}
+    cargo generate-rpm --target {{ target }} -o target/dist/
+
+# Render the Homebrew formula and AUR PKGBUILD for an existing release into target/pkg
+pkg-render version:
+    packaging/render.sh {{ version }} target/pkg

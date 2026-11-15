@@ -83,3 +83,20 @@ jobs:
       - name: Acceptance (macOS)
         if: runner.os == 'macOS'
         run: scripts/ci-macos.sh acceptance
+
+  # The crate as crates.io would get it: packaged from Cargo.toml's include
+  # list and built on its own.
+  package:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: scripts/ci-linux.sh toolchain
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run --locked
