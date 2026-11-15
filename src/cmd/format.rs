@@ -208,8 +208,9 @@ pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
 /// `display-message -a`: every variable `vars` answers as `name=value`
 /// lines, in the order tmux lists them (a name `vars` has no value for is
 /// left out, as tmux leaves out one whose callback has none).
-// ponytail: grofe answers about 115 of tmux's 195 table entries; the rest
-// are absent from the list rather than empty.
+// ponytail: grofe answers 124 of the 141 names tmux lists for a detached
+// session (`tests/tmux_parity.rs` pins the rest); a name it has no data for
+// is absent from the list rather than empty.
 pub fn all_variables(vars: &dyn FormatVars) -> String {
     let mut out = String::new();
     // A pane in a mode adds its own variables (grofe has a stub for some

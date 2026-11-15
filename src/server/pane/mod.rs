@@ -27,9 +27,10 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{self, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape as VteCursorShape, Processor, Rgb};
+use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
 use nix::libc;
-use nix::pty::{Winsize, openpty};
+use nix::pty::{OpenptyResult, Winsize, openpty};
 use nix::unistd::{AccessFlags, access};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
@@ -144,6 +145,9 @@ pub struct PaneSpawn {
     /// restore stagger); zero spawns it at once. Input sent meanwhile waits
     /// in the pty, and [`PaneHandle::started`] says when the child is up.
     pub delay: Duration,
+    /// The default foreground and background the pane answers OSC 10 and 11
+    /// with, known before the child can ask.
+    pub colours: (Option<Rgb>, Option<Rgb>),
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -626,7 +630,10 @@ impl PaneHandle {
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
         let images_on = Arc::new(AtomicBool::new(spec.images));
-        let default_colours = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
+        let default_colours = Arc::new([
+            AtomicU32::new(io::pack_colour(spec.colours.0)),
+            AtomicU32::new(io::pack_colour(spec.colours.1)),
+        ]);
         let sample = procinfo::Cache::default();
         let (input, input_rx) = InputQueue::new();
         let pipe = match over {
@@ -1347,6 +1354,32 @@ impl PaneHandle {
                 };
                 Some(u8::from(mouse_mode(mode) == want).to_string())
             }
+            // DECSCUSR as tmux reports it. `default` is the style nothing
+            // has set; alacritty cannot tell it from a steady block.
+            // ponytail: an explicit steady block (DECSCUSR 2) reads
+            // `default`; `cursor_colour` (OSC 12) is not tracked, `none`.
+            "cursor_shape" => {
+                let style = emu.term.cursor_style();
+                Some(
+                    match style.shape {
+                        VteCursorShape::Underline => "underline",
+                        VteCursorShape::Beam => "bar",
+                        _ if style.blinking => "block",
+                        _ => "default",
+                    }
+                    .to_string(),
+                )
+            }
+            "cursor_blinking" => Some(u8::from(emu.term.cursor_style().blinking).to_string()),
+            "cursor_colour" => Some("none".to_string()),
+            "cursor_very_visible" => Some("0".to_string()),
+            // The cursor the main screen saved on entering the alternate
+            // one; tmux's unset value (-1 as unsigned) outside it.
+            // ponytail: alacritty keeps the saved cursor private, so inside
+            // the alternate screen there is no answer.
+            "alternate_saved_x" | "alternate_saved_y" if !mode.contains(TermMode::ALT_SCREEN) => {
+                Some(u32::MAX.to_string())
+            }
             "mouse_utf8_flag" => flag(TermMode::UTF8_MOUSE),
             "mouse_sgr_flag" => flag(TermMode::SGR_MOUSE),
             _ => None,
@@ -1568,11 +1601,10 @@ type Pending = (tokio::process::Command, OwnedFd);
 fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(Spawned, Option<Pending>)> {
     let cmd = child_command(spec)?;
     let guard = spawn_lock();
-    let pty = openpty(&size.winsize(spec.cell_px), None)?;
+    let (pty, tty) = open_pty(&size.winsize(spec.cell_px))?;
     fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
     // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
     fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
-    let tty = nix::unistd::ttyname(&pty.slave).ok();
     let (held, child, pending) = if spec.delay.is_zero() {
         let child = exec_on(cmd, &pty.slave)?;
         let held = child.is_some().then_some(pty.slave);
@@ -1585,6 +1617,46 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(Spawned, Option<P
     let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
     fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
     Ok(((pty.master, held, child, tty), pending))
+}
+
+/// How many times [`open_pty`] opens a pty before its error stands.
+const PTY_TRIES: u32 = 10;
+
+/// A new pty and its slave's path (`None` if it has none). On macOS CI,
+/// while other ptys open and close, `openpty` has failed with ENXIO and a
+/// new slave has had no name yet (`ttyname` failed with ERANGE); both are
+/// transient, so both are retried, 20 ms apart, [`PTY_TRIES`] times in all.
+/// Tests open their client ptys with this too.
+pub fn open_pty(size: &Winsize) -> nix::Result<(OpenptyResult, Option<PathBuf>)> {
+    retry_pty(
+        || openpty(size, None),
+        |pty| nix::unistd::ttyname(&pty.slave),
+        PTY_TRIES,
+        Duration::from_millis(20),
+    )
+}
+
+/// [`open_pty`]'s retries, over any `open` and `name`.
+fn retry_pty<P>(
+    mut open: impl FnMut() -> nix::Result<P>,
+    name: impl Fn(&P) -> nix::Result<PathBuf>,
+    tries: u32,
+    pause: Duration,
+) -> nix::Result<(P, Option<PathBuf>)> {
+    for _ in 1..tries {
+        match open() {
+            Ok(pty) => match name(&pty) {
+                Err(Errno::ERANGE) => {}
+                path => return Ok((pty, path.ok())),
+            },
+            Err(Errno::ENXIO) => {}
+            Err(e) => return Err(e),
+        }
+        std::thread::sleep(pause);
+    }
+    let pty = open()?;
+    let path = name(&pty).ok();
+    Ok((pty, path))
 }
 
 /// The child's command for `spec`, not yet spawned.
@@ -1668,6 +1740,55 @@ fn start_delayed(cmd: tokio::process::Command, slave: &OwnedFd) -> Option<tokio:
 mod tests {
     use super::*;
 
+    /// `retry_pty` over scripted results: how many opens it made and what
+    /// it returned.
+    fn scripted(
+        opens: Vec<nix::Result<()>>,
+        names: Vec<nix::Result<PathBuf>>,
+    ) -> (usize, nix::Result<Option<PathBuf>>) {
+        let opens = std::cell::RefCell::new(opens.into_iter());
+        let names = std::cell::RefCell::new(names.into_iter());
+        let made = std::cell::Cell::new(0);
+        let got = retry_pty(
+            || {
+                made.set(made.get() + 1);
+                opens.borrow_mut().next().unwrap_or(Ok(()))
+            },
+            |_| {
+                names
+                    .borrow_mut()
+                    .next()
+                    .unwrap_or_else(|| Ok(PathBuf::from("/dev/ttys001")))
+            },
+            4,
+            Duration::ZERO,
+        );
+        (made.get(), got.map(|(_, path)| path))
+    }
+
+    #[test]
+    fn a_transient_pty_failure_is_retried_a_bounded_number_of_times() {
+        let tty = Some(PathBuf::from("/dev/ttys001"));
+        let enxio = || Err(Errno::ENXIO);
+        assert_eq!(
+            scripted(vec![enxio(), enxio()], vec![]),
+            (3, Ok(tty.clone()))
+        );
+        // A slave with no `/dev` node yet is opened again.
+        assert_eq!(
+            scripted(vec![], vec![Err(Errno::ERANGE)]),
+            (2, Ok(tty.clone()))
+        );
+        assert_eq!(scripted(vec![enxio(); 9], vec![]), (4, Err(Errno::ENXIO)));
+        assert_eq!(scripted(vec![], vec![Err(Errno::ERANGE); 9]), (4, Ok(None)));
+        // Anything else fails, or names nothing, at once.
+        assert_eq!(
+            scripted(vec![Err(Errno::EMFILE)], vec![]),
+            (1, Err(Errno::EMFILE))
+        );
+        assert_eq!(scripted(vec![], vec![Err(Errno::ENOTTY)]), (1, Ok(None)));
+    }
+
     fn spec_with_term(term: &'static str) -> PaneSpawn {
         PaneSpawn {
             id: PaneId(0),
@@ -1687,6 +1808,7 @@ mod tests {
             images: false,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
         }
     }
 
@@ -1933,6 +2055,43 @@ mod tests {
         assert_eq!(got, ["1", "0", "0", "0"]);
     }
 
+    /// The colours in the spawn answer an OSC 11 query the child sends at
+    /// once, with no `set_default_colours` after the spawn.
+    #[tokio::test]
+    async fn a_spawn_answers_osc_11_with_its_colours_from_the_start() {
+        let (tx, _rx) = mpsc::channel(64);
+        let spec = PaneSpawn {
+            colours: (
+                None,
+                Some(Rgb {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }),
+            ),
+            ..spec_for(&[
+                "sh",
+                "-c",
+                "stty raw -echo; printf '\\033]11;?\\033\\\\'; \
+                 dd bs=1 count=23 2>/dev/null | cat -v; exec sleep 100",
+            ])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        let mut got = String::new();
+        for _ in 0..500 {
+            got = handle.capture(&CaptureOpts {
+                start: None,
+                end: None,
+                escapes: false,
+            });
+            if got.contains("rgb:") && got.contains("5656") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(got.contains("rgb:1212/3434/5656"), "{got:?}");
+    }
+
     /// F1: a respawned pane keeps what it reported (OSC 7), as tmux's does,
     /// and the old process's output does not reach the new screen.
     #[tokio::test]
@@ -1979,6 +2138,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -2013,6 +2173,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -2042,6 +2203,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -2079,6 +2241,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             ..spec_for(&["sleep", "100"])
         };
         let new = PaneHandle::spawn_over(spec, tx, Arc::new(Notify::new()), &old).expect("respawn");

@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, wait_until};
+use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, try_wait_until};
 
 const WAIT: Duration = Duration::from_secs(10);
 const GEOM: &str = "#{pane_left},#{pane_top},#{pane_width}x#{pane_height}";
@@ -73,7 +73,7 @@ fn framed() -> TestServer {
 fn pty_size(srv: &TestServer, pane: &str) -> String {
     ok(srv, &["send-keys", "-t", pane, "clear; stty size", "Enter"]);
     let mut last = String::new();
-    let got = wait_until(
+    let got = try_wait_until(
         || {
             last = srv.capture(pane);
             last.lines().any(|l| {
@@ -96,7 +96,7 @@ fn pty_size(srv: &TestServer, pane: &str) -> String {
 
 fn wait_pty(srv: &TestServer, pane: &str, want: &str) {
     let mut last = String::new();
-    let got = wait_until(
+    let got = try_wait_until(
         || {
             last = pty_size(srv, pane);
             last == want
@@ -446,7 +446,7 @@ fn a_framed_layout_survives_a_restore() {
     let before = geometry(&srv, "f");
     assert_eq!(before[0], "2,2,44x21", "{before:?}");
     ok(&srv, &["kill-server"]);
-    wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
+    try_wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
     ok(&srv, &["start-server", "--restore"]);
     assert_eq!(geometry(&srv, "f"), before);
 }
@@ -469,7 +469,7 @@ fn a_restored_window_takes_its_frames_from_the_options() {
     let before = geometry(&srv, "f");
     assert_eq!(before[0], "3,3,35x20", "{before:?}");
     ok(&srv, &["kill-server"]);
-    wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
+    try_wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
     ok(&srv, &["start-server", "--restore"]);
     assert_eq!(ok(&srv, &["show", "-wv", "-t", "f", "pane-frames"]), "on\n");
     assert_eq!(geometry(&srv, "f"), before);

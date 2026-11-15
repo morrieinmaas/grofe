@@ -43,7 +43,7 @@ fn display(srv: &TestServer, target: &str, fmt: &str) -> String {
 }
 
 fn wait_display(srv: &TestServer, target: &str, fmt: &str, want: &str) {
-    if common::wait_until(|| display(srv, target, fmt) == want, WAIT).is_err() {
+    if common::try_wait_until(|| display(srv, target, fmt) == want, WAIT).is_err() {
         panic!(
             "{fmt} never became {want:?}: {:?}",
             display(srv, target, fmt)
@@ -381,7 +381,7 @@ fn pane_tty_is_the_panes_own_terminal() {
     let script = format!("printf '%s\\n' \"$(tty)\" > '{}'; sleep 30", file.display());
     srv.cmd(&["new-window", "-t", "alpha", "sh", "-c", &script])
         .expect("new-window");
-    common::wait_until(
+    common::try_wait_until(
         || std::fs::read_to_string(&file).is_ok_and(|s| s.ends_with('\n')),
         WAIT,
     )

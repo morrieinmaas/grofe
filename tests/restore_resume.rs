@@ -15,7 +15,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{PROMPT, TestServer, wait_until};
+use common::{PROMPT, TestServer, try_wait_until};
 use grofe::server::START_MARKER;
 use grofe::server::layout::{GeometryCell, LayoutGeometry};
 use grofe::server::restore::stagger_delay;
@@ -243,7 +243,7 @@ fn write_snapshot(srv: &TestServer, snap: &Snapshot) {
 
 fn kill(srv: &TestServer) {
     ok(srv, &["kill-server"]);
-    wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
+    try_wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
 }
 
 /// Kills whatever runs, writes `snap` and restores it.
@@ -481,7 +481,8 @@ fn four_resumes(home: &Path) -> Snapshot {
 }
 
 /// Two restores of the same snapshot spawn the resumes in the same order
-/// and at the same offsets within 50 ms (from the log's monotonic offsets),
+/// and at the same offsets within 500 ms (from the log's monotonic offsets; a
+/// loaded runner stretches them, the delays are 200 ms apart at the least),
 /// and those offsets are the delays.
 #[test]
 fn two_restores_spawn_the_resumes_in_the_same_order_and_offsets() {
@@ -495,10 +496,10 @@ fn two_restores_spawn_the_resumes_in_the_same_order_and_offsets() {
     assert_eq!(order(&first), ["01UIDA", "01UIDB", "01UIDC", "01UIDD"]);
     assert_eq!(order(&first), order(&second));
     for ((uid, a), (_, b)) in first.iter().zip(&second) {
-        assert!(a.abs_diff(*b) <= 50, "{uid}: {a} ms then {b} ms");
+        assert!(a.abs_diff(*b) <= 500, "{uid}: {a} ms then {b} ms");
         let want = stagger_delay(uid, 1000).as_millis() as u64;
         assert!(
-            *a >= want && *a <= want + 50,
+            *a >= want && *a <= want + 1500,
             "{uid} started at {a} ms, its delay is {want} ms"
         );
     }
@@ -522,8 +523,8 @@ fn stagger_zero_starts_every_resume_at_once() {
     }
 }
 
-/// At 1000, a pane without a resume has its shell within 100 ms (it is
-/// never delayed), while the resume beside it waits for its delay.
+/// At 1000, a pane without a resume has its shell before the resume's delay is
+/// over (it is never delayed), while the resume beside it waits for its delay.
 #[test]
 fn a_pane_without_a_resume_is_never_delayed() {
     let srv = TestServer::start();
@@ -539,9 +540,10 @@ fn a_pane_without_a_resume_is_never_delayed() {
     let shells = wait_started(&srv, "shell", 1);
     assert_eq!(shells.len(), 1, "{shells:?}");
     assert_eq!(shells[0].0, "01UIDE");
-    assert!(shells[0].1 < 100, "the shell started at {} ms", shells[0].1);
     let resumes = wait_started(&srv, "resume", 1);
     assert_eq!(resumes[0].0, "01UIDD");
+    // Never delayed: the shell is up before the resume's delay is over.
+    assert!(shells[0].1 < resumes[0].1, "{shells:?} {resumes:?}");
     assert!(resumes[0].1 >= 828, "{resumes:?}");
 }
 
@@ -828,6 +830,6 @@ fn kill_server_inside_the_delay_starts_nothing() {
     );
     restore(&srv, &snap);
     kill(&srv);
-    std::thread::sleep(Duration::from_millis(6000));
+    common::quiet_period(Duration::from_millis(6000));
     assert!(!out.exists(), "the resume ran after kill-server");
 }

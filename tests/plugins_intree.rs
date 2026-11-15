@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use common::{CMD_TIMEOUT, TestServer, run_bounded, wait_until};
+use common::{CMD_TIMEOUT, TestServer, run_bounded, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -79,7 +79,7 @@ fn a_split_and_a_select_pane_are_appended_in_order_within_a_second() {
     let log = srv.state_home.join("grofe").join("events.log");
     // Nothing is replayed, so poke the server until the plugin is listening.
     let mut n = 0;
-    wait_until(
+    try_wait_until(
         || {
             n += 1;
             let _ = srv.cmd(&["set-option", "-g", "@probe", &n.to_string()]);
@@ -93,7 +93,7 @@ fn a_split_and_a_select_pane_are_appended_in_order_within_a_second() {
 
     let _client = Harness::spawn_attach_with_env(srv.command(), "s", &[], 80, 24);
     let first = display(&srv, "s", "#{pane_id}");
-    wait_until(|| focus_panes(&log) == [first.clone()], WAIT).expect("attach focus event");
+    try_wait_until(|| focus_panes(&log) == [first.clone()], WAIT).expect("attach focus event");
 
     let start = Instant::now();
     srv.cmd(&["split-window", "-h", "-t", "s", "sleep 600"])
@@ -102,7 +102,7 @@ fn a_split_and_a_select_pane_are_appended_in_order_within_a_second() {
     assert_ne!(first, second, "the split took focus");
     srv.cmd(&["select-pane", "-t", &first])
         .expect("select-pane");
-    wait_until(|| focus_panes(&log).len() == 3, Duration::from_secs(1))
+    try_wait_until(|| focus_panes(&log).len() == 3, Duration::from_secs(1))
         .unwrap_or_else(|e| panic!("{e}: {:?}", events(&log)));
     assert!(start.elapsed() < Duration::from_secs(1) + Duration::from_millis(200));
     assert_eq!(focus_panes(&log), [first.clone(), second, first]);

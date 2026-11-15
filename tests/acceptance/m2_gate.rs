@@ -8,7 +8,7 @@ mod common;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -53,7 +53,7 @@ fn display_t(srv: &TestServer, target: &str, format: &str) -> String {
 }
 
 fn wait_display(srv: &TestServer, format: &str, want: &str) {
-    if let Err(e) = wait_until(|| display(srv, format) == want, Duration::from_secs(10)) {
+    if let Err(e) = try_wait_until(|| display(srv, format) == want, Duration::from_secs(10)) {
         panic!(
             "{format} never became {want:?} (is {:?}): {e}",
             display(srv, format)

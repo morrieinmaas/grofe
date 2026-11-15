@@ -25,7 +25,7 @@ use std::process::{Child, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nix::pty::{Winsize, openpty};
+use nix::pty::Winsize;
 
 use super::{Checkouts, script_tmux, tc13_cli, tripwire};
 use crate::replay::Cli;
@@ -79,7 +79,7 @@ impl Attached {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let pty = openpty(&size, None).map_err(|e| e.to_string())?;
+        let (pty, _) = grofe::server::pane::open_pty(&size).map_err(|e| e.to_string())?;
         let slave = |fd: &OwnedFd| Stdio::from(fd.try_clone().expect("dup pty slave"));
         let mut cmd = cli.command(&words(&["attach", "-t", session]));
         cmd.stdin(slave(&pty.slave))

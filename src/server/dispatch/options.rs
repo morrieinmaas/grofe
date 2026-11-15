@@ -1895,7 +1895,15 @@ pub fn run(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, S
             {
                 c.value = Some(expand_value(state, ctx, &c.target, value));
             }
-            set_option(&mut state.model, &mut state.events, ctx, c)
+            let inert = split_index(&c.name)
+                .ok()
+                .map(|(base, _)| base.to_string())
+                .filter(|base| has_no_effect(base) && !c.unset);
+            let result = set_option(&mut state.model, &mut state.events, ctx, c);
+            if let (Ok(_), Some(name)) = (&result, inert) {
+                clients::warn_inert_option(state, &name);
+            }
+            result
         }
         // A hook is an option in tmux: asked for by name, its elements.
         Command::ShowOptions(c)
@@ -4962,6 +4970,11 @@ impl FormatVars for FormatCtx<'_> {
             "loop_last_flag" => return Some("0".to_string()),
             "server_sessions" => return Some(m.sessions.len().to_string()),
             "uid" => return Some(nix::unistd::getuid().as_raw().to_string()),
+            "user" => {
+                let user = nix::unistd::User::from_uid(nix::unistd::getuid()).ok()??;
+                return Some(user.name);
+            }
+            "next_session_id" => return Some(m.next_session_id().to_string()),
             "tree_mode_format" => return Some(TREE_MODE_FORMAT.to_string()),
             "buffer_mode_format" => return Some(BUFFER_MODE_FORMAT.to_string()),
             "client_mode_format" => return Some(CLIENT_MODE_FORMAT.to_string()),
@@ -5024,6 +5037,9 @@ impl FormatVars for FormatCtx<'_> {
             "session_attached" => s.attached.to_string(),
             "session_path" => s.cwd.display().to_string(),
             "window_layout" => window_layout(w),
+            // ponytail: a zoomed window's visible layout is its one zoomed
+            // pane; not built, so no answer then.
+            "window_visible_layout" if !w.zoomed => window_layout(w),
             "window_raw_flags" => window_flags(m, s, w),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),
@@ -5195,6 +5211,18 @@ impl FormatVars for FormatCtx<'_> {
                 .into_iter()
                 .filter_map(|(c, on)| on.then_some(c))
                 .collect()
+            }
+            "session_activity_flag" | "session_bell_flag" | "session_silence_flag" => {
+                let any = s
+                    .windows
+                    .iter()
+                    .filter_map(|id| m.windows.get(id))
+                    .any(|w| match name {
+                        "session_activity_flag" => w.activity_flag,
+                        "session_bell_flag" => w.bell_flag,
+                        _ => w.silence_flag,
+                    });
+                flag(any)
             }
             // `idx` and its alerts, for each window that has any.
             "session_alerts" => s

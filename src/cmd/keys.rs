@@ -1,10 +1,6 @@
-//! Key-name table for `send-keys` and key bindings (spec §4.5).
-//!
-//! `key_bytes` never looks at `modes.kitty_flags`: grofe always encodes keys
-//! in the legacy (non-kitty) style, even for a pane that has requested the
-//! kitty keyboard protocol.
-//! ponytail: kitty keyboard protocol encoding is not implemented, so a pane
-//! that asks for it still gets legacy bytes.
+//! Key names for `send-keys` (spec §4.5). One encoder: the names and bytes are
+//! those of `server::input::{parse_key, encode}`, which the key bindings and
+//! typed keys use too; the unit tests pin what tmux 3.7b sends.
 
 use crate::types::InputModes;
 
@@ -18,233 +14,22 @@ pub fn is_key_name(name: &str) -> bool {
 }
 
 /// The bytes a physical key press sends into a pane, honouring `modes`
-/// where a key's encoding depends on it (the arrow keys: SS3 in
-/// `app_cursor` mode, CSI otherwise). `None` if `name` isn't a recognised
-/// key.
+/// where a key's encoding depends on it. `None` if `name` is not a key
+/// tmux's `send-keys` sends: it types the name as literal text instead
+/// (`F13`, `C-BSpace`, a mouse key). The names and bytes are those of the key
+/// bindings and typed keys (`input::parse_key`, `input::encode`).
 pub fn key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
-    classic_key_bytes(name, modes).or_else(|| extended_key_bytes(name, modes))
-}
-
-/// The keys the table below has no row for, read as the key bindings read a
-/// name (`input::parse_key`) and encoded as a typed key is: the keypad
-/// (`KP5`), C0 codes (`[LF]`), `UserN` (no pane gets one: no bytes, but a
-/// key all the same) and `0xNN`.
-fn extended_key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
     use crate::server::input::{KeyCode, encode, parse_key};
     let key = parse_key(name).ok()?;
-    let extended = name.starts_with("0x")
-        || matches!(
-            key.code,
-            KeyCode::Keypad(_) | KeyCode::Control(_) | KeyCode::User(_)
-        );
-    extended.then(|| encode(&key, modes))
-}
-
-fn classic_key_bytes(name: &str, modes: &InputModes) -> Option<Vec<u8>> {
-    let mut ctrl = false;
-    let mut meta = false;
-    let mut shift = false;
-    let mut rest = name;
-    loop {
-        if let Some(r) = rest.strip_prefix("C-") {
-            ctrl = true;
-            rest = r;
-        } else if let Some(r) = rest.strip_prefix("M-") {
-            meta = true;
-            rest = r;
-        } else if let Some(r) = rest.strip_prefix("S-") {
-            shift = true;
-            rest = r;
-        } else {
-            break;
-        }
-    }
-    if rest.is_empty() {
-        return None;
-    }
-
-    // xterm's modifier parameter, for the named keys with a defined
-    // modified CSI form: arrows, Home/End, Insert/Delete, PageUp/PageDown
-    // and F1-F12 (verified against `infocmp -1x xterm-256color`: kUP5,
-    // kLFT5, kHOM5, kEND5, kDC5, kNXT5, kPRV5, and the F-key modified
-    // forms). 2 Shift, 3 Meta, 5 Ctrl; combinations add (C-S = 6, C-M = 7,
-    // C-M-S = 8). This already encodes meta, so a hit here returns
-    // directly with no further ESC-prefixing.
-    let modifier = if shift || meta || ctrl {
-        Some(1 + shift as u8 + 2 * meta as u8 + 4 * ctrl as u8)
-    } else {
-        None
+    let bytes = encode(&key, modes);
+    // A key with no bytes still is a key when tmux sends it (`User1`, `Any`,
+    // `C-KP5`: nothing reaches the pane); the others it types as text.
+    let sends_nothing = match key.code {
+        KeyCode::User(_) | KeyCode::Keypad(_) => true,
+        KeyCode::Any => key.mods == Default::default(),
+        _ => false,
     };
-    if let Some(bytes) = modified_key_bytes(rest, modifier, modes) {
-        return Some(bytes);
-    }
-
-    let base = if ctrl {
-        if shift {
-            return None; // C-S- combos on a plain char aren't meaningful.
-        }
-        ctrl_byte(rest)?
-    } else if shift {
-        // tmux has no modified-CSI form for Tab: S-Tab collapses to plain
-        // Tab (verified on a live tmux 3.7b). `BTab`, the separate named
-        // back-tab key, is handled by named_or_char_bytes below.
-        if rest == "Tab" {
-            named_or_char_bytes(rest)?
-        } else {
-            return None; // S- is only supported for the modifier-aware keys above.
-        }
-    } else {
-        named_or_char_bytes(rest)?
-    };
-
-    Some(if meta {
-        let mut v = Vec::with_capacity(base.len() + 1);
-        v.push(0x1b);
-        v.extend(base);
-        v
-    } else {
-        base
-    })
-}
-
-/// The named keys with a modifier-aware xterm CSI form. `modifier` is
-/// `None` for the unmodified key, which keeps its existing encoding
-/// (matching screen-256color: SS3 for arrows in `app_cursor` mode, CSI
-/// otherwise; vt220 tilde forms for the rest), or `Some(n)` for xterm's
-/// modifier parameter (see [`key_bytes`]). `None` return means `rest`
-/// isn't one of these keys.
-fn modified_key_bytes(rest: &str, modifier: Option<u8>, modes: &InputModes) -> Option<Vec<u8>> {
-    if let Some(letter) = arrow_letter(rest) {
-        return Some(match modifier {
-            Some(m) => format!("\x1b[1;{m}{letter}").into_bytes(),
-            None if modes.app_cursor => format!("\x1bO{letter}").into_bytes(),
-            None => format!("\x1b[{letter}").into_bytes(),
-        });
-    }
-    if let Some(letter) = f1_to_f4_letter(rest) {
-        return Some(match modifier {
-            Some(m) => format!("\x1b[1;{m}{letter}").into_bytes(),
-            None => format!("\x1bO{letter}").into_bytes(),
-        });
-    }
-    if rest == "Home" {
-        return Some(match modifier {
-            Some(m) => format!("\x1b[1;{m}H").into_bytes(),
-            None => b"\x1b[1~".to_vec(),
-        });
-    }
-    if rest == "End" {
-        return Some(match modifier {
-            Some(m) => format!("\x1b[1;{m}F").into_bytes(),
-            None => b"\x1b[4~".to_vec(),
-        });
-    }
-    if let Some(num) = tilde_num(rest) {
-        return Some(match modifier {
-            Some(m) => format!("\x1b[{num};{m}~").into_bytes(),
-            None => format!("\x1b[{num}~").into_bytes(),
-        });
-    }
-    None
-}
-
-/// `Up`/`Down`/`Left`/`Right`'s CSI/SS3 final letter.
-fn arrow_letter(rest: &str) -> Option<char> {
-    match rest {
-        "Up" => Some('A'),
-        "Down" => Some('B'),
-        "Right" => Some('C'),
-        "Left" => Some('D'),
-        _ => None,
-    }
-}
-
-/// `F1`-`F4`'s SS3/modified-CSI final letter (`F5`-`F12` use the tilde
-/// form instead, via [`tilde_num`]).
-fn f1_to_f4_letter(rest: &str) -> Option<char> {
-    match rest {
-        "F1" => Some('P'),
-        "F2" => Some('Q'),
-        "F3" => Some('R'),
-        "F4" => Some('S'),
-        _ => None,
-    }
-}
-
-/// The leading number in the vt220 tilde form (`\x1b[<num>~`, or
-/// `\x1b[<num>;<mod>~` when modified), shared by Insert/Delete/
-/// PageUp/PageDown and F5-F12.
-fn tilde_num(rest: &str) -> Option<u16> {
-    match rest {
-        "Insert" => Some(2),
-        "Delete" => Some(3),
-        "PageUp" | "PPage" => Some(5),
-        "PageDown" | "NPage" => Some(6),
-        "F5" => Some(15),
-        "F6" => Some(17),
-        "F7" => Some(18),
-        "F8" => Some(19),
-        "F9" => Some(20),
-        "F10" => Some(21),
-        "F11" => Some(23),
-        "F12" => Some(24),
-        _ => None,
-    }
-}
-
-/// `C-<x>`: the control byte for a single ASCII letter, one of the handful
-/// of punctuation characters with a defined control code (`@ [ \ ] ^ _`,
-/// `@` giving NUL, same as `C-Space`'s own special case below), or the
-/// named `Space` key. `None` for anything else (multi-character, or a
-/// character with no control form).
-fn ctrl_byte(rest: &str) -> Option<Vec<u8>> {
-    // C-Space: no defined control code for a plain space, but tmux sends
-    // NUL, same as its C-@ alias (verified on a live tmux 3.7b).
-    if rest == "Space" {
-        return Some(vec![0]);
-    }
-    let mut chars = rest.chars();
-    let c = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    if c.is_ascii_alphabetic() {
-        return Some(vec![(c.to_ascii_uppercase() as u8) & 0x1f]);
-    }
-    match c {
-        '@' | '[' | '\\' | ']' | '^' | '_' => Some(vec![(c as u8) & 0x1f]),
-        _ => None,
-    }
-}
-
-/// Everything `key_bytes` knows besides the modifier-aware named keys
-/// (handled by [`modified_key_bytes`]): `Enter`, `Tab`, `BSpace`,
-/// `Escape`, `Space`, and a single printable character sent as itself.
-fn named_or_char_bytes(rest: &str) -> Option<Vec<u8>> {
-    let named: &[u8] = match rest {
-        "Enter" => b"\r",
-        "Tab" => b"\t",
-        // Back-tab, tmux's own named key for Shift-Tab (`kcbt` in
-        // `infocmp -1x xterm-256color`; verified on a live tmux 3.7b).
-        "BTab" => b"\x1b[Z",
-        "BSpace" => b"\x7f",
-        "Escape" => b"\x1b",
-        "Space" => b" ",
-        _ => return single_char_bytes(rest),
-    };
-    Some(named.to_vec())
-}
-
-/// A single printable character sent as its own UTF-8 bytes: `send-keys
-/// a` is equivalent to typing the `a` key.
-fn single_char_bytes(rest: &str) -> Option<Vec<u8>> {
-    let mut chars = rest.chars();
-    let c = chars.next()?;
-    if chars.next().is_some() || c.is_control() {
-        return None;
-    }
-    let mut buf = [0u8; 4];
-    Some(c.encode_utf8(&mut buf).as_bytes().to_vec())
+    (!bytes.is_empty() || sends_nothing).then_some(bytes)
 }
 
 #[cfg(test)]
@@ -306,12 +91,6 @@ mod tests {
             key_bytes("S-Left", &modes(false)),
             Some(b"\x1b[1;2D".to_vec())
         );
-    }
-
-    #[test]
-    fn shift_is_not_supported_outside_arrows() {
-        assert_eq!(key_bytes("S-a", &modes(false)), None);
-        assert_eq!(key_bytes("S-Enter", &modes(false)), None);
     }
 
     #[test]
@@ -383,11 +162,6 @@ mod tests {
     fn ctrl_punctuation() {
         assert_eq!(key_bytes("C-[", &modes(false)), Some(vec![0x1b]));
         assert_eq!(key_bytes("C-_", &modes(false)), Some(vec![0x1f]));
-    }
-
-    #[test]
-    fn ctrl_on_multi_char_is_none() {
-        assert_eq!(key_bytes("C-Enter", &modes(false)), None);
     }
 
     #[test]
@@ -501,5 +275,120 @@ mod tests {
         );
         assert_eq!(key_bytes("F1", &modes(false)), Some(b"\x1bOP".to_vec()));
         assert_eq!(key_bytes("F5", &modes(false)), Some(b"\x1b[15~".to_vec()));
+    }
+
+    /// What tmux 3.7b's `send-keys` put into a raw pty pane (`od -tx1`), on
+    /// a private `-L` server with `-f /dev/null`. `None` is a name tmux
+    /// types as literal text instead of sending a key.
+    #[test]
+    fn matches_real_tmux_bytes() {
+        let cases: &[(&str, Option<&[u8]>)] = &[
+            ("C-Enter", Some(b"\r")),
+            ("S-Enter", Some(b"\r")),
+            ("C-S-Enter", Some(b"\r")),
+            ("M-C-Enter", Some(b"\x1b\r")),
+            ("M-Enter", Some(b"\x1b\r")),
+            ("S-a", Some(b"a")),
+            ("s-a", Some(b"a")),
+            ("M-S-a", Some(b"\x1ba")),
+            ("C-S-a", Some(b"\x01")),
+            ("C-1", Some(b"1")),
+            ("S-1", Some(b"1")),
+            ("S-!", Some(b"!")),
+            ("C-2", Some(&[0])),
+            ("C-8", Some(&[0x7f])),
+            ("C-/", Some(&[0x1f])),
+            ("C-?", Some(&[0x7f])),
+            ("C-~", Some(&[0x1e])),
+            ("C-%", None),
+            ("C-#", None),
+            ("C-*", None),
+            ("C-!", Some(b"1")),
+            ("C-:", Some(b";")),
+            ("C-{", Some(&[0x1b])),
+            ("C-|", Some(&[0x1c])),
+            ("C--", Some(&[0x1f])),
+            ("C-`", Some(&[0])),
+            ("C-3", Some(&[0x1b])),
+            ("C-M-1", Some(b"\x1b1")),
+            ("C-0x41", None),
+            ("C-\u{e9}", Some("\u{e9}".as_bytes())),
+            ("M-\u{e9}", Some(b"\x1b\xc3\xa9")),
+            ("F13", None),
+            ("M-F13", None),
+            ("C-F13", None),
+            ("C-BSpace", None),
+            ("C-Escape", None),
+            ("C-Any", None),
+            ("MouseDown1Pane", None),
+            ("WheelUpPane", None),
+            ("S-BSpace", Some(&[0x7f])),
+            ("M-BSpace", Some(b"\x1b\x7f")),
+            ("M-Escape", Some(b"\x1b\x1b")),
+            ("S-Escape", Some(b"\x1b")),
+            ("S-Space", Some(b" ")),
+            ("M-Space", Some(b"\x1b ")),
+            ("C-Space", Some(&[0])),
+            ("C-Tab", Some(b"\t")),
+            ("M-Tab", Some(b"\x1b\t")),
+            ("M-S-Tab", Some(b"\x1b\t")),
+            ("S-Tab", Some(b"\t")),
+            ("M-BTab", Some(b"\x1b[Z")),
+            ("C-BTab", Some(b"\x1b[Z")),
+            ("C-M-a", Some(b"\x1b\x01")),
+            ("KP5", Some(b"5")),
+            ("KPEnter", Some(b"\n")),
+            ("KP+", Some(b"+")),
+            ("C-KP5", Some(b"")),
+            ("S-KP5", Some(b"")),
+            ("C-KPEnter", Some(b"")),
+            ("C-KP+", Some(b"")),
+            ("M-KP5", Some(b"\x1b5")),
+            ("User1", Some(b"")),
+            ("M-User1", Some(b"")),
+            ("Any", Some(b"")),
+            ("[LF]", Some(b"\n")),
+            ("S-[LF]", Some(b"\n")),
+            ("C-[LF]", Some(b"\n")),
+            ("M-[LF]", Some(b"\x1b\n")),
+            ("0x41", Some(b"A")),
+            ("0x1", Some(&[1])),
+            ("0x7f", Some(&[0x7f])),
+            ("0x100", Some(b"\xc4\x80")),
+            ("^a", Some(&[1])),
+            ("^[", Some(&[0x1b])),
+            ("c-a", Some(&[1])),
+            ("m-a", Some(b"\x1ba")),
+            ("f1", Some(b"\x1bOP")),
+            ("enter", Some(b"\r")),
+            ("S-F1", Some(b"\x1b[1;2P")),
+            ("M-F5", Some(b"\x1b[15;3~")),
+            ("F12", Some(b"\x1b[24~")),
+            ("M-C-Up", Some(b"\x1b[1;7A")),
+            ("C-S-Up", Some(b"\x1b[1;6A")),
+            ("M-Up", Some(b"\x1b[1;3A")),
+            ("S-Home", Some(b"\x1b[1;2H")),
+            ("S-End", Some(b"\x1b[1;2F")),
+            ("C-Home", Some(b"\x1b[1;5H")),
+            ("C-IC", Some(b"\x1b[2;5~")),
+            ("S-IC", Some(b"\x1b[2;2~")),
+            ("C-PgUp", Some(b"\x1b[5;5~")),
+            ("S-NPage", Some(b"\x1b[6;2~")),
+        ];
+        for (name, want) in cases {
+            assert_eq!(
+                key_bytes(name, &modes(false)),
+                want.map(<[u8]>::to_vec),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_key_name_follows_the_same_split() {
+        assert!(is_key_name("C-Enter"));
+        assert!(is_key_name("User1"));
+        assert!(!is_key_name("F13"));
+        assert!(!is_key_name("C-BSpace"));
     }
 }

@@ -10,7 +10,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -92,14 +92,15 @@ fn the_zoom_button_in_a_pane_title_zooms_the_pane() {
     assert_eq!(zoomed(&srv), "0");
     let x = col_of(&mut a, 0, "[z]");
     click(&mut a, x + 1, 1);
-    let got = wait_until(|| zoomed(&srv) == "1", WAIT);
+    let got = try_wait_until(|| zoomed(&srv) == "1", WAIT);
     assert!(got.is_ok(), "zoomed: {}", zoomed(&srv));
     // The zoomed pane's title now offers `[u]`, to unzoom.
     a.wait_for("[u]");
     let x = col_of(&mut a, 0, "[u]");
+    // Past the click timeout, so the press is a plain press.
     std::thread::sleep(Duration::from_millis(400));
     click(&mut a, x + 1, 1);
-    let got = wait_until(|| zoomed(&srv) == "0", WAIT);
+    let got = try_wait_until(|| zoomed(&srv) == "0", WAIT);
     assert!(got.is_ok(), "zoomed: {}", zoomed(&srv));
 }
 
@@ -127,7 +128,7 @@ fn the_close_buttons_menu_kills_the_pane_it_was_clicked_on() {
     click(&mut a, x + 1, 1);
     a.wait_for("Kill pane 1?");
     a.send("y");
-    let got = wait_until(
+    let got = try_wait_until(
         || {
             srv.cmd(&["list-panes", "-t", "main", "-F", "#{pane_id}"])
                 .unwrap_or_default()
