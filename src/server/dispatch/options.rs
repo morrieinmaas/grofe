@@ -143,6 +143,36 @@ const GROFE_ONLY: &[&str] = &[
     "prompt-position",
 ];
 
+/// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
+/// `BUILTINS` rows) and treated the same: tmux's CLI calls them invalid.
+const GROFE_ONLY_LISTS: &[&str] = &["copy-hint-patterns"];
+
+/// `copy-hint-patterns`' default: regular expressions, tried in order, for
+/// copy mode's hints (`copy-mode -h`). A pattern with a capture group
+/// hints that group, so a leading boundary can stay out of the match.
+const HINT_PATTERNS: &[&str] = &[
+    // URLs, less trailing punctuation.
+    r#"(?:https?|ftp|file|ssh|git)://[^\s<>"'`()\[\]{}]*[^\s<>"'`()\[\]{}.,;:!?]"#,
+    // Absolute, home and dot paths.
+    r#"(?:^|[\s"'(=:])((?:~|\.{1,2})?(?:/[\w.@%+~-]+)+/?)"#,
+    // Relative paths with a slash.
+    r#"(?:^|[\s"'(=])((?:[\w.@%+~-]+/)+[\w.@%+~-]+/?)"#,
+    // IPv6.
+    r"(?:^|[\s\[(])((?:(?:[0-9a-fA-F]{1,4}:){1,6}|:):[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5}|(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4})\b",
+    // IPv4.
+    r"\b\d{1,3}(?:\.\d{1,3}){3}\b",
+    // Git hashes.
+    r"\b[0-9a-f]{7,40}\b",
+    // Numbers of four or more digits.
+    r"\b\d{4,}\b",
+];
+
+/// [`HINT_PATTERNS`], for the tests of copy mode's hints.
+#[cfg(test)]
+pub fn default_hint_patterns() -> &'static [&'static str] {
+    HINT_PATTERNS
+}
+
 /// `pane-border-format`'s default, tmux 3.7b's: its `[z]` and `[x]`
 /// buttons are `control|8` and `control|9`.
 pub const PANE_BORDER_FORMAT: &str = "#{?pane_active,#[reverse],}#{pane_index}#[default] \
@@ -167,7 +197,7 @@ pub fn frame_title_format(ends: &str) -> String {
 
 /// Whether `name` is a built-in tmux's CLI must not see ([`GROFE_ONLY`]).
 pub fn is_grofe_only(name: &str) -> bool {
-    GROFE_ONLY.contains(&name)
+    GROFE_ONLY.contains(&name) || GROFE_ONLY_LISTS.contains(&name)
 }
 
 /// `bell-action`, `activity-action` and `silence-action`'s choices.
@@ -5530,6 +5560,12 @@ const LISTS: &[ListBuiltin] = &[
         scope: OptionScope::Global,
         default: &[],
     },
+    // grofe's own (`GROFE_ONLY`): copy mode's hints.
+    ListBuiltin {
+        name: "copy-hint-patterns",
+        scope: OptionScope::Global,
+        default: HINT_PATTERNS,
+    },
 ];
 
 /// The separator tmux 3.7b splits a list option's value on when it is set
@@ -5567,9 +5603,17 @@ fn list_builtin(name: &str) -> Option<&'static ListBuiltin> {
     LISTS.iter().find(|l| l.name == name)
 }
 
-/// Every built-in list option's name, in table order.
+/// Every built-in list option tmux knows, in table order.
 pub fn list_names() -> impl Iterator<Item = &'static str> {
-    LISTS.iter().map(|l| l.name)
+    LISTS
+        .iter()
+        .map(|l| l.name)
+        .filter(|n| !GROFE_ONLY_LISTS.contains(n))
+}
+
+/// The list options only grofe's own CLI and config know ([`GROFE_ONLY_LISTS`]).
+pub fn grofe_only_list_names() -> impl Iterator<Item = &'static str> {
+    GROFE_ONLY_LISTS.iter().copied()
 }
 
 /// Options grofe accepts and stores but never reads (spec §4.5, "Options
@@ -5692,6 +5736,11 @@ impl Options {
         persist: bool,
     ) -> Result<bool, String> {
         let l = list_builtin(name).ok_or_else(|| format!("invalid option: {name}"))?;
+        if name == "copy-hint-patterns" {
+            for p in op_values(&op) {
+                regex::Regex::new(p).map_err(|e| format!("bad hint pattern {p}: {e}"))?;
+            }
+        }
         // As tmux: removing from a list this owner doesn't have changes
         // nothing, and must not create an empty one that hides the parent's.
         if matches!(op, ListOp::Remove(_)) && self.list(owner, name).is_none() {

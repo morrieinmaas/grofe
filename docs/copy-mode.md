@@ -624,3 +624,28 @@ of the view, starting over when the cursor's line changes);
    table holds only the 88 stock rows; yank's five come from the plugin
    (TP.11) and the navigator's five from the private port, so a plain grofe
    user never gets `pbcopy` bound to `y`.
+
+## Hints (grofe's own)
+
+`copy-mode -h` (bound to `prefix G` under grofe identity, unbound under tmux
+identity) labels the matches on the visible text, so a URL, path, git hash,
+IP address or long number is copied in two keystrokes. tmux's own `-H` hides
+the position indicator, so hints take the lowercase flag.
+
+- Each match gets a label of home-row letters (`asdfghjkl`) drawn over its
+  first cells. The nearest matches to the cursor get the shortest labels;
+  two-letter labels appear only when there are more matches than letters,
+  and the labels depend only on the screen and the cursor.
+- Typing a label copies its match to a new paste buffer, and to the
+  clipboard when `set-clipboard` allows, then leaves copy mode.
+- An uppercase letter in the label also pastes the match into the pane, as
+  `paste-buffer -p` does.
+- Any other key ends the hints; a copy mode that `copy-mode -h` itself
+  started ends with them. A screen with no match does the same at once.
+- The patterns are the list option `copy-hint-patterns` (`copy-hint-patterns`
+  in the TOML config), regular expressions tried in order: a match that
+  overlaps an earlier one is dropped, and a capture group, when the pattern
+  has one, is the text that is labelled and copied. An invalid pattern is
+  skipped. The default list covers URLs, absolute, home and relative paths,
+  IPv6, IPv4, git hashes and numbers of four or more digits.
+- Matches do not span wrapped lines.

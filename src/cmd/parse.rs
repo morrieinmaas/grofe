@@ -4266,6 +4266,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
             const SHORT: &[(char, FlagKind)] = &[
                 ('e', FlagKind::Bool),
                 ('H', FlagKind::Bool),
+                ('h', FlagKind::Bool),
                 ('M', FlagKind::Bool),
                 ('u', FlagKind::Bool),
                 ('d', FlagKind::Bool),
@@ -4280,6 +4281,7 @@ pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
                 page_up: flags.present.contains(&'u'),
                 scroll_exit: flags.present.contains(&'e'),
                 hide_position: flags.present.contains(&'H'),
+                hints: flags.present.contains(&'h'),
                 mouse: flags.present.contains(&'M'),
                 cancel: flags.present.contains(&'q'),
                 page_down: flags.present.contains(&'d'),

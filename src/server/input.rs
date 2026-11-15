@@ -1792,6 +1792,13 @@ pub fn default_bindings() -> KeyTables {
             "Float or unfloat the active pane",
         );
     }
+    // grofe's own: tmux 3.7b binds no `G`.
+    bind(
+        "G",
+        &["copy-mode", "-h"],
+        false,
+        "Copy a match on screen by its label",
+    );
     bind("a", &["new-scratchpad"], false, "Open a scratchpad");
     bind(
         "S",
@@ -4906,6 +4913,18 @@ mod tests {
         assert!(t.exact(PREFIX_TABLE, &k("F")).is_none());
         let f = t.exact(PREFIX_TABLE, &k("f")).expect("tmux's f");
         assert!(words(f)[1].contains("find-window"), "{:?}", words(f));
+    }
+
+    /// WS13: grofe identity binds `prefix G` to copy mode's hints; a
+    /// tmux-identity table leaves it unbound, as tmux 3.7b does.
+    #[test]
+    fn prefix_upper_g_starts_copy_hints_under_grofe_identity_only() {
+        let mut t = default_bindings();
+        let g = t.exact(PREFIX_TABLE, &k("G")).expect("grofe's hint key");
+        assert_eq!(words(g), ["copy-mode", "-h"]);
+        assert_eq!(g.dialect, Dialect::Grofe);
+        t.use_tmux_stock();
+        assert!(t.exact(PREFIX_TABLE, &k("G")).is_none());
     }
 
     /// grofe identity binds `prefix a`, `S` and `A` to the scratchpad
