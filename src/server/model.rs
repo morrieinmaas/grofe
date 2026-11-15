@@ -1457,20 +1457,8 @@ mod tests {
             delay: std::time::Duration::ZERO,
             colours: Default::default(),
         };
-        // macOS `openpty` can fail with ENXIO ("Device not configured") while
-        // other tests open and close ptys at the same time; a retry succeeds.
-        let notify = Arc::new(Notify::new());
-        let mut attempts = 0;
-        let handle = loop {
-            match PaneHandle::spawn(spec.clone(), tx.clone(), notify.clone()) {
-                Ok(handle) => break handle,
-                Err(_) if attempts < 50 => {
-                    attempts += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                Err(e) => panic!("spawn: {e}"),
-            }
-        };
+        // A transient macOS ENXIO is retried by `pane::open_pty`.
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(
             id,
             Pane {

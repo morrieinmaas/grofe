@@ -27,9 +27,10 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{self, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape as VteCursorShape, Processor, Rgb};
+use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
 use nix::libc;
-use nix::pty::{Winsize, openpty};
+use nix::pty::{OpenptyResult, Winsize, openpty};
 use nix::unistd::{AccessFlags, access};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc};
@@ -1574,11 +1575,10 @@ type Pending = (tokio::process::Command, OwnedFd);
 fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(Spawned, Option<Pending>)> {
     let cmd = child_command(spec)?;
     let guard = spawn_lock();
-    let pty = openpty(&size.winsize(spec.cell_px), None)?;
+    let (pty, tty) = open_pty(&size.winsize(spec.cell_px))?;
     fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
     // The original slave fd must not survive exec; dup2 clears CLOEXEC on 0/1/2.
     fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
-    let tty = nix::unistd::ttyname(&pty.slave).ok();
     let (held, child, pending) = if spec.delay.is_zero() {
         let child = exec_on(cmd, &pty.slave)?;
         let held = child.is_some().then_some(pty.slave);
@@ -1591,6 +1591,46 @@ fn spawn_child(spec: &PaneSpawn, size: Size) -> stdio::Result<(Spawned, Option<P
     let flags = OFlag::from_bits_truncate(fcntl(&pty.master, FcntlArg::F_GETFL)?);
     fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
     Ok(((pty.master, held, child, tty), pending))
+}
+
+/// How many times [`open_pty`] opens a pty before its error stands.
+const PTY_TRIES: u32 = 10;
+
+/// A new pty and its slave's path (`None` if it has none). On macOS CI,
+/// while other ptys open and close, `openpty` has failed with ENXIO and a
+/// new slave has had no name yet (`ttyname` failed with ERANGE); both are
+/// transient, so both are retried, 20 ms apart, [`PTY_TRIES`] times in all.
+/// Tests open their client ptys with this too.
+pub fn open_pty(size: &Winsize) -> nix::Result<(OpenptyResult, Option<PathBuf>)> {
+    retry_pty(
+        || openpty(size, None),
+        |pty| nix::unistd::ttyname(&pty.slave),
+        PTY_TRIES,
+        Duration::from_millis(20),
+    )
+}
+
+/// [`open_pty`]'s retries, over any `open` and `name`.
+fn retry_pty<P>(
+    mut open: impl FnMut() -> nix::Result<P>,
+    name: impl Fn(&P) -> nix::Result<PathBuf>,
+    tries: u32,
+    pause: Duration,
+) -> nix::Result<(P, Option<PathBuf>)> {
+    for _ in 1..tries {
+        match open() {
+            Ok(pty) => match name(&pty) {
+                Err(Errno::ERANGE) => {}
+                path => return Ok((pty, path.ok())),
+            },
+            Err(Errno::ENXIO) => {}
+            Err(e) => return Err(e),
+        }
+        std::thread::sleep(pause);
+    }
+    let pty = open()?;
+    let path = name(&pty).ok();
+    Ok((pty, path))
 }
 
 /// The child's command for `spec`, not yet spawned.
@@ -1673,6 +1713,55 @@ fn start_delayed(cmd: tokio::process::Command, slave: &OwnedFd) -> Option<tokio:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `retry_pty` over scripted results: how many opens it made and what
+    /// it returned.
+    fn scripted(
+        opens: Vec<nix::Result<()>>,
+        names: Vec<nix::Result<PathBuf>>,
+    ) -> (usize, nix::Result<Option<PathBuf>>) {
+        let opens = std::cell::RefCell::new(opens.into_iter());
+        let names = std::cell::RefCell::new(names.into_iter());
+        let made = std::cell::Cell::new(0);
+        let got = retry_pty(
+            || {
+                made.set(made.get() + 1);
+                opens.borrow_mut().next().unwrap_or(Ok(()))
+            },
+            |_| {
+                names
+                    .borrow_mut()
+                    .next()
+                    .unwrap_or_else(|| Ok(PathBuf::from("/dev/ttys001")))
+            },
+            4,
+            Duration::ZERO,
+        );
+        (made.get(), got.map(|(_, path)| path))
+    }
+
+    #[test]
+    fn a_transient_pty_failure_is_retried_a_bounded_number_of_times() {
+        let tty = Some(PathBuf::from("/dev/ttys001"));
+        let enxio = || Err(Errno::ENXIO);
+        assert_eq!(
+            scripted(vec![enxio(), enxio()], vec![]),
+            (3, Ok(tty.clone()))
+        );
+        // A slave with no `/dev` node yet is opened again.
+        assert_eq!(
+            scripted(vec![], vec![Err(Errno::ERANGE)]),
+            (2, Ok(tty.clone()))
+        );
+        assert_eq!(scripted(vec![enxio(); 9], vec![]), (4, Err(Errno::ENXIO)));
+        assert_eq!(scripted(vec![], vec![Err(Errno::ERANGE); 9]), (4, Ok(None)));
+        // Anything else fails, or names nothing, at once.
+        assert_eq!(
+            scripted(vec![Err(Errno::EMFILE)], vec![]),
+            (1, Err(Errno::EMFILE))
+        );
+        assert_eq!(scripted(vec![], vec![Err(Errno::ENOTTY)]), (1, Ok(None)));
+    }
 
     fn spec_with_term(term: &'static str) -> PaneSpawn {
         PaneSpawn {

@@ -853,8 +853,14 @@ fn flood_until(
 fn stdin_eof_sends_detach() {
     // stdin is a second pty the test can hang up; output stays on the
     // expectrl pty.
-    let pty = nix::pty::openpty(None, None).expect("openpty");
-    let slave = nix::unistd::ttyname(&pty.slave).expect("ttyname");
+    let size = nix::pty::Winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let (pty, slave) = grofe::server::pane::open_pty(&size).expect("openpty");
+    let slave = slave.expect("ttyname");
     let srv = FakeServer::new();
     let client = format!("{ATTACH} <{}", slave.display());
     let mut tty = Tty::spawn(&script(&client), &srv.socket, &[]);
