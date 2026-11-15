@@ -282,7 +282,7 @@ docs and the config reference.
 **Why.** iTerm2's tmux integration and several editor plugins drive tmux through control mode. Its
 absence is the largest drop-in gap left.
 
-**Change.** Its own spec and plan (to be written under `docs/specs/`), written first by the
+**Change.** Its own spec and plan (a control-mode spec under docs/specs), written first by the
 WS14 implementer from tmux's control-mode documentation and tested against real tmux on a private
 socket: the line protocol (`%begin`/`%end`/`%error` blocks, `%output`, `%window-add`,
 `%layout-change`, `%session-changed` and the rest of the notifications tmux 3.x sends), `-CC`'s DCS

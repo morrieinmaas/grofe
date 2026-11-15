@@ -102,7 +102,7 @@ fn natively_a_right_click_opens_nothing() {
     let (_srv, mut client) = server("grofe");
     right_click(&mut client, 8, 23);
     right_click(&mut client, 20, 5);
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::quiet_period(std::time::Duration::from_millis(500));
     let screen = client.text();
     assert!(!screen.contains("New At End"), "{screen}");
     assert!(!screen.contains("Vertical Split"), "{screen}");
@@ -140,12 +140,12 @@ fn control_click_swaps_the_clicked_pane_with_the_active_one() {
     client.send("\x1b[<16;5;6M\x1b[<16;5;6m");
     let want: Vec<&str> = before.split_whitespace().rev().collect();
     let want = format!("{} ", want.join(" "));
-    common::wait_until(|| pane_ids(&srv) == want, std::time::Duration::from_secs(5))
+    common::try_wait_until(|| pane_ids(&srv) == want, std::time::Duration::from_secs(5))
         .unwrap_or_else(|e| panic!("{e}: {} -> {}", before, pane_ids(&srv)));
 }
 
 fn harness_wait(srv: &TestServer, format: &str, want: &str) {
-    common::wait_until(
+    common::try_wait_until(
         || srv.cmd(&["display", "-p", format]).is_ok_and(|v| v == want),
         std::time::Duration::from_secs(5),
     )

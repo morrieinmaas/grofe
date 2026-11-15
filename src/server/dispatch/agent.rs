@@ -971,8 +971,9 @@ mod tests {
             x.display()
         );
         apply(&mut state, pane, blocked(&msg, 1));
+        // The shell's `>` creates the file before printf writes it: wait on content.
         for _ in 0..100 {
-            if file.exists() {
+            if std::fs::read_to_string(&file).is_ok_and(|s| !s.is_empty()) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

@@ -2,7 +2,7 @@
 //!
 //! Spec §4.1: `$XDG_RUNTIME_DIR/grofe/<name>.sock`, falling back to
 //! `$TMPDIR/grofe-$UID/<name>.sock` (macOS has no `XDG_RUNTIME_DIR`). The
-//! lock is `<sock>.lock`; state (and, from M4, the session snapshot) and the
+//! lock is `<sock>.lock`; state (and the session snapshot) and the
 //! server log live under `$XDG_STATE_HOME/grofe/` (falling back to
 //! `~/.local/state/grofe/`), named after the socket so a server on a test
 //! `-S` socket never touches the user's real state.
@@ -77,7 +77,7 @@ pub fn lock_path(socket: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// The directory grofe's own state (the server log, and from M4 the
+/// The directory grofe's own state (the server log and the
 /// session snapshot) lives under.
 pub fn state_dir(env: &Env) -> PathBuf {
     if let Some(dir) = non_empty(&env.xdg_state_home) {

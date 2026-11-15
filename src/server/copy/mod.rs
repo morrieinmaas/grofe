@@ -20,6 +20,7 @@
 // wide cell), and a resize takes a fresh copy instead of reflowing the old
 // one; `copy-mode-position-format`'s line time is not drawn.
 
+pub mod hints;
 pub mod pipe;
 pub mod search;
 pub mod select;
@@ -35,13 +36,13 @@ use crate::cmd;
 use crate::protocol::Dialect;
 use crate::server::dispatch::options;
 use crate::server::imgstore::PaneImages;
-use crate::server::input::{Input, InputHook, ROOT_TABLE, Routed};
+use crate::server::input::{Input, InputHook, Key, KeyCode, ROOT_TABLE, Routed};
 use crate::server::model::Window;
 use crate::server::pane::{CellFlags, CursorShape, CursorState, PaneHandle, SnapCell, marks};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::screenimg::{self, ImageCaps, Place};
 use crate::server::status::{self, Style};
-use crate::server::{State, clients};
+use crate::server::{State, buffers, clients, passthrough};
 use crate::types::{ClientId, PaneId, Rect};
 
 /// `#{pane_mode}` while a pane is in copy mode.
@@ -60,6 +61,8 @@ const WHITESPACE: &str = "\t ";
 const MARK_STYLE: &str = "bg=red,fg=black";
 /// `mode-style`'s default, if the option is missing.
 const MODE_STYLE: &str = "noattr,bg=yellow,fg=black";
+/// The style of a hint's label.
+const HINT_STYLE: &str = "bg=green,fg=black,bold";
 
 /// The most repeats a count runs (`send-keys -N`, a mode's prefix).
 // ponytail: tmux 3.7b runs every one, and for `-N 4294967295` stops
@@ -941,6 +944,8 @@ pub struct Mode {
     /// The pane was showing the clock when this view mode opened over it,
     /// so the mode is on top and the clock gets the keys after it.
     pub over_clock: bool,
+    /// Hint mode (`copy-mode -h`): the labelled matches, when running.
+    pub hints: Option<hints::Hints>,
 }
 
 /// Where `recentre-top-bottom` puts the cursor's line next.
@@ -1001,6 +1006,7 @@ impl Mode {
             view: false,
             under: None,
             over_clock: false,
+            hints: None,
         }
     }
 
@@ -1698,6 +1704,8 @@ impl Mode {
     /// tmux's `window_copy_size_changed`: the selection and search marks
     /// go.
     fn size_changed(&mut self) {
+        // The labels name cells of the old copy.
+        self.hints = None;
         select::clear_selection(self);
         search::clear_marks(self);
         self.search.start = Some((self.cx, self.cy, self.oy));
@@ -2401,6 +2409,10 @@ impl InputHook for CopyHook {
                 if settings.is_prefix(key) {
                     return None;
                 }
+                if state.copy.get(pane).is_some_and(|m| m.hints.is_some()) {
+                    hint_key(state, pane, key);
+                    return Some(Routed::Consumed);
+                }
                 let tables = &state.registry.key_tables;
                 let b = tables
                     .get(key_table(state, pane), key)
@@ -2413,6 +2425,95 @@ impl InputHook for CopyHook {
             Input::Paste { .. } => Some(Routed::Consumed),
             Input::Mouse(_) | Input::Focus(_) => None,
         }
+    }
+}
+
+/// `copy-mode -h`: labels the matches of `copy-hint-patterns` on the
+/// visible text of `pane`'s mode. `entered` when the command started the
+/// mode, which then ends with the hints (also when nothing matches).
+pub fn start_hints(state: &mut State, pane: PaneId, entered: bool) {
+    let chain = options::chain(&state.model, pane);
+    // An invalid pattern is skipped.
+    let patterns: Vec<regex::Regex> = state
+        .model
+        .options
+        .lookup_list("copy-hint-patterns", &chain)
+        .into_iter()
+        .flat_map(|l| l.values())
+        .filter_map(|p| regex::Regex::new(p).ok())
+        .collect();
+    let Some(mode) = state.copy.get_mut(pane) else {
+        return;
+    };
+    let top = mode.grid.hsize.saturating_sub(mode.oy);
+    mode.hints = hints::Hints::scan(
+        &mode.grid,
+        top,
+        mode.grid.sy,
+        (mode.cx, top + mode.cy),
+        &patterns,
+        entered,
+    );
+    if mode.hints.is_none() && entered {
+        state.copy.remove(pane);
+    }
+    clients::mark_all_dirty(state);
+}
+
+/// One key typed while hints show: a label letter narrows or picks, any
+/// other key ends the hints.
+fn hint_key(state: &mut State, pane: PaneId, key: &Key) {
+    let typed = match key.code {
+        KeyCode::Char(c) if !(key.mods.ctrl || key.mods.alt || key.mods.super_) => Some(c),
+        _ => None,
+    };
+    let Some(mode) = state.copy.get_mut(pane) else {
+        return;
+    };
+    let Some(h) = mode.hints.as_mut() else {
+        return;
+    };
+    let entered = h.entered;
+    match typed.map_or(hints::Step::Cancel, |c| h.press(c)) {
+        hints::Step::Pending => {}
+        hints::Step::Cancel => {
+            mode.hints = None;
+            if entered {
+                state.copy.remove(pane);
+            }
+        }
+        hints::Step::Pick { text, paste } => {
+            state.copy.remove(pane);
+            let copied = select::Copied {
+                data: text.into_bytes(),
+                append: false,
+                set_paste: true,
+                set_clip: true,
+                pipe: None,
+            };
+            passthrough::on_copy(state, pane, std::slice::from_ref(&copied));
+            // A full buffer list or an oversize copy has no better answer
+            // than the copy mode's own: the copy is dropped.
+            let _ = select::store(state, vec![copied.clone()]);
+            if paste {
+                paste_hint(state, pane, &copied.data);
+            }
+        }
+    }
+    clients::mark_all_dirty(state);
+}
+
+/// Types `data` into `pane` as `paste-buffer -p` would.
+fn paste_hint(state: &State, pane: PaneId, data: &[u8]) {
+    let Some(p) = state.model.panes.get(&pane) else {
+        return;
+    };
+    if p.input_off {
+        return;
+    }
+    let bracket = p.handle.modes().bracketed_paste;
+    if let Ok(bytes) = buffers::paste_bytes(data, b"\r", bracket, true) {
+        let _ = p.handle.enqueue_input(bytes);
     }
 }
 
@@ -2526,6 +2627,31 @@ impl Overlay for CopyOverlay {
             }
             if !mode.hide_position && mode.grid.sy > 1 {
                 position_label(state, pane, mode, cols, &mut |x, cell| put(x, 0, cell));
+            }
+            if let Some(h) = &mode.hints {
+                let style = status::parse_style(HINT_STYLE);
+                for hit in h.hits.iter().filter(|hit| hit.label.starts_with(&h.typed)) {
+                    let Some(y) = hit.row.checked_sub(top).filter(|y| *y < rows) else {
+                        continue;
+                    };
+                    let mut end = hit.x;
+                    for c in hit.label.chars().skip(h.typed.len()) {
+                        if end < cols {
+                            put(end, y, styled(c, &style));
+                        }
+                        end += 1;
+                    }
+                    // A label cut a wide character in two: its spacer goes.
+                    if end < cols
+                        && mode
+                            .grid
+                            .snap(end, hit.row)
+                            .flags
+                            .contains(CellFlags::WIDE_CHAR_SPACER)
+                    {
+                        put(end, y, SnapCell { c: ' ', ..blank() });
+                    }
+                }
             }
             if mode.cx >= cols && mode.cy < rows {
                 put(
@@ -3050,5 +3176,129 @@ mod tests {
         assert_eq!(strtonum("0", 1, 20), Err("too small"));
         assert_eq!(strtonum("21", 1, 20), Err("too large"));
         assert_eq!(strtonum("99999999999999999999", 1, 20), Err("too large"));
+    }
+
+    /// A state with one pane (running `command`) whose mode shows `rows`.
+    fn hint_pane(command: &[&str], rows: &[&str]) -> (State, PaneId) {
+        let mut state = crate::server::test_state();
+        let argv: Vec<String> = ["new-session", "-d", "-s", "h"]
+            .into_iter()
+            .chain(command.iter().copied())
+            .map(String::from)
+            .collect();
+        crate::server::dispatch::run(&mut state, &crate::server::test_ctx(), &argv)
+            .expect("new-session");
+        let pane = *state.model.panes.keys().next().expect("pane");
+        let grid = Grid::from_text(60, 0, rows);
+        state.copy.insert(pane, Mode::new(grid, (0, 0), true));
+        (state, pane)
+    }
+
+    fn typed(state: &mut State, pane: PaneId, c: char) {
+        let key = Key {
+            code: KeyCode::Char(c),
+            mods: Default::default(),
+        };
+        hint_key(state, pane, &key);
+    }
+
+    fn top_buffer(state: &State) -> Option<String> {
+        let b = state.buffers.top()?;
+        Some(String::from_utf8_lossy(&b.data).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_label_copies_its_match_to_a_buffer_and_leaves_the_mode() {
+        let (mut state, pane) = hint_pane(&["sleep", "30"], &["id 1111 and 2222"]);
+        start_hints(&mut state, pane, true);
+        assert!(state.copy.get(pane).unwrap().hints.is_some());
+        typed(&mut state, pane, 's');
+        assert!(!state.copy.is_active(pane));
+        assert_eq!(top_buffer(&state).as_deref(), Some("2222"));
+    }
+
+    #[tokio::test]
+    async fn an_uppercase_label_also_pastes_into_the_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let (mut state, pane) = hint_pane(
+            &["sh", "-c", &format!("cat > '{}'", out.display())],
+            &["id 1111 and 2222"],
+        );
+        start_hints(&mut state, pane, true);
+        typed(&mut state, pane, 'A');
+        assert_eq!(top_buffer(&state).as_deref(), Some("1111"));
+        // The paste has no line end of its own; `cat` reads once there is one.
+        let handle = &state.model.panes[&pane].handle;
+        handle.enqueue_input(b"\n".to_vec()).unwrap();
+        let mut got = String::new();
+        for _ in 0..100 {
+            got = std::fs::read_to_string(&out).unwrap_or_default();
+            if got.contains("1111") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(got, "1111\n");
+    }
+
+    #[tokio::test]
+    async fn the_pattern_option_overrides_the_defaults() {
+        let (mut state, pane) = hint_pane(&["sleep", "30"], &["id 1111 and foo42 bar7"]);
+        let argv = ["set-option", "-g", "copy-hint-patterns", r"foo\d+"].map(String::from);
+        crate::server::dispatch::run(&mut state, &crate::server::test_ctx(), &argv)
+            .expect("set-option");
+        start_hints(&mut state, pane, false);
+        let h = state.copy.get(pane).unwrap().hints.clone().unwrap();
+        assert_eq!(h.hits.len(), 1);
+        assert_eq!(h.hits[0].text, "foo42");
+    }
+
+    #[tokio::test]
+    async fn a_pattern_that_does_not_compile_is_an_error_and_keeps_the_old_list() {
+        let (mut state, _pane) = hint_pane(&["sleep", "30"], &["id 1111"]);
+        let argv = ["set-option", "-g", "copy-hint-patterns", "(unclosed"].map(String::from);
+        let err = crate::server::dispatch::run(&mut state, &crate::server::test_ctx(), &argv)
+            .expect_err("a bad pattern");
+        assert!(err.contains("bad hint pattern"), "{err}");
+        let list = state
+            .model
+            .options
+            .lookup_list("copy-hint-patterns", &[])
+            .expect("list");
+        assert!(list.values().all(|p| p != "(unclosed"));
+    }
+
+    #[tokio::test]
+    async fn a_refreshed_copy_drops_the_hints_that_named_the_old_one() {
+        let (mut state, pane) = hint_pane(&["sleep", "30"], &["id 1111"]);
+        start_hints(&mut state, pane, false);
+        assert!(state.copy.get(pane).unwrap().hints.is_some());
+        let fresh = Grid::from_text(60, 0, &["id 2222"]);
+        state.copy.get_mut(pane).unwrap().refresh(fresh);
+        assert!(state.copy.get(pane).unwrap().hints.is_none());
+    }
+
+    #[tokio::test]
+    async fn no_matches_end_a_mode_the_hints_started_and_keep_one_that_was_there() {
+        let (mut state, pane) = hint_pane(&["sleep", "30"], &["nothing to see"]);
+        start_hints(&mut state, pane, false);
+        assert!(state.copy.is_active(pane));
+        assert!(state.copy.get(pane).unwrap().hints.is_none());
+        start_hints(&mut state, pane, true);
+        assert!(!state.copy.is_active(pane));
+    }
+
+    #[tokio::test]
+    async fn another_key_cancels_the_hints_and_only_leaves_a_mode_they_started() {
+        let (mut state, pane) = hint_pane(&["sleep", "30"], &["id 1111"]);
+        start_hints(&mut state, pane, false);
+        typed(&mut state, pane, 'x');
+        assert!(state.copy.is_active(pane));
+        assert!(state.copy.get(pane).unwrap().hints.is_none());
+        assert_eq!(top_buffer(&state), None);
+        start_hints(&mut state, pane, true);
+        typed(&mut state, pane, 'x');
+        assert!(!state.copy.is_active(pane));
     }
 }

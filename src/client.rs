@@ -46,7 +46,7 @@ use crate::protocol::{
     Caps, ClientCtx, Frame, FrameCodec, HELLO_REPLY_ID, Hello, Reply, encode_hello,
 };
 
-/// How long the probe waits for DA1's reply (the M2 ruling). A terminal
+/// How long the probe waits for DA1's reply . A terminal
 /// that answers nothing costs this much once, at attach.
 pub const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 

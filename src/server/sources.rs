@@ -27,7 +27,8 @@ use tokio::sync::{mpsc, watch};
 use crate::config::Resolved;
 use crate::event::Event;
 use crate::server::dispatch::options::Owner;
-use crate::server::{Job, State, clients, hooks, pane};
+use crate::server::spawn;
+use crate::server::{Job, State, clients, hooks};
 
 /// How long a run may take when its registration names no timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -437,22 +438,13 @@ async fn run_source(
     timeout: Duration,
     jobs: &mpsc::Sender<Job>,
 ) {
-    let child = {
-        let _lock = pane::spawn_lock();
-        tokio::process::Command::new("/bin/sh")
-            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
-            .arg0("sh")
-            .arg("-c")
-            .arg(cmd)
-            .env_clear()
-            .envs(env)
+    let child = spawn::spawn(
+        spawn::sh(cmd, Some(env))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
             .process_group(0)
-            .kill_on_drop(true)
-            .spawn()
-    };
+            .kill_on_drop(true),
+    );
     let mut child = match child {
         Ok(child) => child,
         Err(e) => {

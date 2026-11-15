@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::{Harness, on_path, require_tool};
 
@@ -52,7 +52,7 @@ fn display(srv: &TestServer, target: &str, format: &str) -> String {
 }
 
 fn wait_display(srv: &TestServer, target: &str, format: &str, want: &str) {
-    if let Err(e) = wait_until(|| display(srv, target, format) == want, WAIT) {
+    if let Err(e) = try_wait_until(|| display(srv, target, format) == want, WAIT) {
         panic!(
             "{e}: {format} of {target} is {:?}, want {want:?}",
             display(srv, target, format)
@@ -193,7 +193,7 @@ fn a_paste_into_neovim_keeps_its_lines() {
     // as the start of Meta-:.
     a.wait_until("normal mode", WAIT, |t| !t.contains("-- INSERT --"));
     a.send(":wq\r");
-    if let Err(e) = wait_until(
+    if let Err(e) = try_wait_until(
         || fs::read_to_string(&file).is_ok_and(|s| s.starts_with("  one\n  two\n")),
         WAIT,
     ) {
@@ -296,9 +296,9 @@ fn titles_follow_set_titles() {
     // follow the printf in the same command line, are the sync point).
     srv.cmd(&["send-keys", "-t", "main:1", "Enter"])
         .expect("send-keys");
-    wait_until(|| srv.capture("main:1").contains("sent-hi"), WAIT).expect("hi sent");
+    try_wait_until(|| srv.capture("main:1").contains("sent-hi"), WAIT).expect("hi sent");
     a.send("\r");
-    wait_until(|| srv.capture("main:2").contains("sent-yo"), WAIT).expect("yo sent");
+    try_wait_until(|| srv.capture("main:2").contains("sent-yo"), WAIT).expect("yo sent");
     assert_eq!(count(a.output(), b"\x1b]0;"), 0, "a title leaked while off");
     assert_eq!(
         count(a.output(), b"\x1b]2;"),
@@ -478,7 +478,7 @@ fn focus_reports_follow_the_active_pane() {
     let seen = |target: &str, want: &str| {
         let want = format!("ready {want}");
         let want = want.trim_end();
-        if let Err(e) = wait_until(|| srv.capture(target).trim() == want, WAIT) {
+        if let Err(e) = try_wait_until(|| srv.capture(target).trim() == want, WAIT) {
             panic!(
                 "{e}: {target} shows {:?}, want {want:?}",
                 srv.capture(target).trim()
@@ -531,7 +531,7 @@ fn focus_reports_on_detach_and_reattach() {
     let seen = |target: &str, want: &str| {
         let want = format!("ready {want}");
         let want = want.trim_end();
-        if let Err(e) = wait_until(|| srv.capture(target).trim() == want, WAIT) {
+        if let Err(e) = try_wait_until(|| srv.capture(target).trim() == want, WAIT) {
             panic!(
                 "{e}: {target} shows {:?}, want {want:?}",
                 srv.capture(target).trim()
@@ -556,10 +556,10 @@ fn focus_reports_on_detach_and_reattach() {
     let mut a = attach(&srv);
     seen(p2, "^[[I^[[O^[[I");
     let mut b = attach(&srv);
-    wait_until(|| clients() == 2, WAIT).expect("two clients");
+    try_wait_until(|| clients() == 2, WAIT).expect("two clients");
     b.send("\x02d");
     b.wait_exit();
-    wait_until(|| clients() == 1, WAIT).expect("one client");
+    try_wait_until(|| clients() == 1, WAIT).expect("one client");
     // A frame for the remaining client runs the focus bookkeeping again.
     srv.cmd(&["select-pane", "-t", p2]).expect("select-pane");
     a.send("x");
@@ -591,7 +591,7 @@ fn a_window_linked_into_two_sessions_has_one_focus() {
     let seen = |want: &str| {
         let want = format!("ready {want}");
         let want = want.trim_end();
-        if let Err(e) = wait_until(|| srv.capture("main:1.1").trim() == want, WAIT) {
+        if let Err(e) = try_wait_until(|| srv.capture("main:1.1").trim() == want, WAIT) {
             panic!(
                 "{e}: the pane shows {:?}, want {want:?}",
                 srv.capture("main:1.1").trim()

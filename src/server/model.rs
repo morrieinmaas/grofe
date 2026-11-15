@@ -1493,7 +1493,9 @@ mod tests {
             images: false,
             identity: Default::default(),
             delay: std::time::Duration::ZERO,
+            colours: Default::default(),
         };
+        // A transient macOS ENXIO is retried by `pane::open_pty`.
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(
             id,

@@ -463,7 +463,7 @@ impl Reader {
                 Event::PtyWrite(text) => self.reply(text),
                 Event::ColorRequest(index, format) => {
                     // ponytail: answers fg/bg/cursor from a fixed palette until
-                    // the configured palette exists (M3).
+                    // the configured palette exists.
                     let styled =
                         |i: usize| unpack_colour(self.default_colours[i].load(Ordering::Relaxed));
                     let rgb = match index {

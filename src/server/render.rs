@@ -354,8 +354,8 @@ pub struct OverlayCtx {
     pub panes: Vec<(PaneId, Rect)>,
 }
 
-/// Something drawn over a client's composed frame (M3: the prompt, the
-/// scrollback view; later popups and menus). Overlays are stateless: what
+/// Something drawn over a client's composed frame (the prompt, menus,
+/// popups). Overlays are stateless: what
 /// they draw comes from `state`, for the client `client`.
 ///
 /// An overlay may overwrite half of a wide pair; after every overlay has

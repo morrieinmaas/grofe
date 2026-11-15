@@ -6,6 +6,7 @@ pub mod client;
 pub mod cmd;
 pub mod compat;
 pub mod config;
+pub mod control_mode;
 pub mod event;
 pub mod import_tmux;
 pub mod layouts;
@@ -16,6 +17,7 @@ pub mod protocol;
 pub mod server;
 pub mod term;
 pub mod types;
+pub mod util;
 
 /// The calling thread's CPU time, for tests that bound the work something
 /// takes: unlike wall time, a loaded host does not stretch it.
