@@ -14,8 +14,10 @@
 //!   any more, so a pane saved with a command runs it again.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use ulid::Ulid;
 
@@ -35,16 +37,59 @@ const LIVE_FORMAT: &str = "#{grofe_version}\t#{session_name}\t#{session_path}\t\
 /// `$TMUX`: its default socket under `$TMUX_TMPDIR`. `Err` when none
 /// runs, it has no session, or `tmux` is grofe.
 pub fn from_live_tmux() -> Result<Snapshot, String> {
-    let out = Command::new("tmux")
+    from_tmux_program("tmux", LIVE_TIMEOUT)
+}
+
+/// How long start-up waits for `tmux`; this runs on the actor.
+const LIVE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// [`from_live_tmux`] with the program and the wait named, killing the
+/// program when the wait ends.
+fn from_tmux_program(program: &str, timeout: Duration) -> Result<Snapshot, String> {
+    let mut child = Command::new(program)
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
         .args(["list-panes", "-a", "-F", LIVE_FORMAT])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|e| format!("tmux: {e}"))?;
-    if !out.status.success() {
+    // Read on a thread, so a full pipe cannot stall the program the wait
+    // below is timing.
+    let mut stdout = child.stdout.take();
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = Vec::new();
+        if let Some(out) = stdout.as_mut() {
+            let _ = out.read_to_end(&mut text);
+        }
+        let _ = sent.send(text);
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // Not joined: a grandchild may still hold the pipe.
+                return Err("tmux did not answer in time".to_string());
+            }
+            Err(e) => return Err(format!("tmux: {e}")),
+        }
+    };
+    // A grandchild that kept the pipe open must not hold the wait past it.
+    let Ok(text) = received.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
+        return Err("tmux did not answer in time".to_string());
+    };
+    if !status.success() {
         return Err("no tmux server running".to_string());
     }
-    parse_live(&String::from_utf8_lossy(&out.stdout))
+    parse_live(&String::from_utf8_lossy(&text))
 }
 
 #[derive(Default)]
@@ -491,6 +536,34 @@ fn json_layout(text: &str, uid: &PaneKey) -> Option<LayoutGeometry<String>> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A `tmux` that never answers is killed when the wait ends, and the
+    /// error says so (the script's own `sleep` keeps the pipe open).
+    #[test]
+    fn a_tmux_that_exits_but_leaves_the_pipe_open_does_not_block() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("tmux");
+        std::fs::write(&fake, "#!/bin/sh\nsleep 30 &\nexit 0\n").expect("write");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let started = Instant::now();
+        let r = from_tmux_program(fake.to_str().expect("utf8"), Duration::from_millis(300));
+        assert_eq!(r.err().as_deref(), Some("tmux did not answer in time"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_tmux_that_hangs_is_killed_at_the_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("tmux");
+        std::fs::write(&fake, "#!/bin/sh\nsleep 30\n").expect("write");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let started = Instant::now();
+        let r = from_tmux_program(fake.to_str().expect("utf8"), Duration::from_millis(200));
+        assert_eq!(r.err().as_deref(), Some("tmux did not answer in time"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
     use super::*;
 
     #[test]

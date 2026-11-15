@@ -167,7 +167,7 @@ fn native_file_stays_toml_even_for_a_tmux_conf_name() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    common::wait_until(|| srv.socket.exists(), CMD_TIMEOUT).expect("server socket");
+    common::wait_until("server socket", CMD_TIMEOUT, || srv.socket.exists());
     let out = run_bounded(
         {
             let mut c = srv.command();
