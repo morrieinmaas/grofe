@@ -19,3 +19,4 @@ Sleep 6s
 Show
 Sleep 1s
 Screenshot "@PNG@"
+Sleep 2s
