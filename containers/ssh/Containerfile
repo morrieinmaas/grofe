@@ -1,0 +1,62 @@
+# The ssh remote-session test host (spec 2026-11-15-ssh-remote.md §6), built
+# only by scripts/ssh-e2e.sh from a context holding the worktree's source.
+#
+#   build         grofe as the release workflow builds it: static musl, on
+#                 Alpine, so the same binary runs in the Debian stages
+#   bare          sshd, a web server and iproute2, no grofe: the bootstrap
+#                 install test
+#   preinstalled  bare plus grofe in /usr/local/bin: every other scenario
+#
+# The test user logs in by key only. The public key arrives at run time in
+# E2E_PUBKEY (the entrypoint writes it); no key, password or host identity
+# of any real machine is in the image. The container is meant to run with
+# --cap-add NET_ADMIN so scenarios can use `tc netem`.
+FROM docker.io/library/rust:1-alpine@sha256:18b6dc7bc111bde4e2fccf6c4ec95cc4a3486b41e4b090e9b0202eba9540023e AS build
+
+ENV CARGO_TERM_COLOR=never
+RUN apk add --no-cache g++ musl-dev
+WORKDIR /src
+COPY . /src/
+# The toolchain is rust-toolchain.toml's channel, as in the release build. The
+# cache mounts keep a rebuild after a source change to an incremental one.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/cache/target \
+    rustup toolchain install \
+  && CARGO_TARGET_DIR=/cache/target cargo build --release --locked --bin grofe \
+  && mkdir -p /out \
+  && cp /cache/target/release/grofe /out/grofe
+
+FROM docker.io/library/debian:stable-slim@sha256:5bc3287b25407c965a30f38e32603dc253a3869e1b12a21ac09bfc27fd8b13ce AS bare
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates iproute2 openssh-server procps python3 \
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /run/sshd \
+  && useradd -m -u 1000 -s /bin/bash tester \
+  && usermod -p '*' tester \
+  && ssh-keygen -A \
+  && mkdir -p /home/tester/www /home/tester/.ssh \
+  && echo "hello from the container web server" > /home/tester/www/index.html \
+  && chown -R tester:tester /home/tester \
+  && chmod 700 /home/tester/.ssh
+
+RUN printf '%s\n' \
+    'Port 22' \
+    'PasswordAuthentication no' \
+    'KbdInteractiveAuthentication no' \
+    'PermitRootLogin no' \
+    'PubkeyAuthentication yes' \
+    'AllowUsers tester' \
+    'AllowTcpForwarding yes' \
+    > /etc/ssh/sshd_config.d/e2e.conf
+
+COPY containers/ssh/entrypoint.sh /usr/local/bin/e2e-entrypoint
+RUN chmod 755 /usr/local/bin/e2e-entrypoint
+
+EXPOSE 22 8000
+ENTRYPOINT ["/usr/local/bin/e2e-entrypoint"]
+
+FROM bare AS preinstalled
+COPY --from=build /out/grofe /usr/local/bin/grofe
+RUN test "$(grofe -V)" != ""
