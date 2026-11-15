@@ -102,7 +102,8 @@ grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
 Options, key bindings, hooks and status formats come across, and anything
 that cannot is listed with the reason. `grofe pack` replaces TPM: declare
 each plugin as a `[[pack]]` table and grofe clones it and pins it to a commit
-in `pack-lock.toml`; until you do, the plugins TPM already installed keep
+in `pack-lock.toml`. Plugins load after `grofe pack sync`, then
+`grofe reload`; until you switch, the plugins TPM already installed keep
 loading. The first grofe server then takes its sessions from your running
 tmux. Scripts and tools that talk to tmux (`fzf --tmux`,
 vim-tmux-navigator) keep working, and grofe can run under the name `tmux`.

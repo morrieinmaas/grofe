@@ -58,6 +58,7 @@ its last pane) before stopping the server. To always start empty, set
 
 Panes come back in the same layout and directory. A pane that knows how to
 resume comes back running its program; the others come back as a shell.
+
 ## Before a reboot
 
 `grofe reboot-check [--json]` reads the snapshot on disk and gives every pane

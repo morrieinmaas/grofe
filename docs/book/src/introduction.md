@@ -20,7 +20,9 @@ shell on every redraw.
 ## What's different
 
 - **Agents, first.** grofe recognises Claude Code, Codex, opencode,
-  Gemini, pi and aider in its panes and learns their state from their hooks.
+  Gemini, pi and aider in its panes. It learns the state of Claude Code, Codex,
+  opencode and Gemini from their hooks; pi and aider have none and are
+  recognised by name only.
   `prefix u` jumps to the agent that needs you; a picker, a sidebar and a
   grid show them all; the status line counts the ones waiting. See
   [Agent sessions](agents.md).

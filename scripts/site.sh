@@ -7,9 +7,13 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:-$root/_site}
-rm -rf "$out"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+case "$out" in
+    "$root" | "$HOME" | /) echo "site: refusing to empty $out" >&2; exit 1 ;;
+esac
+rm -rf "$out"
+mkdir -p "$out"
 
 # Everything under site/ (the landing page and its assets) goes to the root.
 cp -R "$root/site/." "$out/"

@@ -613,7 +613,7 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "set-clipboard",
-        doc: "What a program setting the clipboard with OSC 52 does: on makes a paste buffer and sets the terminal's clipboard, external only sets the terminal's, off neither.",
+        doc: "Where clipboard text goes: on makes a program's OSC 52 a paste buffer and passes it to the terminal, external sends only copy-mode copies to the terminal and ignores programs' OSC 52, off does neither.",
         kind: Kind::Choice(&["off", "external", "on"]),
         scope: OptionScope::Global,
         default: "external",
@@ -1427,7 +1427,7 @@ const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "get-clipboard",
-        doc: "What a program asking for the clipboard with OSC 52 gets: nothing (off), the newest paste buffer (buffer), the terminal's clipboard (request), or the terminal's with the newest buffer as fallback (both).",
+        doc: "Whether a program's OSC 52 clipboard query is answered. Only buffer answers it, from the newest paste buffer, and only when set-clipboard is on; off, request and both are never answered, and the terminal's clipboard is never asked.",
         kind: Kind::Choice(&["off", "buffer", "request", "both"]),
         scope: OptionScope::Global,
         default: "buffer",
@@ -6399,7 +6399,10 @@ mod tests {
         for name in BUILTINS.iter().map(|b| b.name).chain(list_names()) {
             assert!(text.contains(&format!("\n## {name}\n")), "{name} missing");
         }
-        assert!(!text.contains("TOML key**: (none)"));
+        assert!(
+            !text.contains("TOML key**: `(none)`"),
+            "an option has no TOML key"
+        );
     }
 
     /// `source-file` globs only the path it is given: the requester's cwd

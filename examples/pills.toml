@@ -22,8 +22,6 @@ theme_red = "#cc241d"
 pill_l = ""
 pill_r = ""
 
-pane-frame-tab-ends = ""
-
 [pane-border]
 style = "fg=#{@theme_grey}"
 active-style = "fg=#{@theme_yellow}"

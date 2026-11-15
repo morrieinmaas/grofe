@@ -641,7 +641,7 @@ Default: `off`
 
 ## get-clipboard
 
-What a program asking for the clipboard with OSC 52 gets: nothing (off), the newest paste buffer (buffer), the terminal's clipboard (request), or the terminal's with the newest buffer as fallback (both).
+Whether a program's OSC 52 clipboard query is answered. Only buffer answers it, from the newest paste buffer, and only when set-clipboard is on; off, request and both are never answered, and the terminal's clipboard is never asked.
 
 - **TOML key**: `get-clipboard` (string)
 - **Scope**: global
@@ -1409,7 +1409,7 @@ Default: `default`
 
 ## set-clipboard
 
-What a program setting the clipboard with OSC 52 does: on makes a paste buffer and sets the terminal's clipboard, external only sets the terminal's, off neither.
+Where clipboard text goes: on makes a program's OSC 52 a paste buffer and passes it to the terminal, external sends only copy-mode copies to the terminal and ignores programs' OSC 52, off does neither.
 
 - **TOML key**: `set-clipboard` (string)
 - **Scope**: global
