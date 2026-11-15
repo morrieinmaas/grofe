@@ -1831,9 +1831,8 @@ mod tests {
             assert!(read_shm(&name, size, offset, 1 << 20).is_err());
             // Each read unlinks the object; make it again.
             // SAFETY: a valid C string; the fd is owned right after.
-            let again = unsafe {
-                libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600)
-            };
+            let again =
+                unsafe { libc::shm_open(cname.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600) };
             assert!(again >= 0);
             // SAFETY: shm_open returned a fresh fd.
             let f = File::from(unsafe { OwnedFd::from_raw_fd(again) });
