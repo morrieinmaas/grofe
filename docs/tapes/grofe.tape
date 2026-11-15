@@ -7,7 +7,7 @@ Set FontFamily "@FONT@"
 Set FontSize 16
 Set Width 1440
 Set Height 810
-Set Padding 16
+Set Padding 32
 Set Theme "@THEME@"
 Set TypingSpeed 0
 
