@@ -305,6 +305,9 @@ pub struct State {
     pub exit: bool,
     /// The resume binding sampling timer, while one runs (`resume::watch`).
     /// The snapshot writer, started by the first [`snapshot::track`].
+    /// `send-keys -K` nesting: how deep it runs inside the bindings of the
+    /// keys it typed, and whether that hit its limit.
+    pub(crate) typing: (u32, bool),
     pub(crate) snapshot_writer: Option<snapshot::Writer>,
     pub(crate) resume_timer: Option<tokio::task::AbortHandle>,
     /// Restored panes whose process runs their saved resume, by pane and
@@ -711,6 +714,7 @@ async fn serve(
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        typing: (0, false),
         snapshot_writer: None,
         resume_timer: None,
         from_resume: Vec::new(),
@@ -1452,6 +1456,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         command_log: Default::default(),
         event_key: None,
         command_key: None,
+        typing: (0, false),
         snapshot_writer: None,
         resume_timer: None,
         from_resume: Vec::new(),
