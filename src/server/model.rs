@@ -1455,6 +1455,7 @@ mod tests {
             images: false,
             identity: Default::default(),
             delay: std::time::Duration::ZERO,
+            colours: Default::default(),
         };
         // macOS `openpty` can fail with ENXIO ("Device not configured") while
         // other tests open and close ptys at the same time; a retry succeeds.

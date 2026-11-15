@@ -144,6 +144,9 @@ pub struct PaneSpawn {
     /// restore stagger); zero spawns it at once. Input sent meanwhile waits
     /// in the pty, and [`PaneHandle::started`] says when the child is up.
     pub delay: Duration,
+    /// The default foreground and background the pane answers OSC 10 and 11
+    /// with, known before the child can ask.
+    pub colours: (Option<Rgb>, Option<Rgb>),
 }
 
 /// `enqueue_input` refused bytes because the pane's writer queue is full.
@@ -626,7 +629,10 @@ impl PaneHandle {
         let dirty = Arc::new(AtomicBool::new(false));
         let graphics_ok = Arc::new(AtomicBool::new(spec.graphics_ok));
         let images_on = Arc::new(AtomicBool::new(spec.images));
-        let default_colours = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
+        let default_colours = Arc::new([
+            AtomicU32::new(io::pack_colour(spec.colours.0)),
+            AtomicU32::new(io::pack_colour(spec.colours.1)),
+        ]);
         let sample = procinfo::Cache::default();
         let (input, input_rx) = InputQueue::new();
         let pipe = match over {
@@ -1687,6 +1693,7 @@ mod tests {
             images: false,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
         }
     }
 
@@ -1979,6 +1986,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -2013,6 +2021,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -2042,6 +2051,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             cell_px: Some((10, 20)),
             ..spec_for(&[
                 "sh",
@@ -2079,6 +2089,7 @@ mod tests {
             images: true,
             identity: Default::default(),
             delay: Duration::ZERO,
+            colours: Default::default(),
             ..spec_for(&["sleep", "100"])
         };
         let new = PaneHandle::spawn_over(spec, tx, Arc::new(Notify::new()), &old).expect("respawn");

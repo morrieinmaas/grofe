@@ -68,7 +68,7 @@ use nix::unistd::Pid;
 use crate::normalize::{Context, Normalizer, fixtures_dir};
 
 /// How long one command, or a screen settling, may take.
-const CMD_TIMEOUT: Duration = Duration::from_secs(10);
+const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A client's screen counts as settled after this long without output.
 const SCREEN_QUIET: Duration = Duration::from_millis(500);

@@ -112,7 +112,12 @@ fn notify_command_runs_recording_script_with_argv() {
     let msg = format!("perm $(touch {}) \"q\"", touched.display());
     let id = pane_id(&srv, "main");
     report(&srv, &id, "blocked", &msg);
-    srv.wait_for(|| out.exists(), WAIT).expect("script ran");
+    // The shell creates the file before `printf` writes to it.
+    srv.wait_for(
+        || fs::read_to_string(&out).is_ok_and(|s| s.lines().count() >= 3),
+        WAIT,
+    )
+    .expect("script ran");
     let got = fs::read_to_string(&out).expect("read record");
     let lines: Vec<&str> = got.lines().collect();
     assert_eq!(lines.len(), 3, "got {got:?}");
@@ -151,7 +156,11 @@ fn mute_suppresses_command() {
     assert!(!out.exists(), "no command while muted");
     srv.cmd(&["notify", "unmute"]).expect("unmute");
     report(&srv, second, "blocked", "loud-two");
-    srv.wait_for(|| out.exists(), WAIT).expect("script ran");
+    srv.wait_for(
+        || fs::read_to_string(&out).is_ok_and(|s| s.contains("loud-two")),
+        WAIT,
+    )
+    .expect("script ran");
     let got = fs::read_to_string(&out).expect("read record");
     assert!(
         got.contains("loud-two") && !got.contains("muted-one"),

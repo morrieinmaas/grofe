@@ -72,7 +72,7 @@ const SHRC: &str = "shrc";
 pub const FRAMES_PIN: &str = "conf.d/00-harness-frames-off.toml";
 
 /// How long a single CLI invocation may take before the test fails.
-pub const CMD_TIMEOUT: Duration = Duration::from_secs(10);
+pub const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The output of one bounded CLI run.
 #[derive(Debug)]

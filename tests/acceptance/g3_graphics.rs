@@ -138,9 +138,12 @@ fn puts(bytes: &[u8]) -> Vec<Put> {
     let mut from = 0;
     while let Some(i) = text[from..].find("\x1b_Ga=p,") {
         let start = from + i;
-        let end = text[start..]
-            .find("\x1b\\")
-            .map_or(text.len(), |e| start + e);
+        // An APC cut off by the end of what was read so far is not complete:
+        // the next poll sees all of it.
+        let Some(e) = text[start..].find("\x1b\\") else {
+            break;
+        };
+        let end = start + e;
         let keys = keys_of(&text[start + 3..end]);
         // The move before it: ESC [ row ; col H.
         let before = &text[..start];
