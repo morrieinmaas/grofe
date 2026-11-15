@@ -16,14 +16,15 @@ use unicode_width::UnicodeWidthChar;
 
 use super::State;
 use super::agents::{Agent, Rank, rank};
+use super::borders::{PaneBox, PaneLines};
 use super::clients;
 use super::dispatch::agent;
-use super::dispatch::options::{FormatCtx, ServerVars};
+use super::dispatch::options::{self, FormatCtx, ServerVars};
 use super::input::{Input, InputHook, MouseButton, MouseKind, Routed};
 use super::listview::{ListAction, ListState};
 use super::pane::{CellFlags, SnapCell};
-use super::render::{Overlay, OverlayCtx, Screen};
-use super::status::Style;
+use super::render::{self, Frame, Overlay, OverlayCtx, PaneLooks, Screen};
+use super::status::{self, Style};
 pub use crate::cmd::SidebarOp;
 use crate::cmd::expand;
 use crate::types::{ClientId, PaneId};
@@ -113,10 +114,11 @@ pub fn client_gone(state: &mut State, client: ClientId) {
     state.sidebars.clients.remove(&client);
 }
 
-/// One agent row, with the session it is listed under.
+/// One agent entry: its pane and the window it is labelled with, after
+/// the session's name when that is not the client's own.
 struct Row {
     pane: PaneId,
-    session: String,
+    label: String,
 }
 
 fn field(state: &State, pane: PaneId, format: &str) -> String {
@@ -150,61 +152,47 @@ fn rows(state: &State, client: ClientId) -> Vec<Row> {
     groups
         .into_iter()
         .flat_map(|(session, panes)| {
+            let prefix = if Some(&session) == own.as_ref() {
+                String::new()
+            } else {
+                format!("{session}:")
+            };
             panes.into_iter().map(move |pane| Row {
                 pane,
-                session: session.clone(),
+                label: format!("{prefix}{}", field(state, pane, "#{window_name}")),
             })
         })
         .collect()
 }
 
-/// What a strip line shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Slot {
-    Header(String),
-    /// An agent (index into the rows); takes two lines.
-    Agent(usize),
+/// The lines an entry takes: its name and its detail, then a blank line
+/// before the next one.
+const ENTRY: usize = 3;
+
+/// How many entries fit whole in `height` lines (the last needs no blank
+/// line after it); at least one, as a page.
+fn visible(height: usize) -> usize {
+    ((height + 1) / ENTRY).max(1)
 }
 
-/// Places the rows from `top` into `height` lines: a header line when a
-/// session starts, then two lines per agent that fits whole.
-fn place(rows: &[Row], top: usize, height: usize) -> Vec<(usize, Slot)> {
-    let mut slots = Vec::new();
-    let mut y = 0;
-    for (i, row) in rows.iter().enumerate().skip(top) {
-        if i == top || rows[i - 1].session != row.session {
-            if y >= height {
-                break;
-            }
-            slots.push((y, Slot::Header(row.session.clone())));
-            y += 1;
-        }
-        if y + 2 > height {
-            break;
-        }
-        slots.push((y, Slot::Agent(i)));
-        y += 2;
-    }
-    slots
+/// The first of `count` entries shown in `height` lines: the list's top,
+/// moved just enough to keep the selected entry on screen.
+fn first(count: usize, list: &ListState, height: usize) -> usize {
+    let selected = list.selected.min(count.saturating_sub(1));
+    let top = list.top.min(selected);
+    top.max((selected + 1).saturating_sub(visible(height)))
 }
 
-/// The first row shown, moved so the selected row is on screen, and the
-/// placed lines.
-fn layout(rows: &[Row], list: &ListState, height: usize) -> (usize, Vec<(usize, Slot)>) {
-    let selected = list.selected.min(rows.len().saturating_sub(1));
-    let mut top = list.top.min(selected);
-    loop {
-        let slots = place(rows, top, height);
-        let seen = slots.iter().any(|(_, s)| *s == Slot::Agent(selected));
-        if seen || top >= selected {
-            return (top, slots);
-        }
-        top += 1;
-    }
+/// The entry on line `y` of `height` content lines, from entry `top` on,
+/// if `y` is one of its two lines (not the blank one after it).
+fn entry_at(count: usize, top: usize, height: usize, y: usize) -> Option<usize> {
+    let k = y / ENTRY;
+    let i = top + k;
+    (y % ENTRY < 2 && k * ENTRY + 2 <= height && i < count).then_some(i)
 }
 
-/// Where the strip is on `client`'s screen: first column of the separator,
-/// first row, height.
+/// The columns the strip reserves on `client`'s screen: first column of
+/// the separator, first row, height (the rows the window has).
 fn geometry(state: &State, client: ClientId, cols: u16, rows: u16) -> Option<(u16, u16, u16)> {
     let c = state.clients.get(&client)?;
     let taken = reserved(state, client, cols);
@@ -216,13 +204,113 @@ fn geometry(state: &State, client: ClientId, cols: u16, rows: u16) -> Option<(u1
     Some((cols - taken, top, rows - geom.lines))
 }
 
+/// Where the strip draws: the box round its entries, as screen columns
+/// and rows, ends exclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Strip {
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    /// Framed as a pane is (spec 2026-11-05-frames.md), when the client's
+    /// window is: the box is the frame's inside. Otherwise the box starts
+    /// right of a one-cell separator.
+    framed: bool,
+}
+
+impl Strip {
+    fn height(&self) -> usize {
+        self.y1 - self.y0
+    }
+}
+
+/// The strip in the columns [`geometry`] reserves. Framed like one more
+/// pane when the client's window is framed: the window's own outer gap
+/// before it, `pane-gap` after it, and the same rows the window's frames
+/// take (the gap on every edge but the status line's).
+fn strip(state: &State, client: ClientId, cols: u16, rows: u16) -> Option<Strip> {
+    let (x0, top, height) = geometry(state, client, cols, rows)?;
+    let (x0, top, height, end) = (
+        usize::from(x0),
+        usize::from(top),
+        usize::from(height),
+        usize::from(cols),
+    );
+    let unframed = Strip {
+        x0: x0 + 1,
+        y0: top,
+        x1: end,
+        y1: top + height,
+        framed: false,
+    };
+    let c = state.clients.get(&client)?;
+    let model = &state.model;
+    let Some(w) = model
+        .sessions
+        .get(&c.session)
+        .and_then(|s| model.windows.get(&s.active))
+        .filter(|w| w.frames && w.framed())
+    else {
+        return Some(unframed);
+    };
+    let gap = usize::from(w.pane_gap);
+    let geom = clients::status_geometry(model, c.session, rows);
+    let (above, below) = match (geom.lines > 0, geom.top) {
+        (false, _) => (gap, gap),
+        (true, true) => (0, gap),
+        (true, false) => (gap, 0),
+    };
+    let (fy0, fy1) = (top + above, (top + height).saturating_sub(below));
+    let fx1 = end.saturating_sub(gap);
+    if fx1 < x0 + 4 || fy1 < fy0 + 3 {
+        return Some(unframed);
+    }
+    Some(Strip {
+        x0: x0 + 1,
+        y0: fy0 + 1,
+        x1: fx1 - 1,
+        y1: fy1 - 1,
+        framed: true,
+    })
+}
+
+/// The state glyph at the head of an entry: one-cell marks that read as
+/// a column, so the names line up.
 fn glyph(a: &Agent) -> &'static str {
     match rank(a) {
-        Rank::Blocked => "⏸",
+        Rank::Blocked => "‖",
         Rank::Error => "✗",
         Rank::Unseen | Rank::Done => "✓",
         Rank::Working => "●",
-        Rank::Idle => "○",
+        Rank::Idle => "·",
+    }
+}
+
+/// What an entry's second line says: what the agent is blocked on, else
+/// what it last said, else its state.
+fn detail(a: &Agent) -> String {
+    if let Some(reason) = a.blocked.as_deref() {
+        return format!("blocked: {reason}");
+    }
+    match (a.msg.as_deref(), rank(a)) {
+        (Some(text), _) if !text.is_empty() => text.to_string(),
+        (_, Rank::Unseen) => "done, unseen".to_string(),
+        (_, r) => r.as_str().to_string(),
+    }
+}
+
+/// The glyph's colour for the agent's state: a blocked agent's is its
+/// frame's (`agent-blocked-border-style`).
+// ponytail: the other states take fixed named colours, as message pills
+// do, so the terminal's theme picks the shades; no option per state yet.
+fn state_style(a: &Agent, blocked: Style, dim: Style) -> Style {
+    let named = status::parse_style;
+    match rank(a) {
+        Rank::Blocked => blocked,
+        Rank::Error => named("fg=red"),
+        Rank::Unseen | Rank::Done => named("fg=green"),
+        Rank::Working => named("fg=cyan"),
+        Rank::Idle => dim,
     }
 }
 
@@ -241,35 +329,44 @@ impl InputHook for SidebarHook {
             return None;
         };
         let (x0, top, height) = geometry(state, client, cols, term_rows)?;
-        let rows = rows(state, client);
-        let mut list = state
-            .sidebars
-            .clients
-            .get(&client)
-            .map(|e| e.list.clone())
-            .unwrap_or_default();
-        list.page = (usize::from(height) / 2).max(1);
+        // The list is built only for input the strip takes: typing into a
+        // pane with the strip showing expands no formats.
+        let list_for = |state: &State| {
+            let inside = strip(state, client, cols, term_rows)?;
+            let mut list = state
+                .sidebars
+                .clients
+                .get(&client)
+                .map(|e| e.list.clone())
+                .unwrap_or_default();
+            list.page = visible(inside.height());
+            Some((inside, rows(state, client), list))
+        };
         match input {
             Input::Mouse(m) if m.col >= x0 && m.row >= top && m.row - top < height => {
-                if m.kind == MouseKind::Down(MouseButton::Left) {
-                    let y = usize::from(m.row - top);
-                    let (_, slots) = layout(&rows, &list, usize::from(height));
-                    let hit = slots.iter().find_map(|(at, slot)| match slot {
-                        Slot::Agent(i) if y == *at || y == *at + 1 => Some(*i),
-                        _ => None,
-                    });
-                    if let Some(i) = hit {
-                        list.selected = i;
-                        store(state, client, list, false);
-                        jump(state, client, rows[i].pane);
-                    }
+                let (inside, rows, mut list) = list_for(state)?;
+                let (x, y) = (usize::from(m.col), usize::from(m.row));
+                let on_box = (inside.x0..inside.x1).contains(&x) && y >= inside.y0;
+                if m.kind == MouseKind::Down(MouseButton::Left)
+                    && on_box
+                    && let Some(i) = entry_at(
+                        rows.len(),
+                        first(rows.len(), &list, inside.height()),
+                        inside.height(),
+                        y - inside.y0,
+                    )
+                {
+                    list.selected = i;
+                    store(state, client, list, false);
+                    jump(state, client, rows[i].pane);
                 }
                 Some(Routed::Consumed)
             }
             Input::Key(key) if is_focused(state, client) => {
+                let (inside, rows, mut list) = list_for(state)?;
                 let action = list.on_key(key, rows.len(), false);
                 list.selected = list.selected.min(rows.len().saturating_sub(1));
-                list.top = layout(&rows, &list, usize::from(height)).0;
+                list.top = first(rows.len(), &list, inside.height());
                 let picked = (action == ListAction::Enter)
                     .then(|| rows.get(list.selected).map(|r| r.pane))
                     .flatten();
@@ -301,6 +398,51 @@ fn jump(state: &mut State, client: ClientId, pane: PaneId) {
     }
 }
 
+/// The options the strip is drawn with, from the client's window as its
+/// panes' frames are: their lines, title switch and tab ends, the border
+/// styles (active while the strip has the keys), `mode-style` for the
+/// selected entry and `agent-blocked-border-style` for a blocked glyph.
+struct Look {
+    lines: PaneLines,
+    title: bool,
+    ends: String,
+    frame: Style,
+    mode: Style,
+    blocked: Style,
+}
+
+fn look(state: &State, client: ClientId, focused: bool) -> Option<Look> {
+    let model = &state.model;
+    let c = state.clients.get(&client)?;
+    let w = model
+        .sessions
+        .get(&c.session)
+        .and_then(|s| model.windows.get(&s.active))?;
+    let chain = options::chain(model, w.active);
+    let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
+    let mut looks = PaneLooks {
+        lines: PaneLines::parse(opt("pane-border-lines")),
+        ..Default::default()
+    };
+    render::apply_frames(model, w, &mut looks);
+    let inner = FormatCtx::new(model, w.active);
+    let vars = ServerVars::fresh(state, w.active, &inner);
+    let style = |name: &str| status::base_style(opt(name), &vars);
+    let border = if focused {
+        "pane-active-border-style"
+    } else {
+        "pane-border-style"
+    };
+    Some(Look {
+        lines: looks.lines,
+        title: looks.frame_title,
+        ends: opt("pane-frame-tab-ends").to_string(),
+        frame: style(border),
+        mode: style("mode-style"),
+        blocked: style("agent-blocked-border-style"),
+    })
+}
+
 pub struct SidebarOverlay;
 
 impl Overlay for SidebarOverlay {
@@ -308,59 +450,92 @@ impl Overlay for SidebarOverlay {
         let Some((x0, top, height)) = geometry(state, client, screen.cols, screen.rows) else {
             return;
         };
+        let Some(inside) = strip(state, client, screen.cols, screen.rows) else {
+            return;
+        };
+        let focused = is_focused(state, client);
+        let Some(look) = look(state, client, focused) else {
+            return;
+        };
         let (x0, top, height) = (usize::from(x0), usize::from(top), usize::from(height));
-        let end = usize::from(screen.cols);
         let plain = Style::default();
         let mut dim = plain;
         dim.attrs |= CellFlags::DIM;
-        let mut bold = plain;
-        bold.attrs |= CellFlags::BOLD;
         for y in top..top + height {
-            for x in x0..end {
+            for x in x0..usize::from(screen.cols) {
                 put_cell(screen, x, y, ' ', &plain);
             }
-            put_cell(screen, x0, y, '│', &dim);
+            if !inside.framed {
+                put_cell(screen, x0, y, '│', &dim);
+            }
         }
-        let entry = state.sidebars.clients.get(&client);
-        let focused = is_focused(state, client);
-        let mut list = entry.map(|e| e.list.clone()).unwrap_or_default();
         let rows = rows(state, client);
-        list.page = (height / 2).max(1);
+        if inside.framed {
+            let (l, r) = render::tab_ends(&look.ends);
+            let title = format!("{l} {} {r} agents", rows.len());
+            let content = PaneBox {
+                id: PaneId(0),
+                x: inside.x0 as i32,
+                y: inside.y0 as i32,
+                w: (inside.x1 - inside.x0) as i32,
+                h: inside.height() as i32,
+                index: 0,
+            };
+            let frame = Frame {
+                lines: look.lines,
+                style: look.frame,
+                title: look.title.then_some(title.as_str()),
+                tab: None,
+                marked: false,
+            };
+            render::draw_frame(screen, &content, &frame);
+        }
+        // Text keeps a cell clear of each side of the box.
+        let (tx, end) = (inside.x0 + 1, inside.x1.saturating_sub(1));
         if rows.is_empty() {
-            put_text(screen, x0 + 2, top, end, "no agents", &dim);
+            put_text(screen, tx, inside.y0, end, "no agents", &dim);
             return;
         }
-        let selected = list.selected.min(rows.len() - 1);
-        let (_, slots) = layout(&rows, &list, height);
-        for (at, slot) in slots {
-            let y = top + at;
-            match slot {
-                Slot::Header(name) => {
-                    put_text(screen, x0 + 2, y, end, &name, &bold);
-                }
-                Slot::Agent(i) => {
-                    let Some(a) = state.agents.get(rows[i].pane) else {
-                        continue;
-                    };
-                    let mut style = plain;
-                    let mut msg_style = dim;
-                    if focused && i == selected {
-                        style.attrs |= CellFlags::INVERSE;
-                        msg_style.attrs |= CellFlags::INVERSE;
+        let mut list = state
+            .sidebars
+            .clients
+            .get(&client)
+            .map(|e| e.list.clone())
+            .unwrap_or_default();
+        list.selected = list.selected.min(rows.len() - 1);
+        let h = inside.height();
+        let from = first(rows.len(), &list, h);
+        for (k, row) in rows.iter().enumerate().skip(from) {
+            let y = inside.y0 + (k - from) * ENTRY;
+            if y + 2 > inside.y1 {
+                break;
+            }
+            let Some(a) = state.agents.get(row.pane) else {
+                continue;
+            };
+            let selected = focused && k == list.selected;
+            let base = if selected { look.mode } else { plain };
+            if selected {
+                for line in [y, y + 1] {
+                    for x in inside.x0..inside.x1 {
+                        put_cell(screen, x, line, ' ', &base);
                     }
-                    for line in [y, y + 1] {
-                        for x in x0 + 1..end {
-                            put_cell(screen, x, line, ' ', &style);
-                        }
-                    }
-                    let target = field(state, rows[i].pane, "#{window_index}.#{pane_index}");
-                    let kind = a.kind.as_deref().unwrap_or("");
-                    let first = format!(" {} {target} {kind}", glyph(a));
-                    put_text(screen, x0 + 1, y, end, &first, &style);
-                    let msg = a.blocked.as_deref().or(a.msg.as_deref()).unwrap_or("");
-                    put_text(screen, x0 + 1, y + 1, end, &format!("   {msg}"), &msg_style);
                 }
             }
+            let glyph_style = if selected {
+                base
+            } else {
+                state_style(a, look.blocked, dim)
+            };
+            let mut name = base;
+            name.attrs |= CellFlags::BOLD;
+            let mut muted = base;
+            muted.attrs |= CellFlags::DIM;
+            let kind = a.kind.as_deref().unwrap_or("agent");
+            let at = put_text(screen, tx, y, end, glyph(a), &glyph_style);
+            let label = format!(" {kind} · {}", row.label);
+            put_fit(screen, at, y, end, &label, &name);
+            put_fit(screen, tx + 2, y + 1, end, &detail(a), &muted);
         }
     }
 }
@@ -387,7 +562,15 @@ fn put_with(screen: &mut Screen, x: usize, y: usize, c: char, style: &Style, fla
 
 /// Draws `text` from `x`, cut at column `end` (exclusive). A wide character
 /// that does not fit whole is dropped, not split.
-fn put_text(screen: &mut Screen, mut x: usize, y: usize, end: usize, text: &str, style: &Style) {
+/// Returns the column after the text.
+fn put_text(
+    screen: &mut Screen,
+    mut x: usize,
+    y: usize,
+    end: usize,
+    text: &str,
+    style: &Style,
+) -> usize {
     for c in text.chars() {
         let w = match UnicodeWidthChar::width(c) {
             Some(w) if w > 0 => w,
@@ -404,6 +587,23 @@ fn put_text(screen: &mut Screen, mut x: usize, y: usize, end: usize, text: &str,
         }
         x += w;
     }
+    x
+}
+
+/// As [`put_text`], but text cut at `end` ends in an ellipsis.
+fn put_fit(screen: &mut Screen, x: usize, y: usize, end: usize, text: &str, style: &Style) {
+    let room = end.saturating_sub(x);
+    let width = |t: &str| {
+        t.chars()
+            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+            .sum::<usize>()
+    };
+    if width(text) <= room {
+        put_text(screen, x, y, end, text, style);
+        return;
+    }
+    let at = put_text(screen, x, y, end.saturating_sub(1), text, style);
+    put_text(screen, at, y, end, "…", style);
 }
 
 #[cfg(test)]
@@ -445,9 +645,18 @@ mod tests {
         tokio::sync::mpsc::Receiver<Vec<u8>>,
     ) {
         let mut state = test_state();
-        run(&mut state, &["new-session", "-d", "-s", "a", "sleep 600"]);
-        run(&mut state, &["new-window", "-t", "a", "sleep 600"]);
-        run(&mut state, &["new-session", "-d", "-s", "b", "sleep 600"]);
+        run(
+            &mut state,
+            &["new-session", "-d", "-s", "a", "-n", "api", "sleep 600"],
+        );
+        run(
+            &mut state,
+            &["new-window", "-t", "a", "-n", "web", "sleep 600"],
+        );
+        run(
+            &mut state,
+            &["new-session", "-d", "-s", "b", "-n", "infra", "sleep 600"],
+        );
         let panes: Vec<PaneId> = state.model.panes.keys().copied().collect();
         let p = [panes[0], panes[1], panes[2]];
         let now = Instant::now();
@@ -501,7 +710,7 @@ mod tests {
         SidebarHook.on_input(state, client, &Input::Mouse(m), Instant::now())
     }
 
-    fn lines(state: &State, client: ClientId, cols: u16) -> Vec<String> {
+    fn screen(state: &State, client: ClientId, cols: u16) -> Screen {
         let mut screen = Screen::new(cols, 50);
         let cx = OverlayCtx {
             client,
@@ -512,6 +721,10 @@ mod tests {
         };
         SidebarOverlay.draw(state, client, &cx, &mut screen);
         screen
+    }
+
+    fn lines(state: &State, client: ClientId, cols: u16) -> Vec<String> {
+        screen(state, client, cols)
             .cells
             .chunks(usize::from(cols))
             .map(|r| r.iter().map(|c| c.c).collect::<String>())
@@ -549,45 +762,184 @@ mod tests {
         assert!(press(&mut state, client, "Down").is_none());
     }
 
+    /// The strip's columns (from the separator column, 127) of each line.
+    fn strip_of(l: &[String]) -> Vec<String> {
+        l.iter().map(|r| r.chars().skip(127).collect()).collect()
+    }
+
+    fn cell(screen: &Screen, x: usize, y: usize) -> &SnapCell {
+        &screen.cells[y * usize::from(screen.cols) + x]
+    }
+
+    // 160 columns less 33: the window is 127 wide and ends in its one-cell
+    // gap, so the strip's frame runs from column 127 to 158 with the gap
+    // at 159; rows 1 to 48 under the window's top gap, meeting the status
+    // line on row 49. Entries take three lines from row 2.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn rows_grouped_by_session_two_lines() {
+    async fn framed_like_a_pane() {
         let (mut state, client, _p, _out) = setup(160);
         set(&mut state, client, SidebarOp::On).expect("on");
         let l = lines(&state, client, 160);
-        let strip: Vec<String> = l.iter().map(|r| r.chars().skip(127).collect()).collect();
-        assert!(strip[0].starts_with('│'), "separator column");
-        // The client's own session b first, then a with its two agents.
-        assert!(strip[0].contains(" b"));
-        assert!(strip[1].contains("● 1.1 claude"), "{:?}", strip[1]);
-        assert!(strip[2].contains("busy"));
-        assert!(strip[3].contains(" a"));
-        assert!(strip[4].contains("⏸ 1.1 claude"));
-        assert!(strip[5].contains("ask me"));
-        assert!(strip[6].contains("○ 2.1 claude"));
-        assert!(strip[7].trim_matches(['│', ' ']).is_empty());
-        // The status row stays out of the strip.
-        assert!(!strip[49].contains('│'));
-        // Nothing left of the separator.
-        assert!(l[1].chars().take(127).all(|c| c == ' '));
+        let strip = strip_of(&l);
+        assert!(strip[0].trim().is_empty(), "top gap: {:?}", strip[0]);
+        assert!(strip[1].starts_with("╭─ ( 3 ) agents ─"), "{:?}", strip[1]);
+        assert!(strip[1].ends_with("─╮ "), "{:?}", strip[1]);
+        let at = |y: usize| strip[y].trim_end().to_string();
+        assert_eq!(at(2), format!("│ ● claude · infra{}│", " ".repeat(13)));
+        assert_eq!(at(3).trim_matches(['│', ' ']), "busy");
+        assert_eq!(at(4).trim_matches(['│', ' ']), "", "blank between entries");
+        assert_eq!(at(5).trim_matches(['│', ' ']), "‖ claude · a:api");
+        assert_eq!(at(6).trim_matches(['│', ' ']), "ask me");
+        assert_eq!(at(7).trim_matches(['│', ' ']), "");
+        assert_eq!(at(8).trim_matches(['│', ' ']), "· claude · a:web");
+        assert_eq!(at(9).trim_matches(['│', ' ']), "idle");
+        assert!(strip[47].starts_with('│') && strip[47].ends_with("│ "));
+        assert!(strip[48].starts_with("╰─") && strip[48].ends_with("─╯ "));
+        assert!(strip[49].trim().is_empty(), "the status line's row");
+        assert!(l[2].chars().take(127).all(|c| c == ' '), "window untouched");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn click_row_jumps() {
+    async fn styled_from_options() {
+        let (mut state, client, _p, _out) = setup(160);
+        set(&mut state, client, SidebarOp::On).expect("on");
+        run(
+            &mut state,
+            &["set", "-g", "agent-blocked-border-style", "fg=magenta"],
+        );
+        let s = screen(&state, client, 160);
+        let magenta = status::parse_style("fg=magenta").fg;
+        assert_eq!(cell(&s, 129, 5).c, '‖');
+        assert_eq!(cell(&s, 129, 5).fg, magenta, "blocked glyph");
+        assert!(cell(&s, 131, 5).flags.contains(CellFlags::BOLD), "name");
+        assert!(cell(&s, 131, 6).flags.contains(CellFlags::DIM), "detail");
+        let green = status::parse_style("fg=green").fg;
+        assert_ne!(cell(&s, 127, 1).fg, green, "inactive frame");
+        set(&mut state, client, SidebarOp::Focus).expect("focus");
+        let s = screen(&state, client, 160);
+        assert_eq!(cell(&s, 127, 1).fg, green, "pane-active-border-style");
+        assert_eq!(cell(&s, 158, 20).c, '│');
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn selected_entry_takes_mode_style() {
+        let (mut state, client, _p, _out) = setup(160);
+        run(&mut state, &["set", "-g", "mode-style", "bg=blue,fg=white"]);
+        set(&mut state, client, SidebarOp::Focus).expect("focus");
+        press(&mut state, client, "Down");
+        let s = screen(&state, client, 160);
+        let blue = status::parse_style("bg=blue").bg;
+        for y in [5, 6] {
+            for x in 128..158 {
+                assert_eq!(cell(&s, x, y).bg, blue, "({x}, {y})");
+            }
+        }
+        for y in [2, 3, 4, 7, 8] {
+            assert_ne!(cell(&s, 140, y).bg, blue, "row {y}");
+        }
+        assert_ne!(cell(&s, 127, 5).bg, blue, "frame keeps its style");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn long_detail_ends_in_ellipsis() {
+        let (mut state, client, p, _out) = setup(160);
+        let long = "x".repeat(80);
+        state.agents.apply(
+            p[2],
+            report(AgentState::Working, Some(&long)),
+            true,
+            Instant::now(),
+        );
+        set(&mut state, client, SidebarOp::On).expect("on");
+        let strip = strip_of(&lines(&state, client, 160));
+        assert_eq!(strip[3], format!("│   {}… │ ", "x".repeat(25)));
+    }
+
+    // The glyph is on column 129 and the label after it; text stops before
+    // 157, the cell clear of the frame. `x` puts the wide glyphs on odd
+    // columns from 141, so the eighth would take 155 and 156: it is dropped
+    // whole and the ellipsis takes 155.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wide_label_cut_whole_with_ellipsis() {
+        let (mut state, client, _p, _out) = setup(160);
+        let name = format!("x{}", "漢".repeat(20));
+        run(&mut state, &["rename-window", "-t", "b:infra", &name]);
+        set(&mut state, client, SidebarOp::On).expect("on");
+        let s = screen(&state, client, 160);
+        let row: String = (129..158).map(|x| cell(&s, x, 2).c).collect();
+        assert_eq!(
+            row.replace(' ', ""),
+            format!("●claude·x{}…", "漢".repeat(7)),
+            "{row:?}"
+        );
+        let flag = |x, f| cell(&s, x, 2).flags.contains(f);
+        assert!(flag(153, CellFlags::WIDE_CHAR));
+        assert!(flag(154, CellFlags::WIDE_CHAR_SPACER), "last glyph whole");
+        assert_eq!(cell(&s, 155, 2).c, '…');
+        assert!(!flag(155, CellFlags::WIDE_CHAR) && !flag(156, CellFlags::WIDE_CHAR));
+        assert_eq!(cell(&s, 156, 2).c, ' ');
+        assert_eq!(cell(&s, 158, 2).c, '│');
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unframed_window_keeps_the_separator() {
+        let (mut state, client, _p, _out) = setup(160);
+        run(&mut state, &["set", "-g", "pane-frames", "off"]);
+        set(&mut state, client, SidebarOp::On).expect("on");
+        let strip = strip_of(&lines(&state, client, 160));
+        assert!(strip[0].starts_with("│ ● claude · infra"), "{:?}", strip[0]);
+        assert!(strip[1].contains("busy"));
+        assert!(strip[3].starts_with("│ ‖ claude · a:api"));
+        assert!(strip[48].starts_with('│'));
+        assert!(strip[49].trim().is_empty());
+    }
+
+    #[test]
+    fn entries_scroll_three_lines_each() {
+        assert_eq!(visible(8), 3);
+        assert_eq!(visible(7), 2);
+        assert_eq!(visible(1), 1);
+        let list = |selected, top| ListState {
+            selected,
+            top,
+            ..Default::default()
+        };
+        assert_eq!(first(10, &list(0, 0), 8), 0);
+        assert_eq!(first(10, &list(3, 0), 8), 1);
+        assert_eq!(first(10, &list(9, 0), 8), 7);
+        assert_eq!(first(10, &list(2, 5), 8), 2, "up past the top");
+        assert_eq!(entry_at(10, 1, 8, 0), Some(1));
+        assert_eq!(entry_at(10, 1, 8, 1), Some(1));
+        assert_eq!(entry_at(10, 1, 8, 2), None, "blank line");
+        assert_eq!(entry_at(10, 1, 8, 6), Some(3));
+        assert_eq!(entry_at(10, 1, 8, 7), Some(3));
+        assert_eq!(entry_at(10, 1, 7, 6), None, "cut off");
+        assert_eq!(entry_at(2, 0, 8, 6), None, "past the last");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_entry_jumps() {
         let (mut state, client, p, _out) = setup(160);
         set(&mut state, client, SidebarOp::On).expect("on");
-        // p2 (session a, second window) is listed on lines 6 and 7.
-        let routed = click(&mut state, client, 140, 7);
-        assert!(matches!(routed, Some(Routed::Consumed)));
-        let window = state.model.panes[&p[1]].window;
-        let session = state.clients[&client].session;
-        assert_eq!(state.model.sessions[&session].active, window);
-        // A click on a header selects nothing but is still consumed.
+        let active = |state: &State| state.model.sessions[&state.clients[&client].session].active;
+        let before = active(&state);
+        for row in [1, 7] {
+            assert!(matches!(
+                click(&mut state, client, 140, row),
+                Some(Routed::Consumed)
+            ));
+            assert_eq!(active(&state), before, "row {row} is no entry");
+        }
         assert!(matches!(
-            click(&mut state, client, 140, 0),
+            click(&mut state, client, 140, 9),
             Some(Routed::Consumed)
         ));
-        // A click left of the strip goes on to the panes.
-        assert!(click(&mut state, client, 10, 7).is_none());
+        assert_eq!(active(&state), state.model.panes[&p[1]].window);
+        assert_eq!(state.sidebars.clients[&client].list.selected, 2);
+        // Now on session `a`, whose agents come first: p1 on rows 2 and 3.
+        click(&mut state, client, 130, 3);
+        assert_eq!(active(&state), state.model.panes[&p[0]].window);
+        assert!(click(&mut state, client, 10, 8).is_none());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

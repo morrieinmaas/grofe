@@ -641,15 +641,15 @@ fn compose_window(inputs: &FrameInputs) -> (Screen, Vec<bool>) {
 }
 
 /// How one frame is drawn.
-struct Frame<'a> {
-    lines: PaneLines,
-    style: Style,
+pub(crate) struct Frame<'a> {
+    pub(crate) lines: PaneLines,
+    pub(crate) style: Style,
     /// The title drawn in the top edge, if any.
-    title: Option<&'a str>,
+    pub(crate) title: Option<&'a str>,
     /// The control tab at the right end of the top edge, if any.
-    tab: Option<&'a str>,
+    pub(crate) tab: Option<&'a str>,
     /// The marked pane's frame is drawn with reverse toggled.
-    marked: bool,
+    pub(crate) marked: bool,
 }
 
 /// Each framed tile's frame (spec 2026-11-05-frames.md), in its pane's
@@ -692,7 +692,7 @@ fn draw_frames(win: &mut Screen, inputs: &FrameInputs) {
 /// corners and edges of `frame.lines`, clipped to the screen, and the
 /// title from two cells in, between a space each side, cut to leave the
 /// last edge cell before the corner: `╭─ 1: nvim ─────╮`.
-fn draw_frame(screen: &mut Screen, pane: &PaneBox, frame: &Frame) {
+pub(crate) fn draw_frame(screen: &mut Screen, pane: &PaneBox, frame: &Frame) {
     let (cols, rows) = (i32::from(screen.cols), i32::from(screen.rows));
     let (x0, y0) = (pane.x - 1, pane.y - 1);
     let (x1, y1) = (pane.x + pane.w, pane.y + pane.h);

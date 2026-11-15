@@ -94,8 +94,10 @@ switches session otherwise.
 ## The sidebar
 
 `prefix b` shows a strip at the right of your view listing the agents, grouped
-by session, two lines each. It is drawn by grofe, not a pane, so it runs no
-process. It is per client and hidden until you toggle it (or set
+by session, two lines each. When panes are framed it sits in a frame like theirs, styled by
+`pane-border-style` (`pane-active-border-style` while it has the keys), and the
+selected row takes `mode-style`. It is drawn by grofe, not a pane, so it runs
+no process. It is per client and hidden until you toggle it (or set
 `show-on-attach`), and it hides itself while the terminal is narrower than
 `min-client-width`. Click a row to jump; `agent-sidebar focus` gives it the
 keys until `Escape`.
