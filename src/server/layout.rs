@@ -597,13 +597,14 @@ impl LayoutTree {
         // otherwise the new first child, which hands it on round-robin as
         // tmux's `layout_resize_adjust` does.
         let gain = removed.weight + 1;
-        if children.len() == 1 {
+        if children.len() == 1
+            && let Some(mut remaining) = children.pop()
+        {
             // The survivor takes over the whole slot this split occupied,
             // growing by `gain` along `dir`. Unlike the non-collapse case,
             // `dir` here isn't necessarily this survivor's own split axis
             // (it's this split's axis, the one being discarded), so the
             // growth has to be pushed down through it explicitly.
-            let mut remaining = children.pop().unwrap();
             grow(&mut remaining.node, dir, gain);
             let slot = node_at_mut(&mut self.root, parent_path);
             *slot = remaining.node;
