@@ -187,6 +187,18 @@ fn generate() -> String {
         case("dashdash", &["--", "x"]);
         case("target", &["-t", "%1"]);
         case("target-extra", &["-t", "%1", "x"]);
+        case("target-glued", &["-t0"]);
+        case("target-num", &["-t", "0"]);
+        case("combined-bool", &["-dP"]);
+        case("combined-bool-rev", &["-Pd"]);
+        case("combined-value", &["-dt", "%1"]);
+        case("combined-glued", &["-dtx"]);
+        case("repeated-bool", &["-d", "-d"]);
+        case("repeated-value", &["-t", "%1", "-t", "%2"]);
+        case("flag-after-positional", &["x", "-d"]);
+        case("value-after-positional", &["x", "-t", "%1"]);
+        case("dashdash-flag", &["--", "-d"]);
+        case("flag-dashdash-positional", &["-d", "--", "x", "y"]);
         // One line per verb for the 52 single-letter flags, bare and with a
         // value; an unknown flag is shortened to `U`.
         let mut letters = String::new();
