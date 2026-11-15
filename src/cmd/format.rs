@@ -997,19 +997,11 @@ fn match_modifier(body: &str) -> Option<(&str, &str)> {
 
 /// `ctime(3)`'s text for `secs`, without the newline.
 fn ctime(secs: i64) -> Option<String> {
-    use nix::libc;
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    // `time_t` is 64 bits wide on every target grofe builds for.
-    let t = secs as libc::time_t;
-    // SAFETY: `tm` is plain old data, so all zeroes is a valid value.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers are to live locals; localtime_r is reentrant.
-    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-        return None;
-    }
+    let tm = time::localtime(secs)?;
     Some(format!(
         "{} {}{:3} {:02}:{:02}:{:02} {}",
         DAYS.get(usize::try_from(tm.tm_wday).ok()?)?,
