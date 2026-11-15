@@ -1704,6 +1704,8 @@ impl Mode {
     /// tmux's `window_copy_size_changed`: the selection and search marks
     /// go.
     fn size_changed(&mut self) {
+        // The labels name cells of the old copy.
+        self.hints = None;
         select::clear_selection(self);
         search::clear_marks(self);
         self.search.start = Some((self.cx, self.cy, self.oy));
@@ -2632,10 +2634,22 @@ impl Overlay for CopyOverlay {
                     let Some(y) = hit.row.checked_sub(top).filter(|y| *y < rows) else {
                         continue;
                     };
-                    for (i, c) in hit.label.chars().skip(h.typed.len()).enumerate() {
-                        if hit.x + i < cols {
-                            put(hit.x + i, y, styled(c, &style));
+                    let mut end = hit.x;
+                    for c in hit.label.chars().skip(h.typed.len()) {
+                        if end < cols {
+                            put(end, y, styled(c, &style));
                         }
+                        end += 1;
+                    }
+                    // A label cut a wide character in two: its spacer goes.
+                    if end < cols
+                        && mode
+                            .grid
+                            .snap(end, hit.row)
+                            .flags
+                            .contains(CellFlags::WIDE_CHAR_SPACER)
+                    {
+                        put(end, y, SnapCell { c: ' ', ..blank() });
                     }
                 }
             }
@@ -3238,6 +3252,31 @@ mod tests {
         let h = state.copy.get(pane).unwrap().hints.clone().unwrap();
         assert_eq!(h.hits.len(), 1);
         assert_eq!(h.hits[0].text, "foo42");
+    }
+
+    #[tokio::test]
+    async fn a_pattern_that_does_not_compile_is_an_error_and_keeps_the_old_list() {
+        let (mut state, _pane) = hint_pane(&["sleep", "30"], &["id 1111"]);
+        let argv = ["set-option", "-g", "copy-hint-patterns", "(unclosed"].map(String::from);
+        let err = crate::server::dispatch::run(&mut state, &crate::server::test_ctx(), &argv)
+            .expect_err("a bad pattern");
+        assert!(err.contains("bad hint pattern"), "{err}");
+        let list = state
+            .model
+            .options
+            .lookup_list("copy-hint-patterns", &[])
+            .expect("list");
+        assert!(list.values().all(|p| p != "(unclosed"));
+    }
+
+    #[tokio::test]
+    async fn a_refreshed_copy_drops_the_hints_that_named_the_old_one() {
+        let (mut state, pane) = hint_pane(&["sleep", "30"], &["id 1111"]);
+        start_hints(&mut state, pane, false);
+        assert!(state.copy.get(pane).unwrap().hints.is_some());
+        let fresh = Grid::from_text(60, 0, &["id 2222"]);
+        state.copy.get_mut(pane).unwrap().refresh(fresh);
+        assert!(state.copy.get(pane).unwrap().hints.is_none());
     }
 
     #[tokio::test]

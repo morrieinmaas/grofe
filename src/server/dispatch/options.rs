@@ -5711,6 +5711,11 @@ impl Options {
         persist: bool,
     ) -> Result<bool, String> {
         let l = list_builtin(name).ok_or_else(|| format!("invalid option: {name}"))?;
+        if name == "copy-hint-patterns" {
+            for p in op_values(&op) {
+                regex::Regex::new(p).map_err(|e| format!("bad hint pattern {p}: {e}"))?;
+            }
+        }
         // As tmux: removing from a list this owner doesn't have changes
         // nothing, and must not create an empty one that hides the parent's.
         if matches!(op, ListOp::Remove(_)) && self.list(owner, name).is_none() {
