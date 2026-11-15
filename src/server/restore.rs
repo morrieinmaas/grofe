@@ -4,7 +4,7 @@
 //!
 //! A restore happens once, at server start, before the server reports
 //! ready ([`at_start`]): when `start-server --restore` asked for it (the
-//! CLI passes [`RESTORE_ENV`] to the server it starts), or when the
+//! CLI passes `--restore` to the server it starts, see [`request`]), or when the
 //! config's `restore-on-start` is on and `GROFE_RESTORE_ON_START=0` does
 //! not force it off.
 //!
@@ -42,11 +42,6 @@ use crate::server::snapshot::{
 use crate::server::{Job, State, adopt, hooks, resume};
 use crate::types::{PaneId, Rect, SessionId, WindowId, cap_size};
 
-/// Set to `1` in the environment of a server `start-server --restore`
-/// starts: restore whatever the config says. The server drops it from its
-/// environment at once ([`take_request`]).
-pub const RESTORE_ENV: &str = "GROFE_RESTORE";
-
 /// What a restore brought back, for the log and `restore-done`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RestoreReport {
@@ -67,21 +62,19 @@ impl std::fmt::Display for RestoreError {
 
 impl std::error::Error for RestoreError {}
 
-/// Whether the server's environment held [`RESTORE_ENV`] set to `1`.
+/// Whether a restore was asked for: by the CLI (`grofe restore`), which
+/// passes `--restore` to the server it starts, so no environment variable
+/// is set or removed (nothing the server runs, a pane or a hook, inherits it).
 static FORCED: AtomicBool = AtomicBool::new(false);
 
-/// Takes [`RESTORE_ENV`] out of the process environment, remembering it
-/// for [`at_start`], so nothing the server runs inherits it: not a pane,
-/// a hook, a `pipe-pane` command (which takes the process environment)
-/// nor a server one of them starts. Called by `run_daemon` before any
-/// thread or runtime exists.
-pub fn take_request() {
-    if let Some(v) = std::env::var_os(RESTORE_ENV) {
-        FORCED.store(v == "1", Ordering::SeqCst);
-        // SAFETY: called before the server starts any thread, so nothing
-        // reads the environment concurrently.
-        unsafe { std::env::remove_var(RESTORE_ENV) };
-    }
+/// Asks for a restore at server start ([`at_start`]).
+pub fn request() {
+    FORCED.store(true, Ordering::SeqCst);
+}
+
+/// Whether [`request`] was called in this process.
+pub fn requested() -> bool {
+    FORCED.load(Ordering::SeqCst)
 }
 
 /// The error a restore into a server that has sessions gives.
@@ -90,7 +83,7 @@ pub const NOT_EMPTY: &str = "server not empty: restore needs an empty server";
 /// Called once at server start, after the config is applied and before
 /// the server reports ready: restores the snapshot when asked to.
 pub fn at_start(state: &mut State) {
-    let forced = FORCED.load(Ordering::SeqCst);
+    let forced = requested();
     let configured = state.options.restore_on_start
         && state.model.options.lookup("restore-on-start", &[]) == Some("on");
     if !forced && !configured {

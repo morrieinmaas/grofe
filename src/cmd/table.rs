@@ -19,7 +19,7 @@ pub(super) struct Row {
     /// `--long` flags (none takes a value).
     pub long: &'static [&'static str],
     /// Positionals the verb needs when it is given any argument at all (a
-    /// bare M3.6 verb parses and its handler refuses it).
+    /// bare verb parses and its handler refuses it).
     pub min: usize,
     pub max: usize,
     /// The builder reads `argv` itself: no flag scan.
@@ -532,11 +532,12 @@ pub(super) static ROWS: &[Row] = &[
     row("delete-buffer", "", "b:", 0, |f| {
         Ok(Command::DeleteBuffer(DeleteBuffer { name: f.val('b') }))
     }),
-    row("copy-mode", "", "eHMudqSs:t:", 0, |f| {
+    row("copy-mode", "", "ehHMudqSs:t:", 0, |f| {
         Ok(Command::CopyMode(CopyMode {
             page_up: f.on('u'),
             scroll_exit: f.on('e'),
             hide_position: f.on('H'),
+            hints: f.on('h'),
             mouse: f.on('M'),
             cancel: f.on('q'),
             page_down: f.on('d'),
@@ -569,6 +570,7 @@ mod tests {
     /// grofe adds (`bind-key -G`).
     const BEYOND_USAGE: &[(&str, char)] = &[
         ("bind-key", 'G'),
+        ("copy-mode", 'h'),
         ("select-pane", 'P'),
         ("select-pane", 'g'),
         ("join-pane", 'p'),

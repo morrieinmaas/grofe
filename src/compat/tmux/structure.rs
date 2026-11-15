@@ -1,11 +1,11 @@
 //! Structure, client and listing rows (FE.2): the structure and client
 //! verbs, tmux's layout strings, `list-*` default output.
 //!
-//! Rows and rewrites only: the schema, the dispatcher and the helpers a
+//! Rows only: the schema, the dispatcher and the helpers a
 //! translation uses ([`super::Invocation`]) are `mod.rs`'s. The most
 //! specific matching row decides, and between rows as specific this
 //! file's come before the core rows, so a row here naming a core form
-//! takes it over. Rewrites ([`super::Rewrite`]) apply before any row.
+//! takes it over.
 //!
 //! Every row here passes through: the structure verbs (TC.8) and client
 //! verbs (TC.9) have tmux's names and flag letters natively. tmux's layout
@@ -15,15 +15,17 @@
 //! default templates (`server::dispatch::options::TMUX_LIST_*`), since the
 //! command a row builds does not say which dialect asked.
 
-use super::{GrofeTarget, MappingKind, Rewrite, Row};
+use super::{GrofeTarget, Row};
 
+#[cfg_attr(not(test), allow(unused_variables))]
 const fn pass(verb: &'static str, golden_id: &'static str) -> Row {
     Row {
         tmux_form: verb,
-        kind: MappingKind::PassThrough,
         target: GrofeTarget::Native(verb),
+        #[cfg(test)]
         flags: &[],
         milestone: "M3.6",
+        #[cfg(test)]
         golden_id,
     }
 }
@@ -58,9 +60,4 @@ pub(crate) fn rows() -> Vec<Row> {
         pass("find-window", ""),
         pass("clear-history", "f1/clear-history"),
     ]
-}
-
-/// This area's argument rewrites, applied before any row matches.
-pub(crate) fn rewrites() -> Vec<Rewrite> {
-    Vec::new()
 }

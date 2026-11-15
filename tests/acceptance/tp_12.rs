@@ -19,7 +19,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::plugin_rig::{
-    PREFIX, Rig, WAIT, geometry, read_golden, recording_tmux, wait_until, write_golden,
+    PREFIX, Rig, WAIT, geometry, read_golden, recording_tmux, try_wait_until, write_golden,
 };
 
 const TASK: &str = "tp12";
@@ -108,7 +108,7 @@ fn build(rig: &Rig) {
     ]);
     rig.t(&["select-window", "-t", "main:logs"]);
     rig.t(&["select-pane", "-t", "main:logs.0"]);
-    let shown = wait_until(
+    let shown = try_wait_until(
         || {
             rig.t(&["capture-pane", "-p", "-t", "main:editor"])
                 .lines()
@@ -136,7 +136,7 @@ fn wrapper(rig: &Rig) -> String {
 /// literal `$CANOPY_STORE` would not run).
 fn wait_loaded(rig: &Rig) {
     let want = wrapper(rig);
-    let done = wait_until(
+    let done = try_wait_until(
         || {
             rig.t(&["show-options", "-gv", "@resurrect-save-script-path"])
                 .trim_end()
@@ -263,7 +263,7 @@ fn save_and_restore_contents(rig: &Rig) {
         ),
     ]);
     rig.wait_lines("restores.log", 1, "the restore");
-    let back = wait_until(
+    let back = try_wait_until(
         || {
             rig.t(&["capture-pane", "-p", "-t", "main:editor"])
                 .contains("hello-from-w1")
@@ -309,7 +309,7 @@ fn case_2_continuums_autosave_job_never_runs() {
     let mut a = rig.attach("main");
     // With the job kept, the save came some 13 refreshes in, behind the run
     // continuum's load started: twenty give it room.
-    let ticked = wait_until(|| rig.lines("ticks.log") >= 20, 2 * WAIT);
+    let ticked = try_wait_until(|| rig.lines("ticks.log") >= 20, 2 * WAIT);
     assert!(ticked.is_ok(), "the status line's own job stopped");
     assert_eq!(rig.lines("probe.log"), 0, "continuum's autosave ran");
     assert_eq!(rig.lines("saves.log"), 0);
@@ -344,14 +344,14 @@ fn case_4_a_save_during_a_save_is_skipped() {
         "resurrect-save.{}.lock",
         rig.t(&["display-message", "-p", "#{pid}"]).trim()
     ));
-    let held = wait_until(|| lock.join("pid").exists(), WAIT);
+    let held = try_wait_until(|| lock.join("pid").exists(), WAIT);
     assert!(held.is_ok(), "the first save never took {}", lock.display());
     a.send(format!("{PREFIX}\x1bs"));
     rig.wait_lines("cstate/resurrect-save.log", 1, "M-s during a save");
     rig.t(&["run-shell", "-b", &format!("'{wrapper}' quiet")]);
     rig.wait_lines("cstate/resurrect-save.log", 2, "an autosave during a save");
     rig.wait_lines("saves.log", 1, "the first save");
-    let gone = wait_until(|| !lock.exists(), WAIT);
+    let gone = try_wait_until(|| !lock.exists(), WAIT);
     assert!(gone.is_ok(), "the first save kept its lock");
     assert_eq!(rig.lines("saves.log"), 1, "a skipped save wrote");
     let log = fs::read_to_string(rig.path("cstate/resurrect-save.log")).unwrap();

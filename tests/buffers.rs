@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 use harness::Harness;
 
 fn golden_dir() -> PathBuf {
@@ -177,12 +177,12 @@ fn paste_bytes_reach_the_pane_exactly() {
     srv.cmd(&["new-session", "-d", "-s", "main", &script])
         .unwrap();
     // The shell opens the file after `stty`, just before `cat` reads.
-    wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
+    try_wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
     srv.cmd(&["set-buffer", "-b", "x", "a\x1b[201~b\nc\x01"])
         .unwrap();
     srv.cmd(&["paste-buffer", "-p", "-b", "x"]).unwrap();
     let want: &[u8] = b"\x1b[200~a^[[201~b\rc^A\x1b[201~";
-    wait_until(|| fs::read(&out).is_ok_and(|b| b == want), CMD_TIMEOUT)
+    try_wait_until(|| fs::read(&out).is_ok_and(|b| b == want), CMD_TIMEOUT)
         .unwrap_or_else(|_| panic!("pane read {:?}", fs::read(&out)));
 }
 
@@ -196,7 +196,7 @@ fn a_20_mib_paste_reaches_the_pane() {
     let script = format!("stty raw -echo; exec cat > '{}'", out.display());
     srv.cmd(&["new-session", "-d", "-s", "main", &script])
         .unwrap();
-    wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
+    try_wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
     // A request is capped below 20 MiB, so the buffer is built in halves.
     let half = "x".repeat(10 << 20);
     let request = |args: &[&str]| {
@@ -207,7 +207,7 @@ fn a_20_mib_paste_reaches_the_pane() {
     request(&["set-buffer", "-a", "-b", "big", &half]).unwrap();
     srv.cmd(&["paste-buffer", "-b", "big"]).unwrap();
     let len = || fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-    wait_until(|| len() == 20 << 20, Duration::from_secs(120))
+    try_wait_until(|| len() == 20 << 20, Duration::from_secs(120))
         .unwrap_or_else(|_| panic!("pane read {} bytes", len()));
     assert!(fs::read(&out).unwrap().iter().all(|&b| b == b'x'));
 }
@@ -364,7 +364,7 @@ fn choose_buffer_then_enter_pastes_the_chosen_buffer() {
     a.send("\x1b[B");
     a.wait_for("┌ b (sort: creation) ");
     a.send("\r");
-    wait_until(|| pane_text(&srv).starts_with("BBB\n"), CMD_TIMEOUT)
+    try_wait_until(|| pane_text(&srv).starts_with("BBB\n"), CMD_TIMEOUT)
         .unwrap_or_else(|_| panic!("pane: {:?}", pane_text(&srv)));
     a.wait_until("the chooser closed", CMD_TIMEOUT, |t| {
         !t.contains("(sort: ")
@@ -412,7 +412,7 @@ fn choose_buffer_d_deletes_and_prefix_equals_opens_it_zoomed() {
         srv.cmd(&["delete-buffer", "-b", name]).unwrap();
     }
     srv.cmd(&["choose-buffer"]).unwrap();
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert!(!a.text().contains("(sort: "));
 }
 
@@ -426,12 +426,12 @@ fn paste_buffer_s_sends_unsanitized_bytes() {
     let script = format!("stty raw -echo; exec cat > '{}'", out.display());
     srv.cmd(&["new-session", "-d", "-s", "main", &script])
         .unwrap();
-    wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
+    try_wait_until(|| out.exists(), CMD_TIMEOUT).unwrap();
     srv.cmd(&["set-buffer", "-b", "x", "a\x1b[31mb\nc\x01"])
         .unwrap();
     srv.cmd(&["paste-buffer", "-S", "-b", "x"]).unwrap();
     let want: &[u8] = b"a\x1b[31mb\rc\x01";
-    wait_until(|| fs::read(&out).is_ok_and(|b| b == want), CMD_TIMEOUT)
+    try_wait_until(|| fs::read(&out).is_ok_and(|b| b == want), CMD_TIMEOUT)
         .unwrap_or_else(|_| panic!("pane read {:?}", fs::read(&out)));
 }
 
@@ -484,7 +484,7 @@ fn load_buffer_from_a_fifo_waits_without_freezing_the_server() {
         .unwrap();
     // A writer opens without blocking only once the server is reading.
     let mut writer = None;
-    wait_until(
+    try_wait_until(
         || {
             writer = open_nonblocking(&fifo, true).ok();
             writer.is_some()
@@ -535,7 +535,7 @@ fn save_buffer_to_a_fifo_fails_with_no_reader_and_never_freezes_the_server() {
         .spawn()
         .unwrap();
     let mut first = [0u8; 1];
-    wait_until(
+    try_wait_until(
         || std::io::Read::read(&mut &reader, &mut first).is_ok_and(|n| n == 1),
         CMD_TIMEOUT,
     )

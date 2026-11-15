@@ -1646,7 +1646,7 @@ pub fn changed(state: &mut State) {
     }
     let live = &state.model.sessions;
     state.registry.owners.retain(|s, _| live.contains_key(s));
-    // A killed pane's copy mode goes with it (M5).
+    // A killed pane's copy mode goes with it.
     let panes = &state.model.panes;
     state.copy.retain(|p| panes.contains_key(&p));
     sync_pane_status(&mut state.model);
@@ -2653,21 +2653,19 @@ impl FormatVars for NoVars {
     }
 }
 
-/// Hands a pane that was just spawned the colours its window and session
-/// give it, before anything can be read from it: a program that asks for
-/// OSC 10 or 11 at once is answered with the style, not the fixed palette.
+/// The colours a pane about to spawn answers OSC 10 and 11 with, given to its
+/// [`PaneSpawn`](crate::server::pane::PaneSpawn) so a program that asks at once
+/// is answered with the style, not the fixed palette.
 /// The window may not be in the model yet, so the styles are read as the
 /// window's active pane would see them, without formats.
-pub(crate) fn seed_defaults(
+pub(crate) fn default_colours(
     model: &Model,
     (session, window): (SessionId, WindowId),
-    handle: &crate::server::pane::PaneHandle,
-) {
+) -> (Option<Rgb>, Option<Rgb>) {
     let chain = [Owner::Window(window), Owner::Session(session)];
     let opt = |name: &str| model.options.lookup(name, &chain).unwrap_or("");
     let (fg, bg) = window_style_colours(&opt, &NoVars, true);
-    let (fg, bg) = with_terminal(model, colour_rgb(fg), colour_rgb(bg));
-    handle.set_default_colours(fg, bg);
+    with_terminal(model, colour_rgb(fg), colour_rgb(bg))
 }
 
 /// A colour `window-style` leaves to the terminal is the attached
@@ -3281,7 +3279,7 @@ fn local_now() -> libc::tm {
     }
 }
 
-/// Format variables for a client: `client_*` (M2 addendum: real
+/// Format variables for a client: `client_*` (real
 /// `client_width`/`client_height`), falling through to the pane's
 /// [`FormatCtx`].
 pub struct ClientVars<'a> {
@@ -5102,8 +5100,8 @@ mod tests {
         assert_eq!(status_at(&state, id, 1, 2), None);
     }
 
-    /// R1/R2 and item 3: the M3 and M3.6 hooks and overlays (prompt, menu,
-    /// popup, chooser, mouse) and M5's copy mode are registered in priority order, and with
+    /// The hooks and overlays (prompt, menu, popup, chooser, mouse, copy
+    /// mode) are registered in priority order, and with
     /// nothing open every hook passes every kind of input on and every
     /// overlay leaves the screen alone.
     #[test]

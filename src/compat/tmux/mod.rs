@@ -4,7 +4,7 @@
 //! ([`dispatch`]), the area registration ([`table`]), tmux's command table
 //! with its alias and prefix rule ([`resolve`]), the one tmux option-name
 //! table ([`OPTION_NAMES`]) and the core rows: the invocation, pass-through
-//! rows for every M1 to M3 verb whose tmux form is grofe's, `set`/`show` by
+//! rows for every verb whose tmux form is grofe's, `set`/`show` by
 //! tmux name, `setw`/`showw`, `list-commands`, `info`, and the spec's out
 //! of scope forms. FE.2, FE.3 and FE.4 each fill one area file
 //! (`structure`, `formats`, `bindings`) with rows only; nothing after FE.1
@@ -73,27 +73,16 @@ pub struct Row {
     /// is a bare `=` target). A form that is not a verb's starts with
     /// `tmux ` (the CLI's global flags) or `-` (the target grammar).
     pub tmux_form: &'static str,
-    pub kind: MappingKind,
     pub target: GrofeTarget,
-    /// One mark per flag of `tmux_form`, in its order.
+    /// One mark per flag of `tmux_form`, in its order (read by the tests).
+    #[cfg(test)]
     pub flags: &'static [FlagMark],
     /// When the grofe feature the row maps onto lands (`M1`, `M3.6`, `M5`).
     pub milestone: &'static str,
-    /// The golden that pins the row, `<task>/<scenario>`, or empty.
+    /// The golden that pins the row, `<task>/<scenario>`, or empty (read by
+    /// the tests).
+    #[cfg(test)]
     pub golden_id: &'static str,
-}
-
-/// Spec §4.5's mapping kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MappingKind {
-    /// `ls`, `setw`, `tmux a`: an alias or prefix of a verb.
-    AliasOrPrefix,
-    /// A flag renamed or merged: `-t =name`, tmux option names.
-    FlagRename,
-    /// A tmux behaviour onto a grofe feature.
-    Behaviour,
-    /// Verb and flags identical to grofe's.
-    PassThrough,
 }
 
 /// Whether grofe may ignore a flag it cannot honour (noting it in
@@ -330,15 +319,10 @@ impl Rewritten {
     }
 }
 
-/// Every rewrite: the three area files', in the same order as [`table`].
+/// Every rewrite: only the formats area has any.
 pub fn rewrites() -> &'static [Rewrite] {
     static REWRITES: OnceLock<Vec<Rewrite>> = OnceLock::new();
-    REWRITES.get_or_init(|| {
-        let mut all = structure::rewrites();
-        all.extend(formats::rewrites());
-        all.extend(bindings::rewrites());
-        all
-    })
+    REWRITES.get_or_init(formats::rewrites)
 }
 
 /// `inv`'s arguments with `rewrites` applied, rebuilt as separate flag and
@@ -436,7 +420,7 @@ impl Spec {
 }
 
 /// TC.0b's raw `tmux list-commands` (tmux 3.7b), the alias table.
-const LIST_COMMANDS: &str = include_str!("../../../tests/fixtures/compat/golden/list-commands.txt");
+const LIST_COMMANDS: &str = include_str!("data/list-commands.txt");
 
 /// Commands tmux 3.7b runs but `list-commands` leaves out, found only by
 /// exact name or alias (recorded: `info` and `server-info` answer as
@@ -1418,9 +1402,9 @@ fn select_pane_style(inv: &Invocation<'_>) -> Result<Vec<Command>, TmuxError> {
 
 // ---- The core rows -------------------------------------------------------
 
+#[cfg_attr(not(test), allow(unused_variables))]
 const fn row(
     tmux_form: &'static str,
-    kind: MappingKind,
     target: GrofeTarget,
     flags: &'static [FlagMark],
     milestone: &'static str,
@@ -1428,23 +1412,17 @@ const fn row(
 ) -> Row {
     Row {
         tmux_form,
-        kind,
         target,
+        #[cfg(test)]
         flags,
         milestone,
+        #[cfg(test)]
         golden_id,
     }
 }
 
 const fn pass(verb: &'static str, milestone: &'static str) -> Row {
-    row(
-        verb,
-        MappingKind::PassThrough,
-        GrofeTarget::Native(verb),
-        &[],
-        milestone,
-        "",
-    )
+    row(verb, GrofeTarget::Native(verb), &[], milestone, "")
 }
 
 const fn unsupported(
@@ -1452,14 +1430,7 @@ const fn unsupported(
     reason: &'static str,
     flags: &'static [FlagMark],
 ) -> Row {
-    row(
-        tmux_form,
-        MappingKind::Behaviour,
-        GrofeTarget::Unsupported(reason),
-        flags,
-        "",
-        "",
-    )
+    row(tmux_form, GrofeTarget::Unsupported(reason), flags, "", "")
 }
 
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
@@ -1468,12 +1439,10 @@ const COSMETIC: &[FlagMark] = &[FlagMark::Cosmetic];
 fn core_rows() -> Vec<Row> {
     use FlagMark::Cosmetic;
     use GrofeTarget::{Cli, Grammar, Translate};
-    use MappingKind::{AliasOrPrefix, Behaviour, FlagRename, PassThrough};
     vec![
         // The invocation (spec §4.5), read by `cli` and `main.rs`.
         row(
             "tmux -V",
-            Behaviour,
             Cli("prints `tmux 3.7b`, grofe -V grofe's own"),
             SEMANTIC,
             "M3.6",
@@ -1481,7 +1450,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "tmux -L",
-            PassThrough,
             Cli("a socket name in grofe's own directory"),
             SEMANTIC,
             "M1",
@@ -1489,7 +1457,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "tmux -S",
-            PassThrough,
             Cli("a socket path, never in tmux's directory"),
             SEMANTIC,
             "M1",
@@ -1497,7 +1464,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "tmux -2",
-            FlagRename,
             Cli("accepted, no effect"),
             COSMETIC,
             "M3.6",
@@ -1505,23 +1471,14 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "tmux -u",
-            FlagRename,
             Cli("accepted, no effect"),
             COSMETIC,
             "M3.6",
             "fe_1/invocation",
         ),
-        row(
-            "tmux",
-            AliasOrPrefix,
-            Cli("bare `tmux` is `new-session`"),
-            &[],
-            "M3.6",
-            "",
-        ),
+        row("tmux", Cli("bare `tmux` is `new-session`"), &[], "M3.6", ""),
         row(
             "tmux -f",
-            FlagRename,
             Cli("the only config of the server it starts; /dev/null or a missing file is none"),
             SEMANTIC,
             "M3.6",
@@ -1529,7 +1486,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "tmux -c",
-            Behaviour,
             GrofeTarget::Unsupported("runs a shell command in place of a client; not wired"),
             SEMANTIC,
             "M3.6",
@@ -1538,7 +1494,6 @@ fn core_rows() -> Vec<Row> {
         // The target grammar (`cmd::with_tmux_targets`).
         row(
             "-t[=name]",
-            FlagRename,
             Grammar("an exact session, never a prefix (SessionRef::Exact)"),
             SEMANTIC,
             "M3.6",
@@ -1546,7 +1501,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "-t[=]",
-            FlagRename,
             Grammar(
                 "fails `no mouse target` when resolved; a mouse key's commands get the pointer's target first (M36-R3)",
             ),
@@ -1556,7 +1510,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "-t[:+N]",
-            FlagRename,
             Grammar("window and pane offsets, wrapping (stock `o`, the window menu)"),
             SEMANTIC,
             "M3.6",
@@ -1567,7 +1520,6 @@ fn core_rows() -> Vec<Row> {
         // is the server's answer.
         row(
             "send-keys -M",
-            PassThrough,
             GrofeTarget::Native("send-keys"),
             SEMANTIC,
             "",
@@ -1578,7 +1530,6 @@ fn core_rows() -> Vec<Row> {
         // (`copy-mode -M` is TM.7's row, native since TM.6.)
         row(
             "resize-pane -M",
-            Behaviour,
             Translate(mouse_no_op),
             SEMANTIC,
             "M3.6",
@@ -1639,7 +1590,6 @@ fn core_rows() -> Vec<Row> {
         // Front-end rows.
         row(
             "display-message -F",
-            FlagRename,
             Translate(display_format),
             SEMANTIC,
             "M3.6",
@@ -1647,7 +1597,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "select-pane -P",
-            FlagRename,
             Translate(select_pane_style),
             &[Cosmetic],
             "M3.6",
@@ -1655,7 +1604,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "select-pane -g",
-            FlagRename,
             Translate(select_pane_style),
             SEMANTIC,
             "B1c",
@@ -1663,7 +1611,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "set-option",
-            FlagRename,
             Translate(set_option),
             &[],
             "M3.6",
@@ -1671,7 +1618,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "show-options",
-            FlagRename,
             Translate(show_options),
             &[],
             "M3.6",
@@ -1679,7 +1625,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "set-window-option",
-            AliasOrPrefix,
             Translate(set_window_option),
             &[],
             "M3.6",
@@ -1687,7 +1632,6 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "show-window-options",
-            AliasOrPrefix,
             Translate(show_window_options),
             &[],
             "M3.6",
@@ -1695,21 +1639,13 @@ fn core_rows() -> Vec<Row> {
         ),
         row(
             "list-commands",
-            Behaviour,
             Translate(list_commands),
             &[],
             "M3.6",
             "fe_1/invocation",
         ),
-        row(
-            "server-info",
-            AliasOrPrefix,
-            Translate(server_info),
-            &[],
-            "M3.6",
-            "",
-        ),
-        // Pass-through: every M1 to M3 verb whose tmux form is grofe's.
+        row("server-info", Translate(server_info), &[], "M3.6", ""),
+        // Pass-through: every verb whose tmux form is grofe's.
         pass("new-session", "M1"),
         pass("kill-session", "M1"),
         pass("has-session", "M1"),
@@ -1719,7 +1655,6 @@ fn core_rows() -> Vec<Row> {
         pass("select-pane", "M1"),
         row(
             "clock-mode",
-            PassThrough,
             GrofeTarget::Native("clock-mode"),
             &[],
             "B1d",
@@ -1735,7 +1670,6 @@ fn core_rows() -> Vec<Row> {
         pass("send-keys", "M1"),
         row(
             "pipe-pane",
-            PassThrough,
             GrofeTarget::Native("pipe-pane"),
             &[],
             "B2b",
@@ -1761,14 +1695,7 @@ fn core_rows() -> Vec<Row> {
         pass("command-prompt", "M3"),
         pass("run-shell", "M3"),
         pass("select-layout", "M3"),
-        row(
-            "start-server",
-            PassThrough,
-            Translate(start_server),
-            &[],
-            "M1",
-            "",
-        ),
+        row("start-server", Translate(start_server), &[], "M1", ""),
     ]
 }
 
@@ -1806,14 +1733,14 @@ pub struct TmuxCli {
     pub features: Vec<String>,
     /// `-v`: how many times (the log level; grofe logs nothing more).
     pub verbose: u8,
+    /// `-C`: how many times. One is control mode, two (`-CC`) wraps it in
+    /// a DCS.
+    pub control: u8,
 }
 
 /// tmux 3.7b's usage text, printed after a bad global option.
 pub const USAGE: &str = "usage: tmux [-2CDhlNuVv] [-c shell-command] [-f file] [-L socket-name]
             [-S socket-path] [-T features] [command [flags]]";
-
-/// `-C` is control mode, which grofe does not have.
-const NOT_IMPLEMENTED: &[char] = &['C'];
 
 /// Reads the argv of the CLI run as `tmux` (`args` follow `argv[0]`), or
 /// the error to print and exit 1 with. Global flags are read as tmux's
@@ -1838,6 +1765,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
         login: false,
         features: Vec::new(),
         verbose: 0,
+        control: 0,
     };
     let mut i = 0;
     'args: while let Some(arg) = args.get(i) {
@@ -1895,9 +1823,7 @@ pub fn cli(args: &[String]) -> Result<TmuxCli, String> {
                 // In tmux's getopt string, with no case of their own: the
                 // usage alone, with no complaint about the option.
                 'd' | 'U' => return Err(USAGE.to_string()),
-                c if NOT_IMPLEMENTED.contains(&c) => {
-                    return Err(format!("tmux front end is not implemented: -{c}"));
-                }
+                'C' => out.control = out.control.saturating_add(1),
                 c => return Err(format!("tmux: unknown option -- {c}\n{USAGE}")),
             }
         }
@@ -2367,7 +2293,6 @@ mod tests {
     fn refusals_and_pinned_values_come_first() {
         let two_flags = row(
             "new-session -d -s",
-            MappingKind::PassThrough,
             GrofeTarget::Native("new-session"),
             &[FlagMark::Semantic, FlagMark::Semantic],
             "M3.6",
@@ -2387,7 +2312,6 @@ mod tests {
         // A mouse refusal, in either registration order.
         let map = row(
             "resize-pane -M -Z",
-            MappingKind::PassThrough,
             GrofeTarget::Native("resize-pane"),
             &[FlagMark::Semantic, FlagMark::Semantic],
             "M3.6",
@@ -2416,10 +2340,9 @@ mod tests {
             &[],
         );
         assert!(err.unwrap_err().0.contains("pinned"));
-        // M5's copy refusal ranks as a mapping: M5 can take it over.
+        // A refusal for a milestone ranks as a mapping, so a later row can take it over.
         let m5 = row(
             "copy-mode",
-            MappingKind::PassThrough,
             GrofeTarget::Unsupported("mapped by M5"),
             &[],
             "M5",
@@ -2437,7 +2360,6 @@ mod tests {
     fn an_area_refusal_replaces_a_core_one() {
         let area = row(
             "resize-pane -M",
-            MappingKind::Behaviour,
             GrofeTarget::Refuse("tmux's own text"),
             SEMANTIC,
             "",
@@ -2449,7 +2371,6 @@ mod tests {
         assert_eq!(err.unwrap_err().0, "tmux's own text");
         let map = row(
             "detach-client -E",
-            MappingKind::PassThrough,
             GrofeTarget::Native("detach-client"),
             SEMANTIC,
             "M3.6",
@@ -2586,8 +2507,8 @@ mod tests {
         assert!(err.starts_with("tmux: unknown option -- Z\nusage: tmux [-2CDhlNuVv]"));
         let err = cli(&args(&["-L"])).unwrap_err();
         assert!(err.starts_with("tmux: option requires an argument -- L\nusage: tmux"));
-        let err = cli(&args(&["-C"])).unwrap_err();
-        assert_eq!(err, "tmux front end is not implemented: -C");
+        assert_eq!(cli(&args(&["-C"])).unwrap().control, 1);
+        assert_eq!(cli(&args(&["-CC", "attach"])).unwrap().control, 2);
         let got = cli(&args(&["-c", "echo a", "-cecho b"])).unwrap();
         assert_eq!(got.shell_command.as_deref(), Some("echo b"));
         assert!(got.argv.is_empty());

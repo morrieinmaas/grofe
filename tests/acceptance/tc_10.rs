@@ -10,7 +10,7 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::{Harness, require_tool};
 
@@ -55,11 +55,16 @@ fn click(a: &mut Harness, button: u8, x: u16, y: u16) {
     a.send(sgr(button - 1, x, y, true));
 }
 
+/// Waits out the click timeout, the thing under test, so this is a real sleep.
+fn past_click_timeout() {
+    std::thread::sleep(Duration::from_millis(400));
+}
+
 /// [`click`], after the last click's wait for a second one has ended, so
 /// this one is a `MouseDown` of its own (as in tmux, a second press of the
 /// same button within 300 ms is `SecondClick` wherever it lands).
 fn click_alone(a: &mut Harness, button: u8, x: u16, y: u16) {
-    std::thread::sleep(Duration::from_millis(400));
+    past_click_timeout();
     click(a, button, x, y);
 }
 
@@ -78,7 +83,7 @@ fn opt(srv: &TestServer, name: &str) -> String {
 }
 
 fn wait_opt(srv: &TestServer, name: &str, want: &str) {
-    let got = wait_until(|| opt(srv, name) == want, WAIT);
+    let got = try_wait_until(|| opt(srv, name) == want, WAIT);
     assert!(
         got.is_ok(),
         "{name}: want {want:?}, got {:?}",
@@ -161,7 +166,7 @@ fn c_h_goes_to_nvim_or_moves_focus_from_a_shell() {
     a.wait_for("$");
     assert_eq!(var(&srv, &right, "#{pane_active}"), "1");
     a.send(b"\x08");
-    let moved = wait_until(|| var(&srv, &left, "#{pane_active}") == "1", WAIT);
+    let moved = try_wait_until(|| var(&srv, &left, "#{pane_active}") == "1", WAIT);
     assert!(moved.is_ok(), "focus did not move left");
 
     if !require_tool("nvim") {
@@ -176,7 +181,7 @@ fn c_h_goes_to_nvim_or_moves_focus_from_a_shell() {
         &logging_nvim(dir.path()),
     ])
     .expect("respawn");
-    let fg = wait_until(
+    let fg = try_wait_until(
         || var(&srv, &right, "#{pane_current_command}") == "nvim",
         WAIT,
     );
@@ -190,7 +195,7 @@ fn c_h_goes_to_nvim_or_moves_focus_from_a_shell() {
         t.lines().filter(|l| l.contains('~')).count() > 3
     });
     a.send(b"\x08");
-    let got = wait_until(|| read_log(dir.path()).trim() == "C-h", WAIT);
+    let got = try_wait_until(|| read_log(dir.path()).trim() == "C-h", WAIT);
     assert!(got.is_ok(), "nvim wrote {:?}", read_log(dir.path()));
     assert_eq!(var(&srv, &right, "#{pane_active}"), "1", "focus stayed");
 }
@@ -228,8 +233,7 @@ fn a_sleeping_shell_condition_does_not_delay_another_client() {
     b.wait_for_output(MOUSE_ON, 0);
 
     a.send(b"\x08");
-    std::thread::sleep(Duration::from_millis(200));
-    let t = Instant::now();
+    common::quiet_period(Duration::from_millis(200));
     b.send("typed-while-sleeping\r");
     b.wait_until("the echo", WAIT, |t| {
         t.lines()
@@ -237,8 +241,6 @@ fn a_sleeping_shell_condition_does_not_delay_another_client() {
             .count()
             >= 2
     });
-    let took = t.elapsed();
-    assert!(took < Duration::from_millis(1000), "took {took:?}");
     assert_eq!(opt(&srv, "@done"), "", "the branch waited for the shell");
     wait_opt(&srv, "@done", "yes");
 }
@@ -277,14 +279,8 @@ fn the_shell_form_waits_on_the_cli_unless_backgrounded() {
     ]);
     assert_eq!(out.as_deref(), Ok("main\n"));
 
-    let t = Instant::now();
     srv.cmd(&["if-shell", "-b", "sleep 1", "set -g @bg done"])
         .expect("-b");
-    assert!(
-        t.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        t.elapsed()
-    );
     assert_eq!(opt(&srv, "@bg"), "");
     wait_opt(&srv, "@bg", "done");
 
@@ -294,14 +290,9 @@ fn the_shell_form_waits_on_the_cli_unless_backgrounded() {
         cmd.args(["if-shell", "sleep 2", "display-message -p late"]);
         move || cmd.output().expect("run")
     });
-    std::thread::sleep(Duration::from_millis(300));
-    let t = Instant::now();
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(var(&srv, "main", "#{session_name}"), "main");
-    assert!(
-        t.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        t.elapsed()
-    );
+    assert!(!slow.is_finished(), "answered only after the slow shell");
     let out = slow.join().expect("join");
     assert_eq!(String::from_utf8_lossy(&out.stdout), "late\n");
 }
@@ -361,7 +352,7 @@ fn log_path(srv: &TestServer) -> std::path::PathBuf {
 fn wait_log(srv: &TestServer, want: &str) {
     let log = log_path(srv);
     let read = || std::fs::read_to_string(&log).unwrap_or_default();
-    let got = wait_until(|| read() == want, WAIT);
+    let got = try_wait_until(|| read() == want, WAIT);
     assert!(got.is_ok(), "want {want:?}, got {:?}", read());
 }
 
@@ -390,7 +381,7 @@ fn a_status_click_dispatches_on_its_range() {
     // Window 2's entry in the list: the else branch switches to it.
     let two = status_col(&mut a, 23, "2:");
     click_alone(&mut a, 1, two, 24);
-    let switched = wait_until(|| var(&srv, "main", "#{window_index}") == "2", WAIT);
+    let switched = try_wait_until(|| var(&srv, "main", "#{window_index}") == "2", WAIT);
     assert!(
         switched.is_ok(),
         "window {}",
@@ -400,7 +391,7 @@ fn a_status_click_dispatches_on_its_range() {
 
     // Unbound, the wheel on the status line goes to the previous window.
     a.send(sgr(64, two, 24, false));
-    let back = wait_until(|| var(&srv, "main", "#{window_index}") == "1", WAIT);
+    let back = try_wait_until(|| var(&srv, "main", "#{window_index}") == "1", WAIT);
     assert!(
         back.is_ok(),
         "window {}",
@@ -430,7 +421,7 @@ fn clicks_map_with_the_status_line_on_top() {
     wait_log(&srv, &format!("net:{},0", net - 1));
     // Row 2 is the window's first row: the left pane.
     click_alone(&mut a, 1, 3, 2);
-    let focused = wait_until(|| var(&srv, &left, "#{pane_active}") == "1", WAIT);
+    let focused = try_wait_until(|| var(&srv, &left, "#{pane_active}") == "1", WAIT);
     assert!(focused.is_ok(), "right still active: {right}");
 }
 
@@ -451,12 +442,12 @@ fn dragging_a_border_resizes_both_panes() {
     // The border is column `l`, cell `l + 1`.
     a.send(sgr(0, l + 1, 5, false));
     a.send(sgr(32, l + 4, 5, false));
-    let moved = wait_until(|| width(&left) == l + 3, WAIT);
+    let moved = try_wait_until(|| width(&left) == l + 3, WAIT);
     assert!(moved.is_ok(), "{} {}", width(&left), width(&right));
     assert_eq!(width(&right), total - l - 3);
     a.send(sgr(32, 31, 6, false));
     a.send(sgr(0, 31, 6, true));
-    let back = wait_until(|| width(&left) == 30, WAIT);
+    let back = try_wait_until(|| width(&left) == 30, WAIT);
     assert!(back.is_ok(), "{} {}", width(&left), width(&right));
     assert_eq!(width(&right), total - 30);
 
@@ -482,7 +473,7 @@ fn dragging_a_border_resizes_both_panes() {
     a.send(sgr(32, 5, border - 3, false));
     a.send(sgr(0, 5, border - 3, true));
     let want = (top - 3).to_string();
-    let up = wait_until(|| height(&left) == want, WAIT);
+    let up = try_wait_until(|| height(&left) == want, WAIT);
     assert!(up.is_ok(), "{} {}", height(&left), height(&below));
 }
 
@@ -499,15 +490,15 @@ fn double_click_fires_once() {
     click(&mut a, 1, 10, 5);
     click(&mut a, 1, 10, 5);
     wait_opt(&srv, "@log", "D");
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     click(&mut a, 1, 10, 5);
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(opt(&srv, "@log"), "D", "a single click");
     for _ in 0..3 {
         click(&mut a, 1, 10, 5);
     }
     wait_opt(&srv, "@log", "DT");
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(opt(&srv, "@log"), "DT");
 }
 
@@ -544,7 +535,7 @@ fn a_mouse_binding_acts_on_the_pane_under_the_pointer() {
 
     // `kill-pane` with no target kills the pane clicked.
     click_alone(&mut a, 2, 5, 7);
-    let gone = wait_until(
+    let gone = try_wait_until(
         || {
             srv.cmd(&["display-message", "-p", "-t", &left, "x"])
                 .is_err()
@@ -562,7 +553,7 @@ fn a_mouse_binding_acts_on_the_pane_under_the_pointer() {
 fn the_wheel_condition_routes_by_the_pointer_pane() {
     let srv = start("exec sh");
     let right = split_h(&srv, "printf '\\033[?1049h'; exec cat");
-    wait_until(|| var(&srv, &right, "#{alternate_on}") == "1", WAIT).expect("alt screen");
+    try_wait_until(|| var(&srv, &right, "#{alternate_on}") == "1", WAIT).expect("alt screen");
     bind(
         &srv,
         &[
@@ -594,7 +585,7 @@ fn a_custom_table_takes_the_next_key() {
     a.send(b"\x19x");
     wait_opt(&srv, "@t", "yes");
     a.send("x\r");
-    let typed = wait_until(|| srv.capture("main").contains('x'), WAIT);
+    let typed = try_wait_until(|| srv.capture("main").contains('x'), WAIT);
     assert!(typed.is_ok(), "{}", srv.capture("main"));
     let keys = srv.cmd(&["list-keys", "-T", "mine"]).expect("list-keys");
     assert!(keys.contains("-T mine x set -g @t yes"), "{keys}");
@@ -615,7 +606,7 @@ fn any_takes_a_mouse_event_its_table_leaves_unbound() {
     bind(&srv, &["-n", "C-y", "switch-client", "-T", "kp"]);
     let mut a = attach(&srv, 80, 24);
     a.send(b"\x19");
-    let entered = wait_until(|| var(&srv, "main", "#{client_key_table}") == "kp", WAIT);
+    let entered = try_wait_until(|| var(&srv, "main", "#{client_key_table}") == "kp", WAIT);
     assert!(
         entered.is_ok(),
         "{}",
@@ -623,7 +614,7 @@ fn any_takes_a_mouse_event_its_table_leaves_unbound() {
     );
     click(&mut a, 3, 5, 5);
     wait_opt(&srv, "@any", "kp");
-    let back = wait_until(|| var(&srv, "main", "#{client_key_table}") == "root", WAIT);
+    let back = try_wait_until(|| var(&srv, "main", "#{client_key_table}") == "root", WAIT);
     assert!(back.is_ok(), "{}", var(&srv, "main", "#{client_key_table}"));
 
     bind(&srv, &["-n", "Any", "set", "-g", "@any", "root"]);
@@ -638,9 +629,9 @@ fn meta_shift_tab_sends_nothing() {
     let log = dir.path().join("log");
     let srv = start(&format!("stty raw -echo; exec cat > '{}'", log.display()));
     let mut a = attach(&srv, 80, 24);
-    std::thread::sleep(Duration::from_millis(300));
+    a.wait_for_output(MOUSE_ON, 0);
     a.send(b"\x1b[9;4u\x1b[9;2uz");
-    let got = wait_until(
+    let got = try_wait_until(
         || std::fs::read(&log).unwrap_or_default().ends_with(b"z"),
         WAIT,
     );
@@ -659,7 +650,7 @@ fn the_new_default_keys_run_their_verbs() {
     a.wait_for("$");
     // `;` goes back to the previously active pane.
     a.send(b"\x02;");
-    let last = wait_until(|| var(&srv, &left, "#{pane_active}") == "1", WAIT);
+    let last = try_wait_until(|| var(&srv, &left, "#{pane_active}") == "1", WAIT);
     assert!(last.is_ok(), "; did not go to the last pane");
     // `C-o` rotates: the left pane's process moves right.
     a.send(b"\x02\x0f");
@@ -672,7 +663,7 @@ fn the_new_default_keys_run_their_verbs() {
             .unwrap_or_default()
             .to_string()
     };
-    let rotated = wait_until(|| second() == left, WAIT);
+    let rotated = try_wait_until(|| second() == left, WAIT);
     assert!(rotated.is_ok(), "{}", second());
     // `E` spreads them evenly after a resize.
     srv.cmd(&["resize-pane", "-t", &right, "-x", "20"])
@@ -682,7 +673,7 @@ fn the_new_default_keys_run_their_verbs() {
         let w = |p: &str| var(&srv, p, "#{pane_width}").parse::<u16>().unwrap_or(0);
         (w(&left), w(&right))
     };
-    let even = wait_until(
+    let even = try_wait_until(
         || {
             let (l, r) = widths();
             l.abs_diff(r) <= 1
@@ -731,7 +722,7 @@ fn a_mouse_menu_opens_at_the_pointer() {
     a.wait_for("$");
     // The button stays down: its release outside the menu would close it,
     // as tmux 3.7b's does (`b3wpc/menu-bound-mouse`).
-    std::thread::sleep(Duration::from_millis(400));
+    past_click_timeout();
     a.send(sgr(2, 21, 9, false));
     a.wait_until("the menu", WAIT, |t| t.contains("One"));
     let text = a.text();
@@ -769,10 +760,10 @@ fn keys_after_a_shell_condition_wait_for_its_branch() {
     );
     bind(&srv, &["-n", "C-g", "if-shell", "true", "splat-window"]);
     let mut a = attach(&srv, 80, 24);
-    std::thread::sleep(Duration::from_millis(300));
+    a.wait_for_output(MOUSE_ON, 0);
     a.send(b"\x08ab\r");
     let read = || std::fs::read(&log).unwrap_or_default();
-    let got = wait_until(|| read().ends_with(b"\r"), WAIT);
+    let got = try_wait_until(|| read().ends_with(b"\r"), WAIT);
     assert!(got.is_ok(), "{:?}", String::from_utf8_lossy(&read()));
     assert_eq!(read(), b"Xab\r");
 
