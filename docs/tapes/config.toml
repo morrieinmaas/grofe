@@ -1,6 +1,14 @@
-# The screenshot server's config: grofe's defaults (status line included),
-# a plain prompt, no restore between renders, and the Nerd font's pill ends
-# for frames and messages.
+# The screenshot server's base config: a plain prompt, no restore between
+# renders and the agent sidebar open when the tape attaches. The look comes
+# from examples/pills.toml (and pills-dark.toml for the dark shot), which
+# scripts/screenshots.sh puts in conf.d.
 default-command = "PS1='$ ' exec bash --norc --noprofile"
 restore-on-start = false
-pane-frame-tab-ends = "\ue0b6\ue0b4"
+
+[agents.sidebar]
+show-on-attach = true
+min-client-width = 100
+
+[notify]
+desktop = []               # no desktop notifications from the demo
+toast = []                 # the sidebar shows the same

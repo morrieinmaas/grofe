@@ -5,8 +5,8 @@ Output "@GIF@"
 Set Shell "bash"
 Set FontFamily "@FONT@"
 Set FontSize 16
-Set Width 1280
-Set Height 720
+Set Width 1440
+Set Height 810
 Set Padding 16
 Set Theme "@THEME@"
 Set TypingSpeed 0

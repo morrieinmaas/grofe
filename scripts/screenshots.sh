@@ -22,14 +22,22 @@ trap cleanup EXIT
 unset TMUX TMUX_PANE GROFE GROFE_PANE
 mkdir -p "$work/home" "$work/config/grofe" "$work/state" "$work/bin"
 cp "$root/docs/tapes/config.toml" "$work/config/grofe/config.toml"
+mkdir -p "$work/config/grofe/conf.d"
+cp "$root/examples/pills.toml" "$work/config/grofe/conf.d/10-pills.toml"
 ln -s "$bin" "$work/bin/grofe"
 export PATH="$work/bin:$PATH"
 
 cd "$root"
 for theme in dark light; do
     case $theme in
-        dark) name="Catppuccin Mocha" ;;
-        light) name="Builtin Light" ;;
+        dark)
+            name="GruvboxDark"
+            cp "$root/examples/pills-dark.toml" "$work/config/grofe/conf.d/20-dark.toml"
+            ;;
+        light)
+            name="Gruvbox Light"
+            rm -f "$work/config/grofe/conf.d/20-dark.toml"
+            ;;
     esac
     sed -e "s|@THEME@|$name|" -e "s|@FONT@|$font|" \
         -e "s|@GIF@|$work/$theme.gif|" -e "s|@PNG@|$out/grofe-$theme.png|" \
