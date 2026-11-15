@@ -725,6 +725,7 @@ async fn serve(
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
+    dispatch::options::source_start_files(&mut state);
     // Before ready: the starting CLI's command sees the restored sessions.
     restore::at_start(&mut state);
     plugins::start(&mut state);
