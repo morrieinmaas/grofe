@@ -278,9 +278,10 @@ fn resume(
     // one comes back here rather than holding on its own.
     hooks::enter(state);
     while let Some(frame) = frames.pop_front() {
-        let ran = dispatch::options::with_source_depth(frame.depth, frame.verbose, || {
-            dispatch::run_commands(state, &frame.ctx, frame.cmds)
-        });
+        let ran =
+            dispatch::options::with_source_depth(state, frame.depth, frame.verbose, |state| {
+                dispatch::run_commands(state, &frame.ctx, frame.cmds)
+            });
         match ran {
             Ok(text) => more.push_str(&text),
             Err(e) if frame.keep_going => {

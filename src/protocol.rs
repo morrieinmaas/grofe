@@ -74,6 +74,31 @@ pub struct ClientCtx {
     /// decides it, and `compat` routes a tmux one to the front end.
     #[serde(default, skip_serializing_if = "Dialect::is_grofe")]
     pub dialect: Dialect,
+    /// What the server knows of the request now running, set where it
+    /// starts one. Never on the wire.
+    #[serde(skip)]
+    pub request: RequestCtx,
+}
+
+/// The per-request facts a command reads from its context rather than from
+/// `State`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestCtx {
+    /// A CLI request's stdin, umask and process (TM.7); `None` for a
+    /// request that is not one.
+    pub cli_io: Option<std::sync::Arc<CliIo>>,
+    /// The key whose binding is running the command (`show-messages`).
+    pub event_key: Option<String>,
+}
+
+/// What a CLI request brings besides its argv (TM.7).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CliIo {
+    /// Its stdin, decoded; `None` when it sent none.
+    pub stdin: Option<Vec<u8>>,
+    pub umask: Option<u32>,
+    /// The requesting process (the socket peer), when the OS says.
+    pub pid: Option<i32>,
 }
 
 /// A request's command language (spec D12): grofe's own, or tmux's as the
@@ -615,6 +640,7 @@ mod tests {
                 .collect(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         }
     }
 
@@ -630,6 +656,7 @@ mod tests {
                 .collect(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         });
         let err = encode_hello(&hello).unwrap_err().to_string();
         assert!(

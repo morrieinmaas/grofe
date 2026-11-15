@@ -55,6 +55,7 @@ pub fn source_start_files(state: &mut State) {
             env: Vec::new(),
             client: None,
             dialect: Dialect::Tmux,
+            request: Default::default(),
         };
         let c = SourceFile {
             quiet: false,

@@ -95,6 +95,7 @@ fn send(socket: &Path, argv: &[String]) {
         env: Vec::new(),
         client: None,
         dialect: Dialect::default(),
+        request: Default::default(),
     };
     let Ok(hello) = encode_hello(&Hello::Control(ctx)) else {
         return;

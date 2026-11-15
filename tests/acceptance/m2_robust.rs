@@ -95,6 +95,7 @@ fn raw_attach(srv: &TestServer, (cols, rows): (u16, u16)) -> UnixStream {
             env: Vec::new(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         },
         cols,
         rows,

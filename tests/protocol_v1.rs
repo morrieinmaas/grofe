@@ -44,6 +44,7 @@ fn ctx(pane: Option<PaneId>, dialect: Dialect) -> ClientCtx {
         env: vec![("SSH_AUTH_SOCK".into(), "/run/user/1000/ssh.sock".into())],
         client: None,
         dialect,
+        request: Default::default(),
     }
 }
 

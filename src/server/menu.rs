@@ -711,7 +711,7 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
         ctx: ctx.clone(),
         look: menu.look,
         no_mouse,
-        key: state.event_key.clone(),
+        key: ctx.request.event_key.clone(),
         event,
     };
     if no_mouse {
@@ -1159,10 +1159,7 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
                         clients::in_input_order(state, id, Box::new(run));
                         Routed::Consumed
                     }
-                    None if shown.ctx.client.is_none() => {
-                        state.command_key = key;
-                        Routed::Command(cmds, dialect)
-                    }
+                    None if shown.ctx.client.is_none() => Routed::Keyed(cmds, dialect, key),
                     None => {
                         let run = move |state: &mut State| {
                             clients::run_binding_in(state, id, &cmds, dialect, pane, key)
