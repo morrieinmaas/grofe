@@ -194,6 +194,7 @@ An array of strings sets the whole list, element N from index N.
 |---|---|---|---|
 | `codepoint-widths` | array of strings | 0 | `codepoint-widths` |
 | `command-alias` | array of strings | 0 | `command-alias` |
+| `copy-hint-patterns` | array of strings | 7 | `copy-hint-patterns` |
 | `pane-colours` | array of strings | 0 | `pane-colours` |
 | `status.rows` | array of strings | 3 | `status-format` |
 | `terminal-features` | array of strings | 3 | `terminal-features` |

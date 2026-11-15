@@ -1670,6 +1670,9 @@ pub struct CopyMode {
     pub scroll_exit: bool,
     /// `-H`: a new mode hides its position indicator.
     pub hide_position: bool,
+    /// `-h` (grofe's own; tmux's `-H` is `hide_position`): label the
+    /// matches on screen, to copy one by its label.
+    pub hints: bool,
     /// `-M`: in the pane under the running mouse key, starting a drag
     /// there; nothing outside a mouse key.
     pub mouse: bool,
