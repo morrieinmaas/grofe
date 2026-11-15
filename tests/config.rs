@@ -332,14 +332,16 @@ fn a_malformed_requires_is_an_error() {
 #[test]
 fn requires_operators_compare_with_this_version() {
     let s = Setup::new();
+    let v = env!("CARGO_PKG_VERSION");
+    let mm = v.rsplit_once('.').map_or(v, |(head, _)| head);
     for (req, met) in [
-        ("grofe >= 0.1", true),
-        ("grofe > 0.1.0", false),
-        ("grofe <= 0.1", true),
-        ("grofe < 0.1", false),
-        ("grofe = 0.1.0", true),
-        ("grofe=0.1", true),
-        ("grofe < 1.0", true),
+        (format!("grofe >= {mm}"), true),
+        (format!("grofe > {v}"), false),
+        (format!("grofe <= {mm}"), true),
+        (format!("grofe < {mm}"), false),
+        (format!("grofe = {v}"), true),
+        (format!("grofe={mm}"), true),
+        ("grofe < 99.0".to_string(), true),
     ] {
         s.write(
             "config.toml",
