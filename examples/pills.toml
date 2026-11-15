@@ -29,6 +29,9 @@ style = "fg=#{@theme_grey}"
 active-style = "fg=#{@theme_yellow}"
 
 [status]
+# Two rows: the pills, then an empty row between the bar and the panes.
+lines = 2
+rows = ["", ""]
 position = "top"
 justify = "left"
 style = "bg=default,fg=#{@theme_fg}"
