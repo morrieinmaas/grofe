@@ -172,7 +172,7 @@ grofe client.
 
 ## 7. Docs
 
-a new user guide, remote.md under docs (: connecting, install, reconnect, forwarding, latency, machines,
+a new user guide, remote.md under docs (connecting, install, reconnect, forwarding, latency, machines,
 security notes), protocol-proxy.md, the new options in `docs/config-reference.md`,
 README (a "Remote sessions" section and the feature list), roadmap (remove the ssh items),
 and the landing page and the mdBook guide (both from PR #17, now on main).
