@@ -1,0 +1,15 @@
+[book]
+title = "grofe"
+description = "A terminal multiplexer for people who like tmux and are tired of working around it."
+language = "en"
+src = "src"
+
+[build]
+create-missing = false
+
+[output.html]
+site-url = "/grofe/docs/"
+git-repository-url = "https://github.com/morrieinmaas/grofe"
+edit-url-template = "https://github.com/morrieinmaas/grofe/edit/main/docs/book/{path}"
+default-theme = "light"
+preferred-dark-theme = "ayu"

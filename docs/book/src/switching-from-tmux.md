@@ -1,0 +1,89 @@
+# Switching from tmux
+
+## Know the gaps first
+
+The tmux compatibility layer answers what the tools and scripts it was tested
+against send, but some things are not there yet or never will be:
+
+- **Plugins.** TPM itself does not run. `import-tmux` turns its `run` line
+  into a `run-shell` of each installed plugin's `*.tmux`, in TPM's order, so
+  the plugins you already have load unchanged; nothing is cloned or updated.
+  Resurrect and continuum are left out, since grofe's own persistence
+  replaces them. A plugin's `*.tmux` and `*.conf` files are read as tmux
+  config only when the request comes through the `tmux` name or the server
+  has tmux identity.
+- **Copy mode and paste buffers** work, with tmux 3.7b's stock `copy-mode-vi`
+  and `copy-mode` (emacs) tables.
+- **`tmux -f` takes a grofe TOML file**, not a `tmux.conf`. Convert your
+  config with `grofe import-tmux` first.
+- **Out of scope:** tmux's control mode (`-C` and `-CC`). A window linked
+  twice into one session is refused.
+
+Keep real tmux reachable by its full path while you try grofe.
+
+## Convert your config
+
+grofe does not read `tmux.conf`, but it converts one for you, and never
+touches the original:
+
+```sh
+grofe import-tmux ~/.config/tmux/tmux.conf > ~/.config/grofe/user.toml
+```
+
+`just import-tmux` does the same and refuses to overwrite an existing
+`user.toml`. Options, key bindings, hooks and status formats come across,
+including `#()` segments, which become cached status sources. Anything that
+cannot come across is listed with the reason. TPM's `run` line becomes a
+direct load of each plugin you have installed.
+
+## Bring your sessions along
+
+The converted config sets `start-from-tmux = true`. With it, a grofe server
+that starts with no sessions of its own takes them from your running tmux
+server: names, windows, layouts and directories, with fresh shells, since
+the programs are still running in tmux. With no tmux running, it takes them
+from tmux-resurrect's newest save in `resurrect-dir` instead, where a pane
+saved with a command runs it again.
+
+Only the default server does this. One started with `-L preview` (or any
+other socket) starts from its own snapshot, so you can try a new build next
+to your main server.
+
+## Scripts and tools
+
+grofe sets `TMUX` and `TMUX_PANE` in its panes and answers the commands,
+aliases and formats that scripts and tools send, so things like `fzf --tmux`
+and vim-tmux-navigator keep working. A command it does not support fails
+with `<command>: not supported (<reason>)`.
+
+## Running grofe as `tmux`
+
+Once your config has moved, you can put grofe on your `PATH` under the name
+`tmux`. Use a symlink, since a shell alias does not reach scripts. To try it
+first without replacing tmux, link it somewhere off your `PATH` and call it
+by its full path:
+
+```sh
+mkdir -p ~/grofe-tmux
+ln -s ~/.cargo/bin/grofe ~/grofe-tmux/tmux
+~/grofe-tmux/tmux -V
+```
+
+A server started under that name has **tmux identity**. It reports itself as
+tmux (`TERM_PROGRAM=tmux`, and `tmux -V` prints the tmux release grofe is
+compatible with), and starts with tmux 3.7b's option defaults and stock key
+bindings rather than grofe's own: base index 0, mouse off, numbered session
+names, shared pane borders, and `prefix f` as `find-window`. Your config's
+values still win; set `pane-frames = true` to get framed panes there too.
+`compat-identity = "tmux"` gives a server started as `grofe` the same
+identity. The [options reference](reference/options.md) lists every default
+that differs.
+
+Under either name, `-L` sockets live in grofe's own directory, never in
+tmux's. Run as `tmux`, grofe refuses a `-S` path inside tmux's socket
+directory and never replaces a socket it did not create.
+
+Inside grofe, `tmux` is always grofe: the server puts a `tmux` link to itself
+first on the `PATH` of its panes and of the commands it runs. Run real tmux
+there by its full path, as `env -u TMUX /path/to/tmux`, because `$TMUX`
+points at grofe.
