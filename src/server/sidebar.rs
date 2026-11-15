@@ -304,7 +304,7 @@ fn detail(a: &Agent) -> String {
 // ponytail: the other states take fixed named colours, as message pills
 // do, so the terminal's theme picks the shades; no option per state yet.
 fn state_style(a: &Agent, blocked: Style, dim: Style) -> Style {
-    let named = |spec: &str| crate::server::status::parse_style(spec);
+    let named = status::parse_style;
     match rank(a) {
         Rank::Blocked => blocked,
         Rank::Error => named("fg=red"),
@@ -329,17 +329,22 @@ impl InputHook for SidebarHook {
             return None;
         };
         let (x0, top, height) = geometry(state, client, cols, term_rows)?;
-        let inside = strip(state, client, cols, term_rows)?;
-        let rows = rows(state, client);
-        let mut list = state
-            .sidebars
-            .clients
-            .get(&client)
-            .map(|e| e.list.clone())
-            .unwrap_or_default();
-        list.page = visible(inside.height());
+        // The list is built only for input the strip takes: typing into a
+        // pane with the strip showing expands no formats.
+        let list_for = |state: &State| {
+            let inside = strip(state, client, cols, term_rows)?;
+            let mut list = state
+                .sidebars
+                .clients
+                .get(&client)
+                .map(|e| e.list.clone())
+                .unwrap_or_default();
+            list.page = visible(inside.height());
+            Some((inside, rows(state, client), list))
+        };
         match input {
             Input::Mouse(m) if m.col >= x0 && m.row >= top && m.row - top < height => {
+                let (inside, rows, mut list) = list_for(state)?;
                 let (x, y) = (usize::from(m.col), usize::from(m.row));
                 let on_box = (inside.x0..inside.x1).contains(&x) && y >= inside.y0;
                 if m.kind == MouseKind::Down(MouseButton::Left)
@@ -358,6 +363,7 @@ impl InputHook for SidebarHook {
                 Some(Routed::Consumed)
             }
             Input::Key(key) if is_focused(state, client) => {
+                let (inside, rows, mut list) = list_for(state)?;
                 let action = list.on_key(key, rows.len(), false);
                 list.selected = list.selected.min(rows.len().saturating_sub(1));
                 list.top = first(rows.len(), &list, inside.height());
@@ -847,6 +853,32 @@ mod tests {
         set(&mut state, client, SidebarOp::On).expect("on");
         let strip = strip_of(&lines(&state, client, 160));
         assert_eq!(strip[3], format!("│   {}… │ ", "x".repeat(25)));
+    }
+
+    // The glyph is on column 129 and the label after it; text stops before
+    // 157, the cell clear of the frame. `x` puts the wide glyphs on odd
+    // columns from 141, so the eighth would take 155 and 156: it is dropped
+    // whole and the ellipsis takes 155.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wide_label_cut_whole_with_ellipsis() {
+        let (mut state, client, _p, _out) = setup(160);
+        let name = format!("x{}", "漢".repeat(20));
+        run(&mut state, &["rename-window", "-t", "b:infra", &name]);
+        set(&mut state, client, SidebarOp::On).expect("on");
+        let s = screen(&state, client, 160);
+        let row: String = (129..158).map(|x| cell(&s, x, 2).c).collect();
+        assert_eq!(
+            row.replace(' ', ""),
+            format!("●claude·x{}…", "漢".repeat(7)),
+            "{row:?}"
+        );
+        let flag = |x, f| cell(&s, x, 2).flags.contains(f);
+        assert!(flag(153, CellFlags::WIDE_CHAR));
+        assert!(flag(154, CellFlags::WIDE_CHAR_SPACER), "last glyph whole");
+        assert_eq!(cell(&s, 155, 2).c, '…');
+        assert!(!flag(155, CellFlags::WIDE_CHAR) && !flag(156, CellFlags::WIDE_CHAR));
+        assert_eq!(cell(&s, 156, 2).c, ' ');
+        assert_eq!(cell(&s, 158, 2).c, '│');
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
