@@ -392,3 +392,87 @@ fn grofe_speaks_the_framing() {
                 %begin T N 1\nparse error: unknown command: bogus\n%error T N 1\n%exit\n";
     assert_eq!(text, want);
 }
+
+/// `-C new-session` creates the session it attaches to: the same
+/// transcript, from an empty server.
+#[test]
+fn grofe_matches_tmux_for_new_session() {
+    let Some(real) = real_tmux() else {
+        eprintln!("skipped: no real tmux (set GROFE_REAL_TMUX)");
+        return;
+    };
+    let run = |side: &Side| {
+        let mut client = Client::start(side, &["-C", "new-session", "-s", "x", "-n", "w0", "cat"]);
+        client.settle(Duration::from_millis(600));
+        client.send("list-windows -F '#{window_id} #{window_name}'");
+        client.send("detach-client");
+        normalise(&client.finish())
+    };
+    let want = run(&real_side(&real));
+    assert!(
+        want.contains("%window-add @0\n%sessions-changed\n"),
+        "{want}"
+    );
+    assert_eq!(run(&grofe_side()), want);
+}
+
+/// With no session to attach to, the attach block is an error and the
+/// client leaves.
+#[test]
+fn grofe_matches_tmux_when_the_target_does_not_exist() {
+    let Some(real) = real_tmux() else {
+        eprintln!("skipped: no real tmux (set GROFE_REAL_TMUX)");
+        return;
+    };
+    let run = |side: &Side| {
+        session(side);
+        normalise(&Client::start(side, &["-C", "attach", "-t", "nosuch"]).finish())
+    };
+    let want = run(&real_side(&real));
+    assert!(want.starts_with("%begin T N 0\n"), "{want}");
+    assert!(want.ends_with("%error T N 0\n%exit\n"), "{want}");
+    assert_eq!(run(&grofe_side()), want);
+}
+
+/// `-CC` on a terminal: the stream is a DCS, `ESC P 1000 p` first and ST
+/// after `%exit`, and the terminal does not echo.
+#[test]
+fn double_c_wraps_the_stream_in_a_dcs() {
+    use nix::pty::openpty;
+    use std::io::Read;
+    use std::os::fd::AsFd;
+
+    let grofe = grofe_side();
+    session(&grofe);
+    let pty = openpty(None, None).expect("openpty");
+    let slave = |fd: &std::os::fd::OwnedFd| Stdio::from(fd.as_fd().try_clone_to_owned().unwrap());
+    let mut child = grofe
+        .command()
+        .args(["-CC", "attach", "-t", "main"])
+        .stdin(slave(&pty.slave))
+        .stdout(slave(&pty.slave))
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn -CC");
+    drop(pty.slave);
+    let mut master = fs::File::from(pty.master);
+    std::thread::sleep(Duration::from_millis(600));
+    master.write_all(b"detach-client\n").expect("write");
+    let mut got = Vec::new();
+    let mut buf = [0u8; 4096];
+    let end = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < end && !got.ends_with(b"\x1b\\") {
+        match master.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => got.extend_from_slice(&buf[..n]),
+        }
+    }
+    let _ = child.wait();
+    let text = String::from_utf8_lossy(&got).replace("\r\n", "\n");
+    assert!(text.starts_with("\x1bP1000p%begin "), "{text:?}");
+    assert!(text.ends_with("%exit\n\x1b\\"), "{text:?}");
+    assert!(
+        !text.contains("detach-client"),
+        "the terminal echoed: {text:?}"
+    );
+}

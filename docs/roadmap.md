@@ -28,8 +28,10 @@ codebase-health review of 2026-11-15. Each item is one branch and one PR.
   and grofe lacks.
 - **`-f` through the `tmux` shim** loads a tmux.conf, as tmux does; the native
   `grofe -f` keeps taking TOML.
-- **Control mode** (`-C` and `-CC`), the largest remaining gap for editor
-  plugins and terminal integrations.
+- **Control mode, the rest.** `-C` and `-CC` work as a client-side bridge
+  (`docs/specs/2026-11-15-control-mode.md`); left are subscriptions
+  (`refresh-client -B`), the auto-pause of `pause-after`, a server-side client
+  kind, and an iTerm2 end-to-end check.
 
 ## Features
 

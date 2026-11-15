@@ -110,9 +110,10 @@ lines, so it is a third connection kind, and grofe's server keeps its one JSON c
 `%output` comes straight from `pane-output` events, base64-decoded and escaped. The bridge is its
 own flow controller: `pause-after`, `-A`, and `no-output` drop or hold data before it is written.
 
-Client-bound commands are answered in the bridge: `detach-client` and `switch-client -t` (the
-attached session), `refresh-client` (`-C` as `resize-window` on the attached session's windows,
-`-f`, `-A`), and `display-message -p` formats naming `client_*` are left to the server.
+Client-bound commands are answered in the bridge: `detach-client`, `switch-client -t` (the
+attached session) and `refresh-client` (`-C` as `resize-window` on the attached session's
+windows, `-f`, `-A`). `display-message -p` formats naming `client_*` go to the server, which
+has no such client.
 
 **Ceilings of this slice**, each marked `// ponytail:` in the code:
 
@@ -140,8 +141,9 @@ a pane's output (what was produced is sent on `:on`, recorded), `:pause` and `:c
 the `no-output` span is lost). `-f wait-exit` makes the client wait for an empty input line before
 `%exit`.
 
-The bridge's pause is by age: a pane whose pending data has waited `<s>` seconds because stdout
-would not take it (a write that blocks, tracked by a writer thread's queue age) is paused.
+The bridge writes `%extended-output` with the age of an event when it was received, and
+pauses panes only on request (`-A`). The tmux auto-pause of a pane whose data has waited
+`<s>` seconds (a consumer that does not read) is left for the server-side slice (section 7).
 
 ## 6. Sizing
 
@@ -153,9 +155,9 @@ The bridge turns both into `resize-window -x -y`.
 
 `%subscription-changed`, `%pane-mode-changed`, `%paste-buffer-changed` and `-deleted`, `%message`,
 `%config-error`, `%client-detached`, `%client-session-changed`, `refresh-client -r`, `-l`, `-S`
-and `-B`, `-CC` pty details (the DCS is written, the raw mode is set when stdin is a tty),
-`attach -f` flags beyond those above, `-C` with `new-session -A`. iTerm2 end to end is checked by hand
-and recorded in `docs/compat-coverage.md`.
+and `-B`, the auto-pause of `pause-after`, `switch-client -n/-p/-l`, `-C` with `new-session -A`, and any
+command but `attach-session` and `new-session` after `-C`. iTerm2 end to end has not been checked by hand yet; it needs the
+`window_visible_layout` and subscription work above.
 
 ## 8. Parity test
 

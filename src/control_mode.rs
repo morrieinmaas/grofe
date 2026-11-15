@@ -366,6 +366,16 @@ fn exchange(socket: &Path, ctx: &ClientCtx, argv: &[String]) -> Result<String, S
     }
 }
 
+/// `target` as a session target: `display-message -t` reads a bare word as a
+/// pane, so a word with no `:` gets one.
+fn session_target(target: &str) -> String {
+    if target.contains(':') {
+        target.to_string()
+    } else {
+        format!("{target}:")
+    }
+}
+
 /// tmux words its parser's errors `parse error: ...`; the front end's are
 /// bare.
 fn parse_error_text(err: &str) -> String {
@@ -517,7 +527,7 @@ impl<W: Write> Bridge<'_, W> {
             "display-message",
             "-p",
             "-t",
-            target,
+            &session_target(target),
             "#{session_id}\t#{session_name}",
         ]) {
             Ok(out) => {
@@ -707,8 +717,7 @@ pub fn run(opts: &Options, input: impl BufRead + Send + 'static, output: impl Wr
     spawn_events(events, tx.clone());
     spawn_ticks(tx);
 
-    loop {
-        let Ok(msg) = rx.recv() else { break };
+    while let Ok(msg) = rx.recv() {
         match msg {
             Msg::Line(line) if line.trim().is_empty() => {}
             Msg::Line(line) => {
@@ -763,12 +772,13 @@ fn start<W: Write>(bridge: &mut Bridge<'_, W>) -> Result<Vec<String>, String> {
         None => bridge.opts.target.clone(),
     };
     let mut query = vec!["display-message", "-p"];
+    let target = target.map(|t| session_target(&t));
     if let Some(t) = &target {
         query.extend(["-t", t]);
     }
     query.push("#{session_id}\t#{session_name}");
     let out = bridge.ask(&query).map_err(|e| {
-        if e.starts_with("can't find session") {
+        if target.is_some() {
             e
         } else {
             "no sessions".into()
