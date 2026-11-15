@@ -133,7 +133,7 @@ last column once you have done it yourself.
   focused the pane), and `#{pane_in_mode}` and `#{pane_mode}` now see an open
   chooser (they read 0 and empty).
 - Known gap, not grofe's: in copy mode `C-h C-j C-k C-l C-\` keep tmux's
-  stock meaning (or none), because canopy's navigator port still defers
+  stock meaning (or none), because the session manager's navigator port still defers
   vim-tmux-navigator's copy-mode rows.
 - What the script cannot see: how the selection and the indicator look,
   and the 0.3 s highlight after a double or triple click. Those are yours

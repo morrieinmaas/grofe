@@ -1787,6 +1787,15 @@ pub enum Command {
     FloatPane(FloatPane),
     UnfloatPane(UnfloatPane),
     DragPane(DragPane),
+    /// `lua <src>` (grofe's own): runs a Luau chunk on the server.
+    Lua {
+        src: String,
+    },
+    /// `lua-call <id>` (grofe's own): runs the Lua callback `id`; a key
+    /// bound from Lua stores this.
+    LuaCall {
+        id: u32,
+    },
     PlacePane(PlacePane),
     NewScratchpad(NewScratchpad),
     ToggleScratchpad(ToggleScratchpad),

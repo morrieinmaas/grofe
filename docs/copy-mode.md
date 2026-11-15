@@ -10,8 +10,8 @@ later M5 task, TP.11 and TP.9b check themselves against the table below.
 - `tests/fixtures/compat/copy-mode.conf` holds what the owner's setup adds
   to tmux's stock table, reproduced from the sources, never from a live
   server. tmux-yank's five rows come from its vendored `yank.tmux` with the
-  plugin's defaults. canopy's port of vim-tmux-navigator
-  (`40-canopy-nav.toml`) defers its five copy-mode rows to M5; the plugin is
+  plugin's defaults. A private port of vim-tmux-navigator
+  defers its five copy-mode rows to M5; the plugin is
   not vendored, so their argv comes from the TC.0 container recording of the
   old config (`tests/compat/corpus/container-stored.argv`).
 - `tests/fixtures/compat/golden/tm_0/list-keys-copy-mode-vi.scenario` starts
@@ -606,7 +606,7 @@ of the view, starting over when the cursor's line changes);
 ## Decisions for the owner
 
 1. **95 rows, not 93.** The table includes vim-tmux-navigator's five rows,
-   which canopy's port defers to M5, taken from the container recording
+   which that private port defers to M5, taken from the container recording
    because the plugin is not vendored. Without them the table would be 92
    and `C-h`, `C-j` would keep tmux's stock meaning in copy mode.
 2. **`pbcopy` in the fixture.** The golden and TM.7's scenarios use the
@@ -622,5 +622,5 @@ of the view, starting over when the cursor's line changes);
 5. **Default bindings.** The stub edit is to load "the 93 rows from TM.0's
    golden" as grofe's default table. The proposal is that grofe's default
    table holds only the 88 stock rows; yank's five come from the plugin
-   (TP.11) and the navigator's five from canopy's port, so a plain grofe
+   (TP.11) and the navigator's five from the private port, so a plain grofe
    user never gets `pbcopy` bound to `y`.
