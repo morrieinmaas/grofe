@@ -6809,6 +6809,7 @@ mod fuzz_regression_tests {
     }
 }
 
+#[cfg(test)]
 mod lua_tests {
     use super::*;
 
