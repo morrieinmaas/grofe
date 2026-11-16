@@ -159,7 +159,7 @@ fn verdicts(state: &State, disk: &Disk, restore: bool) -> Vec<Entry> {
     // A pane whose saved resume differs from its live one is "not saved
     // yet" only while the writer still has the change to write; otherwise
     // the disk itself disagrees (edited, or the writer frozen).
-    let pending = snapshot::pending_panes(model);
+    let pending = snapshot::pending_panes(state);
     let mut sessions: Vec<_> = model.sessions.values().collect();
     sessions.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out = Vec::new();

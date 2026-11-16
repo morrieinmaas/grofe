@@ -1027,10 +1027,13 @@ impl InputHook for PromptHook {
                 let prompt = state.prompts.close(client)?;
                 let command = prompt.command(&prompt.line());
                 match cmd::split_command_string(&command) {
-                    Ok(cmds) if !cmds.is_empty() => {
-                        state.command_key = prompt.key.clone();
-                        clients::run_binding(state, client, &cmds, prompt.dialect)
-                    }
+                    Ok(cmds) if !cmds.is_empty() => clients::run_binding(
+                        state,
+                        client,
+                        &cmds,
+                        prompt.dialect,
+                        prompt.key.clone(),
+                    ),
                     Ok(_) => {}
                     Err(e) => clients::show_message(state, client, &e.to_string()),
                 }
@@ -1133,8 +1136,7 @@ impl InputHook for PromptHook {
                 };
                 match command.map(|c| cmd::split_command_string(&c)) {
                     Some(Ok(cmds)) if !cmds.is_empty() => {
-                        state.command_key = prompt.key.clone();
-                        Routed::Command(cmds, prompt.dialect)
+                        Routed::Keyed(cmds, prompt.dialect, prompt.key.clone())
                     }
                     Some(Err(e)) => {
                         clients::show_message(state, client, &e.to_string());
@@ -1845,7 +1847,7 @@ pub fn command_prompt(
     }
     // An incremental prompt never holds its caller, and starts by running
     // its template with a bare `=`.
-    open(state, id, prompt, !c.background && !incremental);
+    open(state, ctx, id, prompt, !c.background && !incremental);
     if incremental {
         run_incremental(state, id, '=', "");
     }
@@ -1932,10 +1934,16 @@ pub fn ask(
         then: Then(Some(then)),
         ..Prompt::new(label.to_string(), initial, String::new())
     };
-    let mut prompt = prompt;
-    prompt.key = state.event_key.clone();
     state.prompts.open.insert(id, prompt);
     clients::mark_dirty(state, id);
+}
+
+/// Records `key`, the key whose binding opened client `id`'s prompt, so
+/// its commands are logged as run by it (`show-messages`).
+pub fn opened_by(state: &mut State, id: ClientId, key: Option<String>) {
+    if let Some(prompt) = state.prompts.open.get_mut(&id) {
+        prompt.key = key;
+    }
 }
 
 /// An incremental prompt's callback (tmux's `cmd_command_prompt_callback`
@@ -1946,9 +1954,9 @@ fn run_incremental(state: &mut State, client: ClientId, prefix: char, line: &str
     };
     let command = replace_template(&prompt.template, &format!("{prefix}{line}"));
     let dialect = prompt.dialect;
-    state.command_key = prompt.key.clone();
+    let key = prompt.key.clone();
     match cmd::split_command_string(&command) {
-        Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect),
+        Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect, key),
         Ok(_) => {}
         Err(e) => clients::show_message(state, client, &e.to_string()),
     }
@@ -1994,7 +2002,7 @@ pub fn confirm(
         default_yes: c.default_yes,
         ..Prompt::new(label, "", command)
     };
-    open(state, id, prompt, !c.background);
+    open(state, ctx, id, prompt, !c.background);
     Ok(String::new())
 }
 
@@ -2033,9 +2041,9 @@ fn expand_for(state: &State, id: ClientId, text: &str) -> String {
 /// to close: a CLI request's reply, and a binding's later commands and its
 /// client's input, as tmux 3.7b's command queue waits (recorded,
 /// `tm_6/waits`).
-fn open(state: &mut State, id: ClientId, prompt: Prompt, wait: bool) {
+fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, prompt: Prompt, wait: bool) {
     let mut prompt = prompt;
-    prompt.key = state.event_key.clone();
+    prompt.key = ctx.request.event_key.clone();
     state.prompts.open.insert(id, prompt);
     if wait {
         let reply = dispatch::defer_reply(state);
@@ -2799,7 +2807,7 @@ mod tests {
 
     fn command(words: &[&str]) -> Option<Routed> {
         let argv = words.iter().map(|w| w.to_string()).collect();
-        Some(Routed::Command(vec![argv], Dialect::Grofe))
+        Some(Routed::Keyed(vec![argv], Dialect::Grofe, None))
     }
 
     /// Recorded on tmux 3.7b: `-1` answers with the character typed, a

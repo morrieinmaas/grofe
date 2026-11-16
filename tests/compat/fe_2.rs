@@ -131,6 +131,7 @@ fn every_fe2_coverage_form_translates() {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     };
     let mut failed = Vec::new();
     let mut seen = 0;

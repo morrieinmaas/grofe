@@ -243,6 +243,7 @@ pub fn row_for(argv: &[String]) -> Option<&'static Row> {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     };
     let inv = Invocation {
         verb: spec.name,
@@ -695,6 +696,7 @@ pub fn form_of(argv: &[String]) -> Option<String> {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     };
     let inv = Invocation {
         verb: spec.name,
@@ -759,6 +761,7 @@ pub fn miss_form(argv: &[String]) -> String {
                 env: Vec::new(),
                 client: None,
                 dialect: Dialect::Tmux,
+                request: Default::default(),
             };
             let inv = Invocation {
                 verb: spec.name,
@@ -867,6 +870,7 @@ pub fn spell(argv: &[String]) -> Result<(Vec<Command>, Vec<Vec<String>>), TmuxEr
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     };
     let outer = SPELLED.replace(Some(Vec::new()));
     let got = crate::compat::quietly(|| dispatch_command(argv, &ctx));
