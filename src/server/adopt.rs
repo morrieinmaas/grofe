@@ -544,6 +544,22 @@ fn json_layout(text: &str, uid: &PaneKey) -> Option<LayoutGeometry<String>> {
 #[cfg(test)]
 mod tests {
 
+    /// Runs a fake `tmux` just written, retrying while exec fails with
+    /// ETXTBSY: another test thread's fork can hold the script's write
+    /// handle until that child execs (as tests/compat/replay.rs does).
+    fn run_fake(fake: &std::path::Path, timeout: Duration) -> Result<Snapshot, String> {
+        let program = fake.to_str().expect("utf8");
+        for _ in 0..50 {
+            match from_tmux_program(program, timeout) {
+                Err(e) if e.contains("Text file busy") => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                r => return r,
+            }
+        }
+        from_tmux_program(program, timeout)
+    }
+
     /// A `tmux` that never answers is killed when the wait ends, and the
     /// error says so (the script's own `sleep` keeps the pipe open).
     #[test]
@@ -554,7 +570,7 @@ mod tests {
         std::fs::write(&fake, "#!/bin/sh\nsleep 30 &\nexit 0\n").expect("write");
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let started = Instant::now();
-        let r = from_tmux_program(fake.to_str().expect("utf8"), Duration::from_millis(300));
+        let r = run_fake(&fake, Duration::from_millis(300));
         assert_eq!(r.err().as_deref(), Some("tmux did not answer in time"));
         assert!(started.elapsed() < Duration::from_secs(5));
     }
@@ -567,7 +583,7 @@ mod tests {
         std::fs::write(&fake, "#!/bin/sh\nsleep 30\n").expect("write");
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let started = Instant::now();
-        let r = from_tmux_program(fake.to_str().expect("utf8"), Duration::from_millis(200));
+        let r = run_fake(&fake, Duration::from_millis(200));
         assert_eq!(r.err().as_deref(), Some("tmux did not answer in time"));
         assert!(started.elapsed() < Duration::from_secs(5));
     }
