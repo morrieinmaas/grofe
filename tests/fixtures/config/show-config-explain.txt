@@ -146,6 +146,8 @@ message.display-time-ms = 750
   set by built-in defaults
 message.pill = true
   set by ~/.config/grofe/config.toml
+message.pill-ends = ""
+  set by built-in defaults
 pane-border.style = "fg=red"
   set by ~/.config/grofe/config.toml
 pane-border.active-style = "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}"

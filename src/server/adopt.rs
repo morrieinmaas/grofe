@@ -25,13 +25,20 @@ use crate::server::layout::{GeometryCell, LayoutGeometry, parse_tmux_layout};
 use crate::server::snapshot::{PaneSnap, SNAPSHOT_VERSION, SessionSnap, Snapshot, WindowSnap};
 use crate::types::{Dir, PaneId};
 
-/// The `list-panes -a` format: one tab-separated line per pane. The first
-/// field is `#{grofe_version}`, empty only on a real tmux, so a `tmux` on
-/// `PATH` that is grofe itself is never taken for tmux.
-const LIVE_FORMAT: &str = "#{grofe_version}\t#{session_name}\t#{session_path}\t\
-    #{window_index}\t#{window_name}\t#{window_active}\t#{window_layout}\t\
-    #{window_zoomed_flag}\t#{?automatic-rename,1,0}\t#{pane_id}\t#{pane_active}\t\
+/// The `list-panes -a` format: one line per pane, its fields between
+/// [`LIVE_SEP`]. The first field is `#{grofe_version}`, empty only on a
+/// real tmux, so a `tmux` on `PATH` that is grofe itself is never taken for
+/// tmux.
+const LIVE_FORMAT: &str = "#{grofe_version}|~|#{session_name}|~|#{session_path}|~|\
+    #{window_index}|~|#{window_name}|~|#{window_active}|~|#{window_layout}|~|\
+    #{window_zoomed_flag}|~|#{?automatic-rename,1,0}|~|#{pane_id}|~|#{pane_active}|~|\
     #{pane_current_path}";
+
+/// [`LIVE_FORMAT`]'s field separator. Printable, as tmux 3.6 writes a tab
+/// in `-F` output as `_`.
+// ponytail: a window name or path holding `|~|` misreads its line, which
+// is skipped; tmux has no escaping that survives 3.6's output either.
+const LIVE_SEP: &str = "|~|";
 
 /// The sessions of the tmux server `tmux` (from `PATH`) reaches with no
 /// `$TMUX`: its default socket under `$TMUX_TMPDIR`. `Err` when none
@@ -108,7 +115,7 @@ fn parse_live(text: &str) -> Result<Snapshot, String> {
     // Sessions in tmux's order, each with its windows in order.
     let mut sessions: Vec<(String, PathBuf, Vec<LiveWindow>)> = Vec::new();
     for line in text.lines() {
-        let f: Vec<&str> = line.split('\t').collect();
+        let f: Vec<&str> = line.split(LIVE_SEP).collect();
         let [
             grofe,
             sess,
@@ -579,8 +586,19 @@ mod tests {
 
     #[test]
     fn a_grofe_answering_as_tmux_is_not_taken_for_tmux() {
-        let line = "0.1.0\tmain\t/\t0\tzsh\t1\tbad\t0\t1\t%0\t1\t/";
+        let line = "0.1.0|~|main|~|/|~|0|~|zsh|~|1|~|bad|~|0|~|1|~|%0|~|1|~|/";
         assert!(parse_live(line).is_err());
+    }
+
+    /// tmux 3.6 writes a tab in `-F` output as `_`; the separator must
+    /// come through as it is.
+    #[test]
+    fn a_tmux_line_is_read_whatever_tmux_does_to_tabs() {
+        let line = "|~|alpha|~|/w|~|0|~|my_win|~|1|~|1234,80x24,0,0,0|~|0|~|1|~|%0|~|1|~|/w/a";
+        let snap = parse_live(line).expect("one session");
+        assert_eq!(snap.sessions.len(), 1);
+        assert_eq!(snap.sessions[0].name, "alpha");
+        assert!(parse_live(&line.replace("|~|", "_")).is_err());
     }
 
     #[test]
