@@ -112,6 +112,7 @@ pub(super) const TABLE: &[&str] = &[
     "pane_pid",
     "pane_pipe",
     "pane_pipe_pid",
+    "pane_ports",
     "pane_right",
     "pane_search_string",
     "pane_start_command",

@@ -108,6 +108,8 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "scratchpad-history",
     "message-pill",
     "prompt-position",
+    "stable-ssh-agent",
+    "forward-browser",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -602,6 +604,21 @@ pub(super) const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "mouse",
         doc: "Mouse support: select, resize, drag and scroll panes and click the status line.",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    // Remote sessions (spec 2026-11-15-ssh-remote §3).
+    Builtin {
+        name: "stable-ssh-agent",
+        doc: "Give a session a stable SSH_AUTH_SOCK link that each attach repoints at the attaching client's agent, so old panes keep a working agent.",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+    },
+    Builtin {
+        name: "forward-browser",
+        doc: "Set BROWSER to grofe open in new panes, so a remote client opens the URLs a pane asks for.",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",

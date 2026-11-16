@@ -416,6 +416,13 @@ pub(super) static ROWS: &[Row] = &[
         parse::parse_new_scratchpad,
     ),
     row("show-scratchpad", "", "t:", 1, parse::parse_show_scratchpad),
+    row("open-url", "", "", 1, parse::parse_open_url).min(1),
+    row("list-ports", "", "t:a", 0, |f| {
+        Ok(Command::ListPorts(ListPorts {
+            target: f.target('t')?,
+            all: f.on('a'),
+        }))
+    }),
     row("drag-pane", "", "M", 0, parse::parse_drag_pane),
     row("place-pane", "", "t:X:Y:", 0, parse::parse_place_pane),
     row(

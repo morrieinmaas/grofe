@@ -661,6 +661,18 @@ Make the pane under the mouse the active pane as the pointer moves.
 
 Default: `off`
 
+## forward-browser
+
+Set BROWSER to grofe open in new panes, so a remote client opens the URLs a pane asks for.
+
+- **TOML key**: `forward-browser` (boolean)
+- **Scope**: session
+- **Values**: `on` or `off` (`true` or `false` in TOML)
+
+Default: `on`
+
+grofe only: tmux does not have this option.
+
 ## get-clipboard
 
 Whether a program's OSC 52 clipboard query is answered. Only buffer answers it, from the newest paste buffer, and only when set-clipboard is on; off, request and both are never answered, and the terminal's clipboard is never asked.
@@ -1472,6 +1484,18 @@ Which windows' silence alerts are acted on: any, none, the current one or the ot
 - **Values**: `none`, `any`, `current`, `other`
 
 Default: `other`
+
+## stable-ssh-agent
+
+Give a session a stable SSH_AUTH_SOCK link that each attach repoints at the attaching client's agent, so old panes keep a working agent.
+
+- **TOML key**: `stable-ssh-agent` (boolean)
+- **Scope**: session
+- **Values**: `on` or `off` (`true` or `false` in TOML)
+
+Default: `on`
+
+grofe only: tmux does not have this option.
 
 ## start-from-tmux
 

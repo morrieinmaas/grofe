@@ -1358,6 +1358,21 @@ pub struct PlacePane {
     pub y: Option<Offset>,
 }
 
+/// `open-url <url>` (grofe's own): asks the clients subscribed to the
+/// `open-url` event to open `url`; what `grofe open` and `$BROWSER` send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenUrl {
+    pub url: String,
+}
+
+/// `list-ports [-a] [-t target]` (grofe's own): the TCP ports the processes
+/// of a window's panes (every pane with `-a`) listen on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListPorts {
+    pub target: Target,
+    pub all: bool,
+}
+
 /// `new-scratchpad` (grofe's own; tmux 3.7b has no such verb): opens a hidden
 /// scratchpad pane, running the shell command or the default shell in `-c`.
 /// Hidden scratchpads are kept server-wide.
@@ -1843,4 +1858,6 @@ pub enum Command {
     ChooseNotification,
     Notify(NotifyCmd),
     KeyMenu(KeyMenu),
+    OpenUrl(OpenUrl),
+    ListPorts(ListPorts),
 }

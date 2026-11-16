@@ -110,6 +110,25 @@ pub fn shim_dir(env: &Env, socket: &Path) -> PathBuf {
     state_dir(env).join("bin").join(instance_name(socket))
 }
 
+/// The directory of the stable ssh-agent links of the instance at `socket`
+/// (spec 2026-11-15-ssh-remote §3): `agent/` beside the socket, in the
+/// runtime directory the socket lives in.
+pub fn agent_dir(socket: &Path) -> PathBuf {
+    socket
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("agent")
+}
+
+/// The symlink panes of session number `session` (`$N`) get as
+/// `SSH_AUTH_SOCK`. Named after the instance too, so two servers sharing a
+/// runtime directory never share a link, and short, since a socket path
+/// has a length limit.
+pub fn agent_link(socket: &Path, session: u32) -> PathBuf {
+    let hash = fnv1a64(absolute_socket_path(socket).as_os_str().as_encoded_bytes());
+    agent_dir(socket).join(format!("{:08x}-{session}.sock", hash as u32))
+}
+
 /// Resolves `socket` to a path that is stable whether or not the socket
 /// file itself exists yet. Absolutises it lexically against the current
 /// working directory (no filesystem access beyond reading the cwd, for a

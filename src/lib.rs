@@ -11,6 +11,7 @@ pub mod event;
 pub mod import_tmux;
 pub mod layouts;
 pub mod lua;
+pub mod open;
 pub mod pack;
 pub mod paths;
 pub mod protocol;
