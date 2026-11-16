@@ -1282,4 +1282,8 @@ fn a_pill_spans_up_to_status_right() {
     // No status-right, or no such line: the whole row.
     assert_eq!(pill_span(&[row(vec![right(80, 80)])], 0, 80), 80);
     assert_eq!(pill_span(&[], 0, 80), 80);
+    // A range past the row is cut to it; one at its start leaves no room,
+    // which the drawing takes as the whole row.
+    assert_eq!(pill_span(&[row(vec![right(90, 99)])], 0, 80), 80);
+    assert_eq!(pill_span(&[row(vec![right(0, 10)])], 0, 80), 0);
 }

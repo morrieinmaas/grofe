@@ -172,6 +172,20 @@ fn the_prompt_suggests_what_tab_would_complete() {
     h.wait_until("the count", WAIT, |t| {
         status(t).contains(": kill-se  Tab: 2 matches")
     });
+    // Nothing after a space, nor with the cursor mid-line.
+    h.send("\x15list-keys ");
+    h.wait_until("no suggestion", WAIT, |t| {
+        status(t).contains(": list-keys ") && !status(t).contains("Tab")
+    });
+    h.send("\x15list-ke\x1b[D");
+    h.wait_until("the cursor moved", WAIT, |t| {
+        status(t).contains(": list-ke ")
+    });
+    // After leading spaces it suggests what Tab completes there too.
+    h.send("\x15  list-ke");
+    h.wait_until("the same suggestion", WAIT, |t| {
+        status(t).contains(":   list-keys")
+    });
     // Tab takes the suggestion.
     h.send("\x15list-ke\t");
     h.wait_until("the completion", WAIT, |t| {

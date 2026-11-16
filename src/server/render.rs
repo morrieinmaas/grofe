@@ -293,7 +293,13 @@ pub fn draw_message_pill(
     if screen.cols < 7 || row >= screen.rows {
         return;
     }
-    let (x, w) = status_pill(screen, row, span.max(7), look);
+    // Too little room before status-right: the pill takes the whole row.
+    let span = if span < 7 {
+        usize::from(screen.cols)
+    } else {
+        span
+    };
+    let (x, w) = status_pill(screen, row, span, look);
     let text = crate::server::status::trim_left(text, w.saturating_sub(5));
     let body = format!("  {} {text} ", level.icon());
     let line = crate::server::status::draw(&body, look.body(), w as u16).line;
@@ -1786,6 +1792,16 @@ mod tests {
         assert!(row.starts_with(" (  ℹ note "), "{row}");
         assert_eq!(screen.cells[4].bg, look.body().bg);
         assert_ne!(screen.cells[4].bg, Color::Named(NamedColor::Blue));
+    }
+
+    #[test]
+    fn a_pill_with_no_room_before_status_right_takes_the_row() {
+        let mut screen = status_screen(&format!("RIGHT{}", " ".repeat(35)));
+        let look = PillLook::named(Level::Info, "()");
+        draw_message_pill(&mut screen, 0, 3, "hi", Level::Info, &look);
+        let row = row_text(&screen);
+        assert!(row.starts_with("(  ℹ hi "), "{row}");
+        assert!(row.ends_with(')'), "{row}");
     }
 
     #[test]

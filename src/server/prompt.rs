@@ -1662,9 +1662,11 @@ impl Overlay for PromptOverlay {
             // that changes width moves the pill's end a frame late.
             let rows = clients::drawn_status(state, client).map_or(&[][..], |(r, _)| r);
             let span = clients::pill_span(rows, usize::from(line), screen.cols);
+            // Too little room before status-right: the pill takes the row.
+            let span = if span < 6 { cols } else { span };
             let hint = suggestion(state, prompt);
             draw_pill(prompt, row, span, &look, screen);
-            if let Some(hint) = hint {
+            if let Some(hint) = hint.filter(|_| cols >= 6) {
                 draw_suggestion(screen, row, span, &look, &hint);
             }
             return;
@@ -1740,8 +1742,8 @@ fn suggestion(state: &State, prompt: &Prompt) -> Option<String> {
     if word.starts_with('-') {
         return None;
     }
-    let first = text[..start].trim().is_empty();
-    let list = completions(state, word, first);
+    // As Tab: only a word at the very start is a command.
+    let list = completions(state, word, start == 0);
     let full = match list.len() {
         0 => return None,
         1 => list[0].clone(),
@@ -1794,7 +1796,7 @@ fn draw_pill(prompt: &Prompt, row: u16, span: usize, look: &render::PillLook, sc
         return;
     }
     let label = format!("  {} ", prompt.label);
-    let (x, w) = render::status_pill(screen, row, span.max(6), look);
+    let (x, w) = render::status_pill(screen, row, span, look);
     let style = look.body();
     let drawn = status::draw(&label, style, w as u16);
     let start = visible_width(&label).min(w);
