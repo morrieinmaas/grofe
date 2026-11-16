@@ -188,7 +188,7 @@ impl Level {
     // ponytail: fixed colours; `message-style` styles only tmux's bar.
     fn look(self) -> (&'static str, &'static str, char) {
         match self {
-            Level::Info => ("brightblack", "brightwhite", 'ℹ'),
+            Level::Info => ("blue", "brightwhite", 'ℹ'),
             Level::Warning => ("yellow", "black", '▲'),
             Level::Error => ("red", "brightwhite", '✗'),
         }
@@ -201,52 +201,39 @@ impl Level {
     }
 }
 
-/// Below this many columns between the status line's parts a pill takes
-/// the middle of the whole row instead, over what is there.
-const MIN_PILL: usize = 16;
-
-/// Where a pill up to `want` columns wide goes on `row`: the start column
-/// and width. It is centred in the row's widest run of blank cells, a cell
-/// clear of what is either side, and cut to that room; with too little
-/// room it is centred on the row.
-pub fn pill_area(screen: &Screen, row: u16, want: usize) -> (usize, usize) {
+/// A `level` pill up to `want` columns wide (ends included) alone on status
+/// row `row`: the row is blanked, so the status line's own parts are gone
+/// while it shows, and the pill is centred on it, its body filled in the
+/// level's colour between its `ends`. Returns the body's start column and
+/// width.
+// ponytail: blanks to the terminal's default colours, not `status-style`'s
+// background; read that here if a coloured bar needs it.
+pub fn status_pill(
+    screen: &mut Screen,
+    row: u16,
+    want: usize,
+    level: Level,
+    ends: &str,
+) -> (usize, usize) {
     let cols = usize::from(screen.cols);
-    let cells = &screen.cells[usize::from(row) * cols..][..cols];
-    let (mut best, mut run) = ((0, 0), None);
-    for (x, cell) in cells.iter().enumerate() {
-        let blank = cell.c == ' '
-            && cell.zerowidth.is_empty()
-            && !cell.flags.contains(CellFlags::WIDE_CHAR_SPACER);
-        match (blank, run) {
-            (true, None) => run = Some(x),
-            (false, Some(start)) => {
-                run = None;
-                if x - start > best.1 {
-                    best = (start, x - start);
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(start) = run
-        && cols - start > best.1
-    {
-        best = (start, cols - start);
-    }
-    let room = best.1.saturating_sub(2);
-    if room >= want.min(MIN_PILL) {
-        let w = want.min(room);
-        (best.0 + 1 + (room - w) / 2, w)
-    } else {
-        let w = want.min(cols);
-        ((cols - w) / 2, w)
-    }
+    let blank = Screen::new(1, 1).cells.remove(0);
+    let at = usize::from(row) * cols;
+    screen.cells[at..at + cols].fill(blank.clone());
+    let w = want.min(cols);
+    let x = (cols - w) / 2;
+    let body = SnapCell {
+        bg: level.body().bg,
+        ..blank
+    };
+    screen.cells[at + x + 1..at + x + w - 1].fill(body);
+    pill_ends(screen, row, (x, w), level, ends);
+    (x + 1, w - 2)
 }
 
 /// A pill's two ends at columns `x` and `x + w - 1` of `row`: the
-/// `pane-frame-tab-ends` glyphs a frame's tab uses, in `level`'s colour on
-/// the background already there.
-pub fn pill_ends(screen: &mut Screen, row: u16, (x, w): (usize, usize), level: Level, ends: &str) {
+/// `message-pill-ends` glyphs, in `level`'s colour on the background
+/// already there.
+fn pill_ends(screen: &mut Screen, row: u16, (x, w): (usize, usize), level: Level, ends: &str) {
     let (l, r) = tab_ends(ends);
     let (colour, _, _) = level.look();
     let at = usize::from(row) * usize::from(screen.cols);
@@ -263,20 +250,19 @@ pub fn pill_ends(screen: &mut Screen, row: u16, (x, w): (usize, usize), level: L
     }
 }
 
-/// A status-line message as a `level` pill on `row` ([`pill_area`]): its
+/// A status-line message as a `level` pill on `row` ([`status_pill`]): its
 /// icon and `text` (an expanded format, its styles drawn) cut to fit.
 pub fn draw_message_pill(screen: &mut Screen, row: u16, text: &str, level: Level, ends: &str) {
     if screen.cols < 7 || row >= screen.rows {
         return;
     }
     let want = crate::server::prompt::visible_width(text) + 6;
-    let (x, w) = pill_area(screen, row, want);
+    let (x, w) = status_pill(screen, row, want, level, ends);
     let (_, _, icon) = level.look();
-    let text = crate::server::status::trim_left(text, w - 6);
+    let text = crate::server::status::trim_left(text, w - 4);
     let body = format!(" {icon} {text} ");
-    let line = crate::server::status::draw(&body, level.body(), (w - 2) as u16).line;
-    draw_line_at(screen, row, x + 1, &line);
-    pill_ends(screen, row, (x, w), level, ends);
+    let line = crate::server::status::draw(&body, level.body(), w as u16).line;
+    draw_line_at(screen, row, x, &line);
 }
 
 /// The window's border options and each pane's [`PaneLook`].
@@ -1714,18 +1700,16 @@ mod tests {
     }
 
     #[test]
-    fn a_pill_goes_in_the_middle_of_the_widest_blank_run() {
-        // 6 columns used, 30 blank, 4 used: 28 columns of room from column
-        // 7, a cell clear of each side.
-        let screen = status_screen(&format!("[s] 1*{}RITE", " ".repeat(30)));
-        assert_eq!(pill_area(&screen, 0, 10), (16, 10));
-        assert_eq!(pill_area(&screen, 0, 40), (7, 28));
-    }
-
-    #[test]
-    fn a_pill_with_no_room_between_the_parts_takes_the_rows_middle() {
-        let screen = status_screen(&format!("{}  {}", "L".repeat(19), "R".repeat(19)));
-        assert_eq!(pill_area(&screen, 0, 20), (10, 20));
+    fn a_pill_clears_the_status_row_and_takes_its_middle() {
+        // Whatever the status line held is gone while the pill shows.
+        let mut screen = status_screen(&format!("[s] 1*{}RITE", " ".repeat(30)));
+        screen.cells[0].bg = Color::Named(NamedColor::Blue);
+        assert_eq!(status_pill(&mut screen, 0, 10, Level::Info, "()"), (16, 8));
+        assert_eq!(&row_text(&screen)[..15], " ".repeat(15));
+        assert_eq!(screen.cells[0].bg, Style::default().bg);
+        assert_eq!(screen.cells[15].c, '(');
+        assert_eq!(screen.cells[24].c, ')');
+        assert_eq!(&row_text(&screen)[25..], " ".repeat(15));
     }
 
     #[test]
@@ -1735,9 +1719,9 @@ mod tests {
         assert_eq!(
             row_text(&screen),
             format!(
-                "L{}( ✗ Can't find window: 9 ){}R",
-                " ".repeat(6),
-                " ".repeat(6)
+                "{}( ✗ Can't find window: 9 ){}",
+                " ".repeat(7),
+                " ".repeat(7)
             )
         );
         let red = Color::Named(NamedColor::Red);
@@ -1752,6 +1736,8 @@ mod tests {
         let mut screen = status_screen(&format!("L{}R", " ".repeat(38)));
         draw_message_pill(&mut screen, 0, "note", Level::Info, "()");
         assert!(row_text(&screen).contains("( ℹ note )"));
+        let blue = Color::Named(NamedColor::Blue);
+        assert!(screen.cells.iter().any(|c| c.c == 'ℹ' && c.bg == blue));
         draw_message_pill(&mut screen, 0, "bell", Level::Warning, "");
         assert!(row_text(&screen).contains("  ▲ bell  "));
         let yellow = Color::Named(NamedColor::Yellow);
@@ -1762,6 +1748,6 @@ mod tests {
     fn a_long_message_is_cut_inside_its_pill() {
         let mut screen = status_screen(&format!("L{}R", " ".repeat(38)));
         draw_message_pill(&mut screen, 0, &"x".repeat(80), Level::Warning, "()");
-        assert_eq!(row_text(&screen), format!("L ( ▲ {} ) R", "x".repeat(30)));
+        assert_eq!(row_text(&screen), format!("( ▲ {} )", "x".repeat(34)));
     }
 }

@@ -1706,25 +1706,33 @@ impl Overlay for PromptOverlay {
 /// How many columns the prompt's pill or box takes at most.
 const PROMPT_WIDTH: usize = 60;
 
-/// The prompt as a pill on status row `row` (`message-pill`): its label
-/// and text in an info message's colours, between the pill's `ends`.
+/// The narrowest the prompt's pill is, so a short command still reads as an
+/// input field.
+const PROMPT_MIN: usize = 24;
+
+/// The prompt as a pill alone on status row `row` (`message-pill`): its
+/// label and text in an info message's colours, between the pill's `ends`,
+/// as wide as they are (at least [`PROMPT_MIN`]) and scrolled past the
+/// row's width.
 fn draw_pill(prompt: &Prompt, row: u16, ends: &str, screen: &mut Screen) {
-    let level = render::Level::Info;
-    let (x, w) = render::pill_area(screen, row, PROMPT_WIDTH);
-    if w < 4 {
+    if screen.cols < 6 {
         return;
     }
-    let style = level.body();
+    let level = render::Level::Info;
     let label = format!(" {}", prompt.label);
-    let drawn = status::draw(&label, style, (w - 2) as u16);
-    let start = visible_width(&label).min(w - 2);
-    let (cells, col) = prompt.row_over(line_cells(&drawn.line, w - 2), start, &style);
-    let at = usize::from(row) * usize::from(screen.cols) + x + 1;
+    let text: String = prompt.text.iter().collect();
+    // The label, the text, the cursor's cell, a space and the two ends.
+    let want = (visible_width(&label) + visible_width(&text) + 4).max(PROMPT_MIN);
+    let (x, w) = render::status_pill(screen, row, want, level, ends);
+    let style = level.body();
+    let drawn = status::draw(&label, style, w as u16);
+    let start = visible_width(&label).min(w);
+    let (cells, col) = prompt.row_over(line_cells(&drawn.line, w), start, &style);
+    let at = usize::from(row) * usize::from(screen.cols) + x;
     screen.cells[at..at + cells.len()].clone_from_slice(&cells);
-    render::pill_ends(screen, row, (x, w), level, ends);
     screen.cursor = Some(CursorState {
         row,
-        col: u16::try_from(x + 1 + col).unwrap_or(u16::MAX),
+        col: u16::try_from(x + col).unwrap_or(u16::MAX),
         visible: true,
         ..CursorState::default()
     });
@@ -2414,6 +2422,30 @@ mod tests {
 
     fn prompt(initial: &str) -> Prompt {
         Prompt::new(":".to_string(), initial, "%1".to_string())
+    }
+
+    #[test]
+    fn the_prompt_pill_takes_the_status_row_alone_and_fits_its_text() {
+        let mut screen = Screen::new(60, 1);
+        for (cell, c) in screen.cells.iter_mut().zip("[s] 1 pimo  2 stoa".chars()) {
+            cell.c = c;
+        }
+        draw_pill(&prompt("kwnjck"), 0, "()", &mut screen);
+        let row: String = screen.cells.iter().map(|c| c.c).collect();
+        // 24 wide (the minimum), centred: the label, the text, then blank
+        // pill to its end; the status line's parts are gone.
+        assert_eq!(
+            row,
+            format!(
+                "{}( :kwnjck{}){}",
+                " ".repeat(18),
+                " ".repeat(14),
+                " ".repeat(18)
+            )
+        );
+        let blue = Color::Named(NamedColor::Blue);
+        assert!(screen.cells[19..41].iter().all(|c| c.bg == blue));
+        assert_eq!(screen.cursor.map(|c| c.col), Some(27));
     }
 
     /// tmux 3.7b's `status_prompt_key` for an incremental prompt: what

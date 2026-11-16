@@ -1070,14 +1070,14 @@ pub(super) fn set_message(
     }
 }
 
-/// The ends a message or prompt pill takes (`pane-frame-tab-ends`) while
+/// The ends a message or prompt pill takes (`message-pill-ends`) while
 /// `message-pill` is on for `chain`; `None` draws tmux's full-width bar.
 pub(crate) fn pill_ends<'a>(model: &'a Model, chain: &[Owner]) -> Option<&'a str> {
     (model.options.lookup("message-pill", chain) != Some("off")).then(|| {
         model
             .options
-            .lookup("pane-frame-tab-ends", chain)
-            .unwrap_or("()")
+            .lookup("message-pill-ends", chain)
+            .unwrap_or("")
     })
 }
 
