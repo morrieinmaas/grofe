@@ -65,22 +65,55 @@ impl Cache {
 /// every process on each redraw.
 const PORTS_TTL: Duration = Duration::from_secs(2);
 
-/// A pane's listening ports, scanned when asked.
 #[derive(Default)]
-pub(crate) struct PortsCache(Mutex<Option<(Instant, Vec<u16>)>>);
+struct PortsState {
+    at: Option<Instant>,
+    ports: Vec<u16>,
+    refreshing: bool,
+}
+
+/// A pane's listening ports. [`PortsCache::get`] never scans on the
+/// caller's thread: it returns what the last scan found and, when that is
+/// older than [`PORTS_TTL`], starts a scan on a thread of its own.
+#[derive(Default)]
+pub(crate) struct PortsCache(std::sync::Arc<Mutex<PortsState>>);
 
 impl PortsCache {
-    /// The ports below `root`, at most [`PORTS_TTL`] old.
+    /// The ports below `root` as of the last scan; empty before the first.
     pub(crate) fn get(&self, root: i32) -> Vec<u16> {
-        let mut cache = lock(&self.0);
-        match cache.as_ref() {
-            Some((at, ports)) if at.elapsed() < PORTS_TTL => ports.clone(),
-            _ => {
-                let ports = listening_ports(&[root]).pop().unwrap_or_default();
-                *cache = Some((Instant::now(), ports.clone()));
-                ports
+        let mut state = lock(&self.0);
+        let stale = state.at.is_none_or(|at| at.elapsed() >= PORTS_TTL);
+        if stale && !state.refreshing {
+            state.refreshing = true;
+            let cache = std::sync::Arc::clone(&self.0);
+            // ponytail: one thread per stale pane per 2 s while a format
+            // asks; a shared scan for all panes would need a server-wide
+            // cache.
+            let started = std::thread::Builder::new()
+                .name("grofe-ports".into())
+                .spawn(move || {
+                    let ports = listening_ports(&[root]).pop().unwrap_or_default();
+                    let mut state = lock(&cache);
+                    *state = PortsState {
+                        at: Some(Instant::now()),
+                        ports,
+                        refreshing: false,
+                    };
+                });
+            if started.is_err() {
+                state.refreshing = false;
             }
         }
+        state.ports.clone()
+    }
+
+    /// Records a scan made elsewhere (`list-ports` scans every pane at once).
+    pub(crate) fn set(&self, ports: Vec<u16>) {
+        *lock(&self.0) = PortsState {
+            at: Some(Instant::now()),
+            ports,
+            refreshing: false,
+        };
     }
 }
 
@@ -785,6 +818,22 @@ mod tests {
         let ports = listening_ports(&[std::process::id() as i32]);
         assert!(ports[0].contains(&port), "{ports:?} lacks {port}");
         assert!(ports[0].windows(2).all(|w| w[0] < w[1]), "sorted, unique");
+    }
+
+    /// A format asking for ports never waits for a scan: the first answer is
+    /// empty, a later one has the port.
+    #[test]
+    fn the_ports_cache_scans_off_the_callers_thread() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cache = PortsCache::default();
+        let me = std::process::id() as i32;
+        assert_eq!(cache.get(me), Vec::<u16>::new());
+        let found = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            cache.get(me).contains(&port)
+        });
+        assert!(found, "the background scan fills the cache");
     }
 
     /// A listener of a child process counts for its parent's tree.

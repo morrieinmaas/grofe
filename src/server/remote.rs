@@ -169,10 +169,19 @@ pub fn list_ports(state: &State, ctx: &ClientCtx, c: ListPorts) -> Result<String
         filter: None,
         sort: Default::default(),
     };
+    let pids: Vec<(PaneId, i32)> = options::listed_panes(state, ctx, &panes)?
+        .into_iter()
+        .filter_map(|(_, id)| Some((id, state.model.panes.get(&id)?.handle.pid()? as i32)))
+        .collect();
+    // ponytail: an explicit verb, so it scans once here on the actor, for
+    // every listed pane together; the format and the poller never do.
+    let roots: Vec<i32> = pids.iter().map(|(_, pid)| *pid).collect();
     let mut out = String::new();
-    for (_, id) in options::listed_panes(state, ctx, &panes)? {
-        let ports = state.model.panes.get(&id).map(|p| p.handle.ports());
-        if let Some(ports) = ports.filter(|p| !p.is_empty()) {
+    for ((id, _), ports) in pids.iter().zip(procinfo::listening_ports(&roots)) {
+        if let Some(p) = state.model.panes.get(id) {
+            p.handle.set_ports(ports.clone());
+        }
+        if !ports.is_empty() {
             out.push_str(&format!("{id} {}\n", join(&ports)));
         }
     }

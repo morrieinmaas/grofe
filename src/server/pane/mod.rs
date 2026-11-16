@@ -1195,6 +1195,11 @@ impl PaneHandle {
             .unwrap_or_default()
     }
 
+    /// Records a scan of the pane's ports made elsewhere.
+    pub fn set_ports(&self, ports: Vec<u16>) {
+        self.ports.set(ports);
+    }
+
     /// Whether the pty echoes what is typed (its ECHO flag), read now;
     /// `None` once the pty is gone. A program reading a password clears it.
     pub fn echo(&self) -> Option<bool> {
