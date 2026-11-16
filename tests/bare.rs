@@ -90,7 +90,14 @@ fn bare_grofe_on_an_empty_server_makes_a_session_without_the_hook() {
         WAIT,
     )
     .expect("attached to a new session");
-    ok(&srv, &["run-shell", "true"]);
+    // Notify hooks run in order on the global queue: once a later hook has
+    // run, client-attached would have run too.
+    let sentinel = srv.home.join("sentinel");
+    let later = format!("run-shell 'touch {}'", sentinel.display());
+    ok(&srv, &["set-hook", "-g", "session-renamed", &later]);
+    let name = ok(&srv, &["display-message", "-p", "#{session_name}"]);
+    ok(&srv, &["rename-session", "-t", name.trim(), "renamed"]);
+    try_wait_until(|| sentinel.exists(), WAIT).expect("the later hook ran");
     assert!(!mark.exists(), "client-attached fired for a new session");
 }
 

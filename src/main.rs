@@ -669,6 +669,9 @@ fn attaches(argv: &[String]) -> bool {
     )
 }
 
+/// What bare `grofe`'s request prints when it made no session.
+const REATTACH: &str = "grofe:reattach";
+
 /// `new-session` without `-d`, as tmux 3.7b: without a terminal it fails
 /// before creating anything; otherwise the session is created detached,
 /// its id read back in the same request, and the client attaches to it
@@ -679,9 +682,6 @@ fn attaches(argv: &[String]) -> bool {
 /// (the one with the latest activity) rather than the pane's; the new
 /// session's cwd is then the CLI's own, as in tmux.
 ///
-/// What bare `grofe`'s request prints when it made no session.
-const REATTACH: &str = "grofe:reattach";
-
 /// `bare` (`grofe` with no arguments) makes no session when the server has
 /// some, including ones a server it starts restored: it attaches to the one
 /// used last, as an `attach-session` that fires `client-attached`.
