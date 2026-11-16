@@ -31,9 +31,20 @@ pub fn run(globals_socket: &Path, args: &[String]) -> ExitCode {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_micros() as u64);
-    let pane = std::env::var("GROFE_PANE").ok();
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+    let pane = std::env::var("GROFE_PANE")
+        .ok()
+        .filter(|_| owns_pane(entrypoint.as_deref()));
     hook(globals_socket, args, pane.as_deref(), std::io::stdin(), ts);
     ExitCode::SUCCESS
+}
+
+/// Whether a Claude Code that started with `entrypoint` is its pane's
+/// agent. A `claude -p` helper run from inside the pane (`sdk-cli`, as an
+/// SDK host starts it) inherits `GROFE_PANE`; its reports would take over
+/// the pane's record and resume with the helper's session.
+fn owns_pane(entrypoint: Option<&str>) -> bool {
+    !entrypoint.is_some_and(|e| e.starts_with("sdk"))
 }
 
 fn hook<R: Read + Send + 'static>(
@@ -173,6 +184,16 @@ fn message(v: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_sdk_launched_claude_does_not_own_its_pane() {
+        assert!(owns_pane(None));
+        assert!(owns_pane(Some("cli")));
+        assert!(owns_pane(Some("claude-vscode")));
+        assert!(!owns_pane(Some("sdk-cli")));
+        assert!(!owns_pane(Some("sdk-ts")));
+    }
+
     use super::*;
     use std::os::unix::net::UnixListener;
     use std::time::Instant;
