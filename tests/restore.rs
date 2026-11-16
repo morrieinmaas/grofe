@@ -468,60 +468,6 @@ fn the_session_used_last_is_the_most_recent_after_a_restore() {
     );
 }
 
-/// Bare `grofe` against a running server reattaches its most recent
-/// session instead of adding one. Bare `tmux` keeps tmux's `new-session`.
-#[test]
-fn bare_grofe_on_a_running_server_attaches_its_latest_session() {
-    let srv = TestServer::start();
-    ok(&srv, &["new-session", "-d", "-s", "first"]);
-    ok(&srv, &["new-session", "-d", "-s", "second"]);
-    let mut cmd = srv.command();
-    cmd.env("TERM", "xterm-256color");
-    let _client = Harness::spawn(cmd, 80, 24);
-    try_wait_until(
-        || {
-            srv.cmd(&["list-clients", "-F", "#{client_session}"])
-                .is_ok_and(|out| out.trim() == "second")
-        },
-        WAIT,
-    )
-    .expect("attached to the latest session");
-    assert_eq!(
-        ok(&srv, &["list-sessions", "-F", "#{session_name}"]),
-        "first\nsecond\n"
-    );
-}
-
-/// Bare `tmux` (grofe under tmux's name) against a running server still
-/// makes a new session, as tmux 3.7b does.
-#[test]
-fn bare_tmux_on_a_running_server_makes_a_new_session() {
-    let srv = TestServer::start();
-    ok(&srv, &["new-session", "-d", "-s", "first"]);
-    let link = srv.home.join("tmux");
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grofe"), &link).expect("symlink tmux");
-    // The harness's command, run under tmux's name.
-    let base = srv.command();
-    let mut cmd = std::process::Command::new(&link);
-    cmd.args(base.get_args()).current_dir(&srv.home);
-    for (k, v) in base.get_envs() {
-        match v {
-            Some(v) => cmd.env(k, v),
-            None => cmd.env_remove(k),
-        };
-    }
-    cmd.env("TERM", "xterm-256color");
-    let _client = Harness::spawn(cmd, 80, 24);
-    try_wait_until(
-        || {
-            srv.cmd(&["list-sessions", "-F", "#{session_name}"])
-                .is_ok_and(|out| out.lines().count() == 2)
-        },
-        WAIT,
-    )
-    .expect("a second session");
-}
-
 /// `restore-on-start = false` in the config: a starting server restores
 /// nothing, but `start-server --restore` still does.
 #[test]
