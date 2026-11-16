@@ -69,11 +69,19 @@ pub const NAMES: &[&str] = &[
     "alert-silence",
     "option-changed",
     "agent-changed",
+    "open-url",
+    "ports-changed",
+    "pane-echo",
 ];
 
 /// `pane-output` is sent only to subscribers that name it: a bare
 /// `subscribe` or a pattern does not match it (volume).
 const PANE_OUTPUT: &str = "pane-output";
+
+/// Events added after v1.0 (protocol-v1 §8) reach only a subscription that
+/// names them, as `pane-output` does. The last two are also what the poller
+/// in `server::remote` runs for.
+const NAMED_ONLY: &[&str] = &[PANE_OUTPUT, "open-url", "ports-changed", "pane-echo"];
 
 /// What a `subscribe -t` is limited to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,8 +152,8 @@ struct Subscriber {
 
 impl Subscriber {
     fn wants(&self, name: &str) -> bool {
-        if name == PANE_OUTPUT {
-            return self.filters.iter().any(|f| f == PANE_OUTPUT);
+        if NAMED_ONLY.contains(&name) {
+            return self.filters.iter().any(|f| f == name);
         }
         self.filters.is_empty()
             || self
@@ -240,6 +248,14 @@ impl Events {
         }
         self.update_tap();
         Ok(())
+    }
+
+    /// Whether some subscription names event `name` (a [`NAMED_ONLY`] one):
+    /// what makes `open-url` deliverable and the poller worth running.
+    pub fn named(&self, name: &str) -> bool {
+        self.subscribers
+            .iter()
+            .any(|s| !s.tx.is_closed() && s.filters.iter().any(|f| f == name))
     }
 
     /// Records an event, sent on the next [`Events::flush`].
@@ -595,6 +611,29 @@ mod tests {
         assert!(Scope::Window(WindowId(2)).passes(&changed("@2"), none, &model));
         assert!(Scope::Pane(PaneId(3)).passes(&changed("%3"), none, &model));
         assert!(!Scope::Pane(PaneId(3)).passes(&changed("%4"), none, &model));
+    }
+
+    /// Events added after v1.0 reach only a subscription that names them,
+    /// not a bare one or a pattern (protocol-v1 §8).
+    #[test]
+    fn remote_events_need_their_own_name() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut events = Events::default();
+        events.subscribe(vec![], None, tx).unwrap();
+        for name in ["open-url", "ports-changed", "pane-echo"] {
+            assert!(!events.named(name), "{name}");
+        }
+        let (tx, _rx2) = mpsc::channel(4);
+        events
+            .subscribe(vec!["*".to_string()], None, tx.clone())
+            .unwrap();
+        let sub = &events.subscribers[1];
+        assert!(!sub.wants("open-url") && !sub.wants("ports-changed") && !sub.wants("pane-echo"));
+        assert!(sub.wants("pane-exited"));
+        events
+            .subscribe(vec!["pane-echo".to_string()], None, tx)
+            .unwrap();
+        assert!(events.named("pane-echo") && !events.named("ports-changed"));
     }
 
     #[test]

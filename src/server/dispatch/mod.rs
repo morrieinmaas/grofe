@@ -248,6 +248,7 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::ListWindows(_)
                 | Command::ListPanes(_)
                 | Command::ListClients(_)
+                | Command::ListPorts(_)
                 | Command::ListKeys(_)
                 | Command::ShowOptions(_)
                 | Command::PromptHistory(cmd::PromptHistory { clear: false, .. })
@@ -425,6 +426,8 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::ShowScratchpad(c) => scratch::show(state, ctx, c),
         Command::ListScratchpads => scratch::list(state, ctx),
         Command::ChooseScratchpad => scratch::choose(state, ctx),
+        Command::OpenUrl(c) => server::remote::open_url(state, ctx, c),
+        Command::ListPorts(c) => server::remote::list_ports(state, ctx, c),
         Command::DisplayMenu(c) => menu::display_menu(state, ctx, c),
         Command::DisplayPanes(c) => menu::display_panes(state, ctx, c),
         Command::ConfirmBefore(c) => menu::confirm_before(state, ctx, c),
@@ -515,6 +518,7 @@ pub(crate) fn pane_env(
     let mut all = server::hooks::pane_env(state, session);
     all.extend(env);
     all.extend(compat::pane_env(state, session, pane));
+    server::remote::pane_env(state, session, &mut all);
     compat::with_tmux_link(&mut all);
     all
 }

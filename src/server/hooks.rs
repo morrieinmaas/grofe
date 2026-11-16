@@ -1265,6 +1265,7 @@ pub fn run_pending(state: &mut State) {
     prune(state);
     crate::server::alerts::drain(state);
     for (session, name) in std::mem::take(&mut state.model.closed_sessions) {
+        crate::server::remote::session_closed(state, session);
         let closed = Event::SessionClosed {
             session,
             name: name.clone(),
@@ -2064,6 +2065,7 @@ pub fn session_environment(
     }
     state.hooks.session_removed.insert(session, removed);
     state.hooks.session_hidden.remove(&session);
+    crate::server::remote::stable_agent(state, session, client_env);
     env
 }
 
@@ -2079,6 +2081,7 @@ pub fn blank_session_environment(state: &mut State, session: SessionId) -> Vec<(
 /// variables from the client's `client_env` again, as tmux 3.7b (recorded):
 /// each it has is set, each it lacks marked removed.
 pub fn update_environment(state: &mut State, session: SessionId, client_env: &[(String, String)]) {
+    crate::server::remote::stable_agent(state, session, client_env);
     for name in update_names(state, session) {
         let value = client_env
             .iter()

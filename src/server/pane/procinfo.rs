@@ -60,6 +60,30 @@ impl Cache {
     }
 }
 
+/// How long [`PortsCache`] reuses a scan: the poll interval of
+/// `ports-changed`, so a status line showing `#{pane_ports}` does not scan
+/// every process on each redraw.
+const PORTS_TTL: Duration = Duration::from_secs(2);
+
+/// A pane's listening ports, scanned when asked.
+#[derive(Default)]
+pub(crate) struct PortsCache(Mutex<Option<(Instant, Vec<u16>)>>);
+
+impl PortsCache {
+    /// The ports below `root`, at most [`PORTS_TTL`] old.
+    pub(crate) fn get(&self, root: i32) -> Vec<u16> {
+        let mut cache = lock(&self.0);
+        match cache.as_ref() {
+            Some((at, ports)) if at.elapsed() < PORTS_TTL => ports.clone(),
+            _ => {
+                let ports = listening_ports(&[root]).pop().unwrap_or_default();
+                *cache = Some((Instant::now(), ports.clone()));
+                ports
+            }
+        }
+    }
+}
+
 /// The foreground process group of the pty behind `master`, read now
 /// (`tcgetpgrp`): what a key binding's conditional tests, as
 /// vim-tmux-navigator's `ps -t <tty>` does on every keypress. The reads
@@ -140,6 +164,57 @@ pub fn env_var(pid: i32, name: &str) -> Option<String> {
         let (k, v) = kv.split_once('=')?;
         (k == name).then(|| v.to_string())
     })
+}
+
+/// The TCP ports the processes below each of `roots` (the roots included)
+/// listen on, one sorted list per root, read now. Reads every process, so
+/// it belongs off the actor (`spawn_blocking`).
+pub fn listening_ports(roots: &[i32]) -> Vec<Vec<u16>> {
+    let mut children: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
+    for (pid, ppid) in os::all_parents() {
+        children.entry(ppid).or_default().push(pid);
+    }
+    let sockets = os::Sockets::new();
+    roots
+        .iter()
+        .map(|&root| {
+            let mut seen = std::collections::HashSet::from([root]);
+            let mut todo = vec![root];
+            let mut ports = Vec::new();
+            while let Some(pid) = todo.pop() {
+                ports.extend(sockets.listening(pid));
+                for &child in children.get(&pid).into_iter().flatten() {
+                    if seen.insert(child) {
+                        todo.push(child);
+                    }
+                }
+            }
+            ports.sort_unstable();
+            ports.dedup();
+            ports
+        })
+        .collect()
+}
+
+/// The inode and local port of each listening socket (state `0A`) in a
+/// `/proc/net/tcp` or `/proc/net/tcp6` table; header and malformed lines
+/// are skipped.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_net_tcp(table: &str) -> Vec<(u64, u16)> {
+    table
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split_whitespace();
+            let local = f.nth(1)?;
+            let state = f.nth(1)?;
+            let inode = f.nth(5)?;
+            if state != "0A" {
+                return None;
+            }
+            let port = u16::from_str_radix(local.rsplit_once(':')?.1, 16).ok()?;
+            Some((inode.parse().ok()?, port))
+        })
+        .collect()
 }
 
 /// How many times [`sample`] reads again after the name changed under it.
@@ -228,6 +303,49 @@ mod os {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let rest = stat.get(stat.rfind(')')? + 2..)?;
         rest.split(' ').nth(2)?.parse().ok()
+    }
+
+    /// Every process's pid and parent.
+    pub fn all_parents() -> Vec<(i32, i32)> {
+        let Ok(dir) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter_map(|pid| Some((pid, parent(pid)?)))
+            .collect()
+    }
+
+    /// The listening sockets of this network namespace, by inode.
+    pub struct Sockets(std::collections::HashMap<u64, u16>);
+
+    impl Sockets {
+        pub fn new() -> Sockets {
+            let mut inodes = std::collections::HashMap::new();
+            for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+                if let Ok(text) = std::fs::read_to_string(table) {
+                    inodes.extend(super::parse_proc_net_tcp(&text));
+                }
+            }
+            Sockets(inodes)
+        }
+
+        /// The ports of the listening sockets `pid` holds open.
+        pub fn listening(&self, pid: i32) -> Vec<u16> {
+            let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+                return Vec::new();
+            };
+            fds.filter_map(|fd| {
+                let link = std::fs::read_link(fd.ok()?.path()).ok()?;
+                let inode = link
+                    .to_str()?
+                    .strip_prefix("socket:[")?
+                    .strip_suffix(']')?
+                    .parse()
+                    .ok()?;
+                self.0.get(&inode).copied()
+            })
+            .collect()
+        }
     }
 
     fn split_nul(raw: &[u8]) -> Option<Vec<String>> {
@@ -405,6 +523,99 @@ mod os {
         Some(buf)
     }
 
+    /// Every process's pid and parent.
+    pub fn all_parents() -> Vec<(i32, i32)> {
+        let mut pids = vec![0 as libc::c_int; 8192];
+        let size = (pids.len() * mem::size_of::<libc::c_int>()) as libc::c_int;
+        // SAFETY: `pids` is valid for `size` bytes.
+        let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast::<c_void>(), size) };
+        pids.truncate(usize::try_from(n).unwrap_or(0).min(pids.len()));
+        pids.into_iter()
+            .filter(|&p| p > 0)
+            .filter_map(|pid| Some((pid, parent(pid)?)))
+            .collect()
+    }
+
+    /// `PROC_PIDFDSOCKETINFO` (sys/proc_info.h); the libc crate has no
+    /// `socket_fdinfo`, so the reply is read at its documented offsets.
+    const PROC_PIDFDSOCKETINFO: libc::c_int = 3;
+    /// `sizeof(struct socket_fdinfo)`.
+    const SOCKET_FDINFO_SIZE: usize = 792;
+    /// `proc_fileinfo` (24 bytes) then `socket_info`: its `soi_kind` sits
+    /// 232 bytes in, and its protocol union 240.
+    const SOI_KIND: usize = 24 + 232;
+    const SOCKINFO_TCP: i32 = 2;
+    /// `tcp_sockinfo`: `tcpsi_ini.insi_lport` is its second int, and
+    /// `tcpsi_state` follows the 80-byte `in_sockinfo`.
+    const TCP_LPORT: usize = 24 + 240 + 4;
+    const TCP_STATE: usize = 24 + 240 + 80;
+    const TSI_S_LISTEN: i32 = 1;
+
+    pub struct Sockets;
+
+    impl Sockets {
+        pub fn new() -> Sockets {
+            Sockets
+        }
+
+        /// The ports of the listening TCP sockets `pid` holds open.
+        pub fn listening(&self, pid: i32) -> Vec<u16> {
+            // SAFETY: a null buffer asks for the size only.
+            let need = unsafe {
+                libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0)
+            };
+            if need <= 0 {
+                return Vec::new();
+            }
+            let mut fds: Vec<libc::proc_fdinfo> =
+                Vec::with_capacity(need as usize / mem::size_of::<libc::proc_fdinfo>() + 8);
+            let cap = (fds.capacity() * mem::size_of::<libc::proc_fdinfo>()) as libc::c_int;
+            // SAFETY: the buffer is valid for `cap` bytes; only the entries
+            // the call reports are exposed.
+            let got = unsafe {
+                libc::proc_pidinfo(
+                    pid,
+                    libc::PROC_PIDLISTFDS,
+                    0,
+                    fds.as_mut_ptr().cast::<c_void>(),
+                    cap,
+                )
+            };
+            if got <= 0 {
+                return Vec::new();
+            }
+            // SAFETY: `got` bytes were written, whole entries of plain ints.
+            unsafe { fds.set_len(got as usize / mem::size_of::<libc::proc_fdinfo>()) };
+            fds.iter()
+                .filter(|fd| fd.proc_fdtype == libc::PROX_FDTYPE_SOCKET as u32)
+                .filter_map(|fd| listening_port(pid, fd.proc_fd))
+                .collect()
+        }
+    }
+
+    fn listening_port(pid: i32, fd: i32) -> Option<u16> {
+        let mut buf = [0u8; SOCKET_FDINFO_SIZE];
+        // SAFETY: the buffer is valid for its full length.
+        let n = unsafe {
+            libc::proc_pidfdinfo(
+                pid,
+                fd,
+                PROC_PIDFDSOCKETINFO,
+                buf.as_mut_ptr().cast::<c_void>(),
+                buf.len() as libc::c_int,
+            )
+        };
+        if n < (TCP_STATE + 4) as libc::c_int {
+            return None;
+        }
+        let int = |at: usize| i32::from_ne_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]);
+        if int(SOI_KIND) != SOCKINFO_TCP || int(TCP_STATE) != TSI_S_LISTEN {
+            return None;
+        }
+        // The port is in network byte order in the int's low half.
+        Some(u16::from_be(int(TCP_LPORT) as u16))
+    }
+
     /// The argv and the environment in a `KERN_PROCARGS2` buffer.
     pub(super) fn parse_procargs2(buf: &[u8]) -> Option<(Vec<String>, Vec<String>)> {
         let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
@@ -546,6 +757,73 @@ mod tests {
         assert_eq!(path.as_deref(), Some("/x/bin:/usr/bin:/bin"));
         assert_eq!(value.as_deref(), Some("a=b"));
         assert_eq!(unset, None);
+    }
+
+    const NET_TCP: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1 0000000000000000 100 0 0 10 0
+   1: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 777 1 0000000000000000 100 0 0 10 0
+   2: 0100007F:D2A4 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1000        0 999 1 0000000000000000 20 4 30 10 -1
+";
+
+    const NET_TCP6: &str = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:1435 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0000000000000000 100 0 0 10 0
+";
+
+    #[test]
+    fn parses_listening_sockets_from_proc_net_tcp() {
+        assert_eq!(parse_proc_net_tcp(NET_TCP), vec![(12345, 8080), (777, 22)]);
+        assert_eq!(parse_proc_net_tcp(NET_TCP6), vec![(4242, 5173)]);
+        assert_eq!(parse_proc_net_tcp(""), vec![]);
+        assert_eq!(parse_proc_net_tcp("garbage\n0: x y 0A z"), vec![]);
+    }
+
+    /// A listener of this very process, found through its pid.
+    #[test]
+    fn finds_the_port_this_process_listens_on() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let ports = listening_ports(&[std::process::id() as i32]);
+        assert!(ports[0].contains(&port), "{ports:?} lacks {port}");
+        assert!(ports[0].windows(2).all(|w| w[0] < w[1]), "sorted, unique");
+    }
+
+    /// A listener of a child process counts for its parent's tree.
+    #[test]
+    fn counts_the_listeners_of_descendants() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("port");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "--quiet"])
+            .arg("server::pane::procinfo::tests::child_that_listens")
+            .env("GROFE_T_PORTFILE", &file)
+            .spawn()
+            .unwrap();
+        let port = (0..400)
+            .find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                std::fs::read_to_string(&file)
+                    .ok()?
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+            })
+            .expect("the child listens");
+        let mine = listening_ports(&[std::process::id() as i32]);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(mine[0].contains(&port), "{mine:?} lacks the child's {port}");
+    }
+
+    /// Not a test of its own: the process `counts_the_listeners_of_descendants`
+    /// starts.
+    #[test]
+    #[ignore = "the child process of counts_the_listeners_of_descendants"]
+    fn child_that_listens() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let file = std::env::var("GROFE_T_PORTFILE").unwrap();
+        std::fs::write(file, port.to_string()).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(10));
     }
 
     #[test]

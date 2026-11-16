@@ -98,6 +98,8 @@ pub const OPTION_NAMES: &[(&str, &str)] = &[
     ("notify-muted-glyph", "notify-muted-glyph"),
     ("agent-blocked-border-style", "agent-blocked-border-style"),
     ("prompt-position", "prompt-position"),
+    ("stable-ssh-agent", "stable-ssh-agent"),
+    ("forward-browser", "forward-browser"),
     ("status.lines", "status"),
     ("status.position", "status-position"),
     ("status.style", "status-style"),
@@ -292,6 +294,8 @@ pub(crate) fn toml_type(toml_key: &str) -> Ty {
         | "variation-selector-always-wide"
         | "pane-frames"
         | "pane-frame-title"
+        | "stable-ssh-agent"
+        | "forward-browser"
         | "message.pill" => Ty::Bool,
         "base-index"
         | "pane-base-index"

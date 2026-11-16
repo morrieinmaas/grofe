@@ -513,6 +513,8 @@ pub struct PaneHandle {
     /// One cell's size in pixels, for the pty's pixel size.
     cell_px: Mutex<Option<(u16, u16)>>,
     sample: procinfo::Cache,
+    /// The ports the pane's processes listen on, read at most every 2 s.
+    ports: procinfo::PortsCache,
     /// What the pane itself reported with OSC 7 (T3.3), as tmux keeps it.
     reported_path: Mutex<Option<String>>,
     /// The pty slave's path (`#{pane_tty}`), `None` if it has no name.
@@ -635,6 +637,7 @@ impl PaneHandle {
             AtomicU32::new(io::pack_colour(spec.colours.1)),
         ]);
         let sample = procinfo::Cache::default();
+        let ports = procinfo::PortsCache::default();
         let (input, input_rx) = InputQueue::new();
         let pipe = match over {
             Some(old) => {
@@ -699,6 +702,7 @@ impl PaneHandle {
             pipe,
             dirty,
             sample,
+            ports,
             graphics_ok,
             images_on,
             default_colours,
@@ -1181,6 +1185,22 @@ impl PaneHandle {
     /// This spawn's generation, as carried by every [`PaneEvent`] it sends.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The TCP ports the pane's processes (the whole tree under its child)
+    /// listen on, sorted; at most 2 s old (`#{pane_ports}`, `list-ports`).
+    pub fn ports(&self) -> Vec<u16> {
+        self.pid()
+            .map(|pid| self.ports.get(pid as i32))
+            .unwrap_or_default()
+    }
+
+    /// Whether the pty echoes what is typed (its ECHO flag), read now;
+    /// `None` once the pty is gone. A program reading a password clears it.
+    pub fn echo(&self) -> Option<bool> {
+        use nix::sys::termios::{LocalFlags, tcgetattr};
+        let attrs = tcgetattr(self.master.get_ref()).ok()?;
+        Some(attrs.local_flags.contains(LocalFlags::ECHO))
     }
 
     /// The foreground process's name, sampled now (cached for a few ms).

@@ -47,6 +47,7 @@ pub(crate) mod picker;
 pub mod plugins;
 pub mod popup;
 pub mod prompt;
+pub mod remote;
 pub mod render;
 pub mod restore;
 pub mod resume;
@@ -225,6 +226,8 @@ pub struct State {
     /// Key tables, input hooks, overlays, window-size owners and the render
     /// schedule: client state that is not per client.
     pub registry: clients::Registry,
+    /// What the `ports-changed` and `pane-echo` poller last reported.
+    pub remote: remote::Remote,
     /// Open prompts and the prompt history (T3.4).
     pub prompts: prompt::Prompts,
     /// Scrollback views (T3.2).
@@ -667,6 +670,7 @@ async fn serve(
         clients: BTreeMap::new(),
         registry: clients::Registry::default(),
         prompts: prompt::Prompts::default(),
+        remote: remote::Remote::default(),
         mouse: mouse::MouseState::default(),
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
@@ -992,6 +996,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             };
             state.deferred_reply = None;
             finish(state, req.id, result, reply);
+            remote::ensure_poller(state);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
         ServerMsg::Closed { observer } => {
@@ -1405,6 +1410,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         clients: BTreeMap::new(),
         registry: clients::Registry::default(),
         prompts: prompt::Prompts::default(),
+        remote: remote::Remote::default(),
         mouse: mouse::MouseState::default(),
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
