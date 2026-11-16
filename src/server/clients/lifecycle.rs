@@ -831,6 +831,10 @@ pub(super) fn push_message(state: &mut State, line: String) {
 /// [`log_fired`] logs it as the first of those runs. `who` is the
 /// requesting client. Empty when the request does not parse, as tmux
 /// fires nothing then, or when its commands cannot be told apart.
+/// The log lines of the request now running: how many native commands each
+/// covers, and its line. Logged as the commands fire ([`log_fired`]).
+pub(crate) type CommandLog = VecDeque<(usize, Option<String>)>;
+
 // ponytail: only CLI requests are logged, and not the rest held behind a
 // wait. tmux also logs the commands of bindings (`<client> key <key>:
 // <cmd>`), hooks and sourced files, and names a CLI run from a terminal by
@@ -841,7 +845,7 @@ pub(crate) fn plan_command_log(
     ctx: &ClientCtx,
     argv: &[String],
     parsed: usize,
-) -> VecDeque<(usize, Option<String>)> {
+) -> CommandLog {
     let mut plan = VecDeque::new();
     if argv.first().is_some_and(|verb| verb.starts_with("__")) {
         return plan;
@@ -884,7 +888,7 @@ pub(super) fn print_for_log(dialect: crate::protocol::Dialect, cmd: &[String]) -
 /// Logs `cmd`, a command a key's binding runs in a branch of its own
 /// (`if-shell`), as run by that key.
 pub(crate) fn log_key_command(state: &mut State, ctx: &ClientCtx, cmd: &[String]) {
-    let Some(key) = state.event_key.clone() else {
+    let Some(key) = ctx.request.event_key.clone() else {
         return;
     };
     let Some(who) = ctx
@@ -901,19 +905,19 @@ pub(crate) fn log_key_command(state: &mut State, ctx: &ClientCtx, cmd: &[String]
 /// Logs the planned line of the request command whose first native
 /// command is about to run ([`plan_command_log`]), and any before it that
 /// ran as no command at all.
-pub(crate) fn log_fired(state: &mut State) {
-    while let Some((left, line)) = state.command_log.front_mut() {
+pub(crate) fn log_fired(state: &mut State, log: &mut CommandLog) {
+    while let Some((left, line)) = log.front_mut() {
         let (left, line) = (std::mem::take(left), line.take());
         if let Some(line) = line {
             push_message(state, line);
         }
         if left > 1 {
-            if let Some(front) = state.command_log.front_mut() {
+            if let Some(front) = log.front_mut() {
                 front.0 = left - 1;
             }
             return;
         }
-        state.command_log.pop_front();
+        log.pop_front();
         if left == 1 {
             return;
         }

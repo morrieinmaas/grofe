@@ -257,6 +257,7 @@ fn every_fe3_corpus_form_translates() {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     };
     let forms: &[&[&str]] = &[
         &["set-environment", "-g", "OPENSESSIONS_DIR", "/x"],

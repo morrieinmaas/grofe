@@ -37,6 +37,29 @@ check:
     cargo test
     bats tests/cli.bats
 
+# Regenerate the options reference from the option table, then build the book
+docs:
+    GROFE_BLESS=1 cargo test --test docs_reference
+    mdbook build docs/book -d "{{ justfile_directory() }}/target/book"
+
+# Serve the book with live reload on http://localhost:3000
+docs-serve:
+    mdbook serve docs/book -d "{{ justfile_directory() }}/target/book"
+
+# Render the light and dark screenshots with vhs into target/site/img
+screenshots:
+    cargo build --release
+    scripts/screenshots.sh target/site/img
+
+# Assemble the project site in _site/ exactly as the Pages workflow does
+site:
+    cargo build --release
+    scripts/site.sh _site
+
+# Build the site, then serve _site/ on http://localhost:8000
+site-serve: site
+    uv run --no-project python -m http.server --directory _site 8000
+
 # The whole CI workflow locally (Linux in a container, then macOS natively)
 ci *legs:
     scripts/ci-local.sh {{ legs }}
@@ -79,3 +102,7 @@ rpm target="x86_64-unknown-linux-musl":
 # Render the Homebrew formula and AUR PKGBUILD for an existing release into target/pkg
 pkg-render version:
     packaging/render.sh {{ version }} target/pkg
+
+# The ssh remote-session scenarios against sshd containers (podman or docker)
+ssh-e2e *filter:
+    scripts/ssh-e2e.sh {{ filter }}

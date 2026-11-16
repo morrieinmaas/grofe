@@ -1159,6 +1159,7 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
             .collect(),
         client: None,
         dialect: dialect(),
+        request: Default::default(),
     };
     let opts = client::AttachOptions {
         target: client::raw_target(&argv[1..]),
@@ -1196,6 +1197,7 @@ fn probe(stream: UnixStream, socket: &Path) -> Result<(), String> {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Grofe,
+        request: Default::default(),
     };
     let hello = encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())?;
     match request_with(stream, &hello, &["list-sessions".to_string()]) {
@@ -1506,6 +1508,7 @@ fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
             .collect(),
         client: None,
         dialect: dialect(),
+        request: Default::default(),
     };
     encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
 }

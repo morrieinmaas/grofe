@@ -633,25 +633,24 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         // dies. tmux queues the keys and spins instead.
         // ponytail: grofe stops at a depth tmux has no limit for.
         // Once the limit is hit, every level stops typing.
-        thread_local!(static TYPING: std::cell::Cell<(u32, bool)> = const { std::cell::Cell::new((0, false)) });
-        let (depth, _) = TYPING.get();
+        let (depth, _) = state.typing;
         if depth >= MAX_TYPING_DEPTH {
-            TYPING.set((depth, true));
+            state.typing = (depth, true);
             return Err("send-keys: -K nested too deeply".to_string());
         }
-        TYPING.set((depth + 1, false));
+        state.typing = (depth + 1, false);
         'typing: for _ in 0..repeat.min(copy::MAX_REPEAT) {
             for item in &c.items {
                 for key in typed_keys(item) {
                     clients::type_key(state, client, key);
-                    if TYPING.get().1 {
+                    if state.typing.1 {
                         break 'typing;
                     }
                 }
             }
         }
-        let tripped = TYPING.get().1 && depth > 0;
-        TYPING.set((depth, tripped));
+        let tripped = state.typing.1 && depth > 0;
+        state.typing = (depth, tripped);
         return Ok(String::new());
     }
     if c.items.is_empty() {

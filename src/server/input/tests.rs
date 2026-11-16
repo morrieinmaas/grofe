@@ -1910,6 +1910,7 @@ fn unmapped(text: &str, out: &mut Vec<String>) {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     };
     let Ok(cmds) = crate::cmd::split_command_string(text) else {
         out.push(format!("does not split: {text}"));

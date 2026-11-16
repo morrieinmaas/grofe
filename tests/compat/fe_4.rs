@@ -985,6 +985,7 @@ fn ctx() -> ClientCtx {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     }
 }
 

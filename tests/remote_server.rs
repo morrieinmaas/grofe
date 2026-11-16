@@ -69,6 +69,7 @@ fn attach_with_agent(srv: &TestServer, session: &str, agent: &str) -> UnixStream
             env: vec![("SSH_AUTH_SOCK".to_string(), agent.to_string())],
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         },
         cols: 80,
         rows: 24,

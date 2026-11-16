@@ -1,5 +1,5 @@
 -- Luau declarations for the grofe scripting API (version 1).
--- Point luau-lsp at this file; see docs/lua.md.
+-- Point luau-lsp at this file; see docs/book/src/lua.md.
 
 export type SystemResult = {
 	code: number,
