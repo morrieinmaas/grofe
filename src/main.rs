@@ -146,7 +146,8 @@ fn main() -> ExitCode {
             }
         }
     };
-    // Bare `grofe`, like bare `tmux`, means `new-session`.
+    // Bare `grofe`, like bare `tmux`, means `new-session` (but see
+    // `new_and_attach`: bare `grofe` reattaches when sessions exist).
     let bare = rest.is_empty();
     let rest = if bare {
         vec!["new-session".to_string()]
@@ -659,7 +660,10 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     let (socket, own_dir) = globals.resolve();
     let mut new_cmd = vec![argv[0].clone(), "-d".to_string()];
     new_cmd.extend(argv[1..].iter().cloned());
-    let mut create = if bare && UnixStream::connect(&socket).is_err() {
+    // Bare `grofe` reattaches the latest session whenever there is one,
+    // including what a server it starts restored. Only grofe's front end
+    // sets `bare`; bare `tmux` stays `new-session`, as in tmux.
+    let mut create = if bare {
         ["if-shell", "-F", "#{server_sessions}", "", "new-session -d"]
             .map(String::from)
             .to_vec()
