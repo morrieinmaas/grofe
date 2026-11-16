@@ -237,6 +237,10 @@ fn main() -> ExitCode {
             control_bridge(&globals.socket())
         }
         "control" if dialect() == Dialect::Grofe => fail("grofe control: takes no arguments"),
+        // The remote end of `grofe -r host` (spec ssh-remote §1): the proxy
+        // protocol on stdin and stdout. grofe's own verb.
+        "proxy" if dialect() == Dialect::Grofe && rest.len() == 1 => proxy_cmd(&globals),
+        "proxy" if dialect() == Dialect::Grofe => fail("grofe proxy: takes no arguments"),
         // grofe's own verb (T4.5): the server reads the snapshot and answers;
         // with no server there is nothing to lose, and none is started.
         "reboot-check" if dialect() == Dialect::Grofe => {
@@ -960,6 +964,19 @@ impl Drop for RawTty {
     fn drop(&mut self) {
         let _ =
             nix::sys::termios::tcsetattr(io::stdin(), nix::sys::termios::SetArg::TCSANOW, &self.0);
+    }
+}
+
+/// `grofe proxy`: serves the proxy protocol on stdin and stdout. Channels
+/// reach the server socket this CLI would, started on demand as for any
+/// session-creating call.
+fn proxy_cmd(globals: &Globals) -> ExitCode {
+    let (socket, own_dir) = globals.resolve();
+    let connect: grofe::remote::proxy::Connect =
+        std::sync::Arc::new(move || connect_or_start(&socket, own_dir, true));
+    match grofe::remote::proxy::run(io::stdin(), io::stdout(), connect) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => fail(&format!("proxy: {e}")),
     }
 }
 
