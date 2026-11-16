@@ -97,6 +97,7 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "agent-blocked-border-style",
     "scratchpad-history",
     "message-pill",
+    "message-pill-ends",
     "prompt-position",
 ];
 
@@ -875,6 +876,18 @@ pub(super) const BUILTINS: &[Builtin] = &[
         default: "on",
         toml: Some("message.pill"),
         tmux_default: Some("off"),
+        ..Builtin::PLAIN
+    },
+    // The message and prompt pill's two end glyphs. Empty (the default)
+    // gives square ends, which any font has; a Nerd font's rounded
+    // `\u{e0b6}\u{e0b4}` match a pill status line.
+    Builtin {
+        name: "message-pill-ends",
+        doc: "Two glyphs drawn at the ends of the message and prompt pill, in its colour; empty gives square ends.",
+        kind: Kind::String,
+        scope: OptionScope::Session,
+        default: "",
+        toml: Some("message.pill-ends"),
         ..Builtin::PLAIN
     },
     Builtin {
