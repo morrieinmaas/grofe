@@ -60,16 +60,18 @@ fn status(t: &str) -> &str {
 }
 
 #[test]
-fn an_error_is_a_pill_alone_on_the_status_line() {
+fn an_error_is_a_pill_over_the_left_of_the_status_line() {
     let (_srv, mut h) = attached("[message]\npill-ends = \"()\"\n");
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send("\x1b[15~");
     h.wait_until("the error pill", WAIT, |t| {
-        status(t).contains("( ✗ Can't find window")
+        status(t).starts_with(" (  ✗ Can't find window")
     });
     let shown = h.text();
     let row = status(&shown);
-    assert!(!row.contains("LEFT") && !row.contains("RIGHT"), "{shown}");
+    // The window list is gone; status-right stays, just past the pill.
+    assert!(!row.contains("LEFT"), "{shown}");
+    assert!(row.trim_end().ends_with(") RIGHT"), "{shown}");
     h.wait_until("the status line back", WAIT, |t| {
         status(t).starts_with("LEFT")
     });
@@ -92,7 +94,7 @@ fn display_message_is_an_info_pill() {
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send("\x1b[17~");
     h.wait_until("the info pill", WAIT, |t| {
-        status(t).contains(" ℹ all saved ") && !status(t).contains('(')
+        status(t).starts_with(" \u{e0b6}  ℹ all saved ")
     });
 }
 
@@ -108,16 +110,19 @@ fn tmux_identity_keeps_the_full_width_bar() {
 }
 
 #[test]
-fn the_prompt_is_a_pill_on_the_status_line() {
+fn the_prompt_is_a_pill_over_the_left_of_the_status_line() {
     let (_srv, mut h) = attached("");
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send(format!("{PREFIX}:"));
-    h.wait_until("the prompt pill", WAIT, |t| status(t).contains("  :"));
+    h.wait_until("the prompt pill", WAIT, |t| status(t).contains("  : "));
     h.send("abc");
-    h.wait_until("the typed text", WAIT, |t| status(t).contains("  :abc"));
+    h.wait_until("the typed text", WAIT, |t| {
+        status(t).starts_with(" \u{e0b6}  : abc")
+    });
     let shown = h.text();
     let row = status(&shown);
-    assert!(!row.contains("LEFT") && !row.contains("RIGHT"), "{shown}");
+    assert!(!row.contains("LEFT"), "{shown}");
+    assert!(row.trim_end().ends_with("\u{e0b4} RIGHT"), "{shown}");
     assert_eq!(h.cursor().1, ROWS - 1);
     h.send("\x1b");
     h.wait_until("the prompt gone", WAIT, |t| !status(t).contains(":abc"));
@@ -146,4 +151,46 @@ fn prompt_position_centre_opens_a_box_a_third_down() {
     assert_eq!(h.cursor(), (5, top as u16 + 1));
     h.send("\x1b");
     h.wait_until("the box gone", WAIT, |t| !t.contains("( : )"));
+}
+
+#[test]
+fn the_prompt_suggests_what_tab_would_complete() {
+    let (_srv, mut h) = attached("");
+    h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
+    h.send(format!("{PREFIX}:"));
+    h.wait_until("the empty hint", WAIT, |t| {
+        status(t).contains(": type a command, Tab completes")
+    });
+    // One command starts so: the rest of it, dim, after the cursor.
+    h.send("list-ke");
+    h.wait_until("the suggestion", WAIT, |t| {
+        status(t).contains(": list-keys")
+    });
+    assert_eq!(h.cursor().0, 13, "{}", h.text());
+    // Several, sharing nothing more: how many.
+    h.send("\x15kill-se");
+    h.wait_until("the count", WAIT, |t| {
+        status(t).contains(": kill-se  Tab: 2 matches")
+    });
+    // Nothing after a space, nor with the cursor mid-line.
+    h.send("\x15list-keys ");
+    h.wait_until("no suggestion", WAIT, |t| {
+        status(t).contains(": list-keys ") && !status(t).contains("Tab")
+    });
+    h.send("\x15list-ke\x1b[D");
+    h.wait_until("the cursor moved", WAIT, |t| {
+        status(t).contains(": list-ke ")
+    });
+    // After leading spaces it suggests what Tab completes there too.
+    h.send("\x15  list-ke");
+    h.wait_until("the same suggestion", WAIT, |t| {
+        status(t).contains(":   list-keys")
+    });
+    // Tab takes the suggestion.
+    h.send("\x15list-ke\t");
+    h.wait_until("the completion", WAIT, |t| {
+        status(t).contains(": list-keys ")
+    });
+    assert_eq!(h.cursor().0, 16, "{}", h.text());
+    h.send("\x1b");
 }

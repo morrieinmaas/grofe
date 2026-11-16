@@ -1225,3 +1225,65 @@ async fn remove_drops_sidebar_and_grid_state() {
     assert!(!crate::server::sidebar::is_focused(&state, id));
     assert!(!state.sidebars.has(id));
 }
+
+#[test]
+fn a_pill_takes_the_themes_colours_and_ends_else_named_and_round() {
+    let mut model = Model::default();
+    let chain = [Owner::Global];
+    let look = pill_look(&model, &chain, render::Level::Info).unwrap();
+    assert_eq!(
+        (look.colour.as_str(), look.text.as_str()),
+        ("blue", "brightwhite")
+    );
+    assert_eq!(look.ends, "\u{e0b6}\u{e0b4}");
+    let o = &mut model.options;
+    for (k, v) in [
+        ("@theme_blue", "#4d699b"),
+        ("@theme_red", "#cc241d"),
+        ("@theme_bg", "#f2ecbc"),
+        ("@pill_l", "<"),
+        ("@pill_r", ">"),
+    ] {
+        o.set(Owner::Global, k, v, false).unwrap();
+    }
+    let look = pill_look(&model, &chain, render::Level::Info).unwrap();
+    assert_eq!(
+        (look.colour.as_str(), look.text.as_str(), look.ends.as_str()),
+        ("#4d699b", "#f2ecbc", "<>")
+    );
+    let err = pill_look(&model, &chain, render::Level::Error).unwrap();
+    assert_eq!(err.colour, "#cc241d");
+    // No @theme_yellow: a warning keeps the named colour.
+    let warn = pill_look(&model, &chain, render::Level::Warning).unwrap();
+    assert_eq!(warn.colour, "yellow");
+    // `message-pill-ends` wins over the theme; `message-pill off` is none.
+    let set = |m: &mut Model, k, v| m.options.set(Owner::Global, k, v, false).unwrap();
+    set(&mut model, "message-pill-ends", "()");
+    assert_eq!(
+        pill_look(&model, &chain, render::Level::Info).unwrap().ends,
+        "()"
+    );
+    set(&mut model, "message-pill", "off");
+    assert!(pill_look(&model, &chain, render::Level::Info).is_none());
+}
+
+#[test]
+fn a_pill_spans_up_to_status_right() {
+    let row = |ranges: Vec<crate::server::status::StatusRange>| StatusRow {
+        line: StyledLine::default(),
+        ranges,
+    };
+    let right = |start, end| crate::server::status::StatusRange {
+        kind: RangeKind::Right,
+        start,
+        end,
+    };
+    assert_eq!(pill_span(&[row(vec![right(60, 80)])], 0, 80), 60);
+    // No status-right, or no such line: the whole row.
+    assert_eq!(pill_span(&[row(vec![right(80, 80)])], 0, 80), 80);
+    assert_eq!(pill_span(&[], 0, 80), 80);
+    // A range past the row is cut to it; one at its start leaves no room,
+    // which the drawing takes as the whole row.
+    assert_eq!(pill_span(&[row(vec![right(90, 99)])], 0, 80), 80);
+    assert_eq!(pill_span(&[row(vec![right(0, 10)])], 0, 80), 0);
+}

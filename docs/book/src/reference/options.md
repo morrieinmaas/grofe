@@ -883,7 +883,7 @@ grofe only: tmux does not have this option.
 
 ## message-pill-ends
 
-Two glyphs drawn at the ends of the message and prompt pill, in its colour; empty gives square ends.
+Two glyphs drawn at the ends of the message and prompt pill, in its colour; empty takes the theme's @pill_l and @pill_r, else Nerd Font round caps.
 
 - **TOML key**: `message.pill-ends` (string)
 - **Scope**: session

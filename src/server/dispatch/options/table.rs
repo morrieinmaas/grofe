@@ -883,7 +883,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // `\u{e0b6}\u{e0b4}` match a pill status line.
     Builtin {
         name: "message-pill-ends",
-        doc: "Two glyphs drawn at the ends of the message and prompt pill, in its colour; empty gives square ends.",
+        doc: "Two glyphs drawn at the ends of the message and prompt pill, in its colour; empty takes the theme's @pill_l and @pill_r, else Nerd Font round caps.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "",
