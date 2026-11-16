@@ -3,7 +3,7 @@
 //! error text. This file holds the row schema ([`Row`]), the dispatcher
 //! ([`dispatch`]), the area registration ([`table`]), tmux's command table
 //! with its alias and prefix rule ([`resolve`]), the one tmux option-name
-//! table ([`OPTION_NAMES`]) and the core rows: the invocation, pass-through
+//! table ([`option_name`]) and the core rows: the invocation, pass-through
 //! rows for every verb whose tmux form is grofe's, `set`/`show` by
 //! tmux name, `setw`/`showw`, `list-commands`, `info`, and the spec's out
 //! of scope forms. FE.2, FE.3 and FE.4 each fill one area file
@@ -43,6 +43,7 @@ use std::sync::OnceLock;
 
 use crate::cmd::{self, Command, DisplayMessage, ParseError, Target};
 use crate::protocol::{ClientCtx, Dialect};
+use crate::server::dispatch::options::{builtin_names, list_names};
 
 /// A tmux-dialect request that fails, worded as tmux words it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -938,202 +939,14 @@ fn check_flags(inv: &Invocation<'_>) -> Result<(), TmuxError> {
 
 // ---- Options by tmux name ------------------------------------------------
 
-/// The one tmux option-name table (spec §4.5), shared with `import-tmux`:
-/// every option name the tmux dialect sets or shows, by tmux name, with
-/// the name grofe's option store keeps it under. It holds every option in
-/// the corpus (`docs/compat-coverage.md`, "Options by tmux name") and every
-/// built-in option; a name outside it passes through and fails as it does
-/// natively (`invalid option: <name>`). Names grofe stores without acting
-/// on them are the option store's `NO_EFFECT` list.
-pub const OPTION_NAMES: &[(&str, &str)] = &[
-    ("activity-action", "activity-action"),
-    ("aggressive-resize", "aggressive-resize"),
-    ("allow-passthrough", "allow-passthrough"),
-    ("allow-rename", "allow-rename"),
-    ("allow-set-title", "allow-set-title"),
-    ("alternate-screen", "alternate-screen"),
-    ("assume-paste-time", "assume-paste-time"),
-    ("automatic-rename", "automatic-rename"),
-    ("automatic-rename-format", "automatic-rename-format"),
-    ("backspace", "backspace"),
-    ("base-index", "base-index"),
-    ("bell-action", "bell-action"),
-    ("buffer-limit", "buffer-limit"),
-    ("clock-mode-colour", "clock-mode-colour"),
-    ("clock-mode-style", "clock-mode-style"),
-    ("codepoint-widths", "codepoint-widths"),
-    ("command-alias", "command-alias"),
-    ("compat-identity", "compat-identity"),
-    ("copy-command", "copy-command"),
-    (
-        "copy-mode-current-line-number-style",
-        "copy-mode-current-line-number-style",
-    ),
-    (
-        "copy-mode-current-match-style",
-        "copy-mode-current-match-style",
-    ),
-    ("copy-mode-line-number-style", "copy-mode-line-number-style"),
-    ("copy-mode-line-numbers", "copy-mode-line-numbers"),
-    ("copy-mode-mark-style", "copy-mode-mark-style"),
-    ("copy-mode-match-style", "copy-mode-match-style"),
-    ("copy-mode-position-format", "copy-mode-position-format"),
-    ("copy-mode-position-style", "copy-mode-position-style"),
-    ("copy-mode-selection-style", "copy-mode-selection-style"),
-    ("cursor-colour", "cursor-colour"),
-    ("cursor-style", "cursor-style"),
-    ("default-client-command", "default-client-command"),
-    ("default-command", "default-command"),
-    ("default-shell", "default-shell"),
-    ("default-size", "default-size"),
-    ("default-terminal", "default-terminal"),
-    ("destroy-unattached", "destroy-unattached"),
-    ("detach-on-destroy", "detach-on-destroy"),
-    ("display-panes-active-colour", "display-panes-active-colour"),
-    ("display-panes-colour", "display-panes-colour"),
-    ("display-panes-time", "display-panes-time"),
-    ("display-time", "display-time"),
-    ("editor", "editor"),
-    ("escape-time", "escape-time"),
-    ("exit-empty", "exit-empty"),
-    ("exit-unattached", "exit-unattached"),
-    ("extended-keys", "extended-keys"),
-    ("extended-keys-format", "extended-keys-format"),
-    ("fill-character", "fill-character"),
-    ("focus-events", "focus-events"),
-    ("focus-follows-mouse", "focus-follows-mouse"),
-    ("get-clipboard", "get-clipboard"),
-    ("graphics", "graphics"),
-    ("history-file", "history-file"),
-    ("history-limit", "history-limit"),
-    ("initial-repeat-time", "initial-repeat-time"),
-    ("input-buffer-size", "input-buffer-size"),
-    ("key-table", "key-table"),
-    ("lock-after-time", "lock-after-time"),
-    ("lock-command", "lock-command"),
-    ("main-pane-height", "main-pane-height"),
-    ("main-pane-width", "main-pane-width"),
-    ("menu-border-lines", "menu-border-lines"),
-    ("menu-border-style", "menu-border-style"),
-    ("menu-selected-style", "menu-selected-style"),
-    ("menu-style", "menu-style"),
-    ("message-command-style", "message-command-style"),
-    ("message-format", "message-format"),
-    ("message-limit", "message-limit"),
-    ("message-line", "message-line"),
-    ("message-style", "message-style"),
-    ("mode-keys", "mode-keys"),
-    ("mode-style", "mode-style"),
-    ("monitor-activity", "monitor-activity"),
-    ("monitor-bell", "monitor-bell"),
-    ("monitor-silence", "monitor-silence"),
-    ("mouse", "mouse"),
-    ("other-pane-height", "other-pane-height"),
-    ("other-pane-width", "other-pane-width"),
-    ("pane-active-border-style", "pane-active-border-style"),
-    ("pane-base-index", "pane-base-index"),
-    ("pane-border-format", "pane-border-format"),
-    ("pane-border-indicators", "pane-border-indicators"),
-    ("pane-border-lines", "pane-border-lines"),
-    ("pane-border-status", "pane-border-status"),
-    ("pane-border-style", "pane-border-style"),
-    ("pane-colours", "pane-colours"),
-    ("pane-scrollbars", "pane-scrollbars"),
-    ("pane-scrollbars-position", "pane-scrollbars-position"),
-    ("pane-scrollbars-style", "pane-scrollbars-style"),
-    ("pane-status-current-style", "pane-status-current-style"),
-    ("pane-status-style", "pane-status-style"),
-    ("popup-border-lines", "popup-border-lines"),
-    ("popup-border-style", "popup-border-style"),
-    ("popup-style", "popup-style"),
-    ("prefix", "prefix"),
-    ("prefix-timeout", "prefix-timeout"),
-    ("prefix2", "prefix2"),
-    ("prompt-command-cursor-style", "prompt-command-cursor-style"),
-    ("prompt-cursor-colour", "prompt-cursor-colour"),
-    ("prompt-cursor-style", "prompt-cursor-style"),
-    ("prompt-history-limit", "prompt-history-limit"),
-    ("remain-on-exit", "remain-on-exit"),
-    ("remain-on-exit-format", "remain-on-exit-format"),
-    ("renumber-windows", "renumber-windows"),
-    ("repeat-time", "repeat-time"),
-    ("restore-on-start", "restore-on-start"),
-    ("restore-stagger-ms", "restore-stagger-ms"),
-    ("start-from-tmux", "start-from-tmux"),
-    ("resurrect-dir", "resurrect-dir"),
-    ("scroll-on-clear", "scroll-on-clear"),
-    (
-        "session-status-current-style",
-        "session-status-current-style",
-    ),
-    ("session-status-style", "session-status-style"),
-    ("set-clipboard", "set-clipboard"),
-    ("set-titles", "set-titles"),
-    ("set-titles-string", "set-titles-string"),
-    ("silence-action", "silence-action"),
-    ("status", "status"),
-    ("status-bg", "status-bg"),
-    ("status-fg", "status-fg"),
-    ("status-format", "status-format"),
-    ("status-interval", "status-interval"),
-    ("status-justify", "status-justify"),
-    ("status-keys", "status-keys"),
-    ("status-left", "status-left"),
-    ("status-left-length", "status-left-length"),
-    ("status-left-style", "status-left-style"),
-    ("status-position", "status-position"),
-    ("status-right", "status-right"),
-    ("status-right-length", "status-right-length"),
-    ("status-right-style", "status-right-style"),
-    ("status-style", "status-style"),
-    ("synchronize-panes", "synchronize-panes"),
-    ("terminal-features", "terminal-features"),
-    ("terminal-overrides", "terminal-overrides"),
-    ("tiled-layout-max-columns", "tiled-layout-max-columns"),
-    ("tree-mode-preview-format", "tree-mode-preview-format"),
-    ("tree-mode-preview-style", "tree-mode-preview-style"),
-    ("update-environment", "update-environment"),
-    ("user-keys", "user-keys"),
-    (
-        "variation-selector-always-wide",
-        "variation-selector-always-wide",
-    ),
-    ("visual-activity", "visual-activity"),
-    ("visual-bell", "visual-bell"),
-    ("visual-silence", "visual-silence"),
-    ("window-active-style", "window-active-style"),
-    (
-        "window-pane-current-status-format",
-        "window-pane-current-status-format",
-    ),
-    ("window-pane-status-format", "window-pane-status-format"),
-    ("window-size", "window-size"),
-    (
-        "window-status-activity-style",
-        "window-status-activity-style",
-    ),
-    ("window-status-bell-style", "window-status-bell-style"),
-    (
-        "window-status-current-format",
-        "window-status-current-format",
-    ),
-    ("window-status-current-style", "window-status-current-style"),
-    ("window-status-format", "window-status-format"),
-    ("window-status-last-style", "window-status-last-style"),
-    ("window-status-separator", "window-status-separator"),
-    ("window-status-style", "window-status-style"),
-    ("window-style", "window-style"),
-    ("word-separators", "word-separators"),
-    ("wrap-search", "wrap-search"),
-    ("xterm-keys", "xterm-keys"),
-];
-
-/// The option store's name for tmux option `tmux`.
+/// The option store's name for tmux option `tmux` (spec §4.5), shared with
+/// `import-tmux`: every option name the tmux dialect sets or shows, which is
+/// every built-in and list option but grofe's own ([`is_grofe_only`]), each
+/// under its tmux name. A name outside it passes through and fails as it does
+/// natively (`invalid option: <name>`). Names grofe stores without acting on
+/// them are the option store's `NO_EFFECT` list.
 pub fn option_name(tmux: &str) -> Option<&'static str> {
-    OPTION_NAMES
-        .iter()
-        .find(|(t, _)| *t == tmux)
-        .map(|(_, n)| *n)
+    builtin_names().chain(list_names()).find(|n| *n == tmux)
 }
 
 /// `name` in the option store's spelling: a user option (`@x`) as it is, a
@@ -2061,27 +1874,16 @@ mod tests {
         assert_eq!(store_name("nope"), "nope");
     }
 
-    /// The option table covers every option grofe has that tmux's CLI
-    /// knows, and only those: grofe's own (`pane-frames` and the rest)
-    /// have no row.
+    /// The tmux dialect knows every option grofe has that tmux's CLI knows,
+    /// and only those: grofe's own (`pane-frames` and the rest) are refused.
     #[test]
-    fn the_option_table_is_the_option_store_s() {
-        use crate::server::dispatch::options::{builtin_names, grofe_only_names, list_names};
-        for name in grofe_only_names() {
+    fn the_tmux_dialect_knows_the_option_store_s_names() {
+        use crate::server::dispatch::options::{grofe_only_list_names, grofe_only_names};
+        for name in grofe_only_names().chain(grofe_only_list_names()) {
             assert!(option_name(name).is_none(), "{name} is grofe's own");
         }
-        let store: Vec<&str> = builtin_names().chain(list_names()).collect();
-        for name in &store {
-            assert!(
-                option_name(name).is_some(),
-                "{name} has no OPTION_NAMES row"
-            );
-        }
-        for (tmux, internal) in OPTION_NAMES {
-            assert!(
-                store.contains(internal),
-                "{tmux} maps to unknown {internal}"
-            );
+        for name in builtin_names().chain(list_names()) {
+            assert_eq!(option_name(name), Some(name));
         }
     }
 

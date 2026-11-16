@@ -2282,9 +2282,9 @@ impl Importer {
 
         // Each option as (TOML key, its comment and assignment lines).
         let mut items: Vec<(&str, String)> = Vec::new();
-        for (toml_key, _) in config::OPTION_NAMES {
+        for (toml_key, _) in config::option_names() {
             // Moving from tmux: start with its sessions.
-            if *toml_key == "start-from-tmux" && !self.options.contains_key(toml_key) {
+            if toml_key == "start-from-tmux" && !self.options.contains_key(toml_key) {
                 items.push((
                     toml_key,
                     "# grofe starts with the running tmux server's sessions, else resurrect's newest save\n\
@@ -2461,16 +2461,15 @@ impl Importer {
 }
 
 /// The tmux name to its TOML key: the name through the tmux front end's
-/// one option-name table (`compat::tmux::OPTION_NAMES`, FE.1), then the
+/// one option-name table (`compat::tmux::option_name`, FE.1), then the
 /// reverse of [`config::tmux_name`]. An option grofe stores without acting
 /// on it converts too, with a note (TP.0): its TOML key loads, and a script
 /// that reads it back with `show` still finds it.
 fn reverse_tmux_name(tmux: &str) -> Option<&'static str> {
     let name = store_option(tmux)?;
-    config::OPTION_NAMES
-        .iter()
+    config::option_names()
         .find(|(_, n)| *n == name)
-        .map(|(t, _)| *t)
+        .map(|(t, _)| t)
 }
 
 /// The option store's name for tmux option `tmux`.
