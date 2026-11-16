@@ -12,9 +12,15 @@ pub const NO_SUBSCRIBER: &str = "open-url: no client is listening for urls";
 /// and for hosts with another opener.
 pub const OPENER_ENV: &str = "GROFE_OPENER";
 
+/// The longest URL that is opened, in bytes.
+pub const MAX_URL: usize = 4096;
+
 /// Whether `url` may be opened: `http`, `https` or `file`, nothing with a
 /// control character in it. The error names the reason.
 pub fn check(url: &str) -> Result<(), String> {
+    if url.len() > MAX_URL {
+        return Err(format!("a url is at most {MAX_URL} bytes"));
+    }
     if url.chars().any(char::is_control) {
         return Err("a url cannot hold control characters".to_string());
     }
@@ -123,6 +129,10 @@ mod tests {
         ] {
             assert!(check(bad).is_err(), "{bad:?}");
         }
+        let long = format!("https://a/{}", "x".repeat(MAX_URL));
+        assert!(check(&long).is_err(), "over-long");
+        let ok = format!("https://a/{}", "x".repeat(MAX_URL - 10));
+        assert_eq!(check(&ok), Ok(()));
     }
 
     #[test]
