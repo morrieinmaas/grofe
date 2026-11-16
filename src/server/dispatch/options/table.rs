@@ -27,6 +27,8 @@ pub(crate) enum Kind {
 /// flag is given (tmux's), and its global default.
 pub(super) struct Builtin {
     pub(super) name: &'static str,
+    /// One line for the generated options reference.
+    pub(super) doc: &'static str,
     pub(super) kind: Kind,
     pub(super) scope: OptionScope,
     pub(super) default: &'static str,
@@ -49,6 +51,7 @@ impl Builtin {
     /// A row's unset columns: `..Builtin::PLAIN` after the ones it sets.
     const PLAIN: Builtin = Builtin {
         name: "",
+        doc: "",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "",
@@ -166,6 +169,7 @@ pub(super) const VISUAL: &[&str] = &["off", "on", "both"];
 pub(super) const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "prefix",
+        doc: "The prefix key.",
         kind: Kind::Key,
         scope: OptionScope::Session,
         default: "C-b",
@@ -173,6 +177,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "base-index",
+        doc: "The number the first window of a new session gets.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -183,6 +188,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-base-index",
+        doc: "The number the first pane of a window gets.",
         kind: Kind::Number {
             max: u16::MAX as i64,
         },
@@ -193,6 +199,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "escape-time",
+        doc: "Milliseconds to wait after an Escape for the rest of a key sequence.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -204,6 +211,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "repeat-time",
+        doc: "Milliseconds during which a repeatable key (bound with -r) can be pressed again without the prefix.",
         kind: Kind::Number { max: 2_000_000 },
         scope: OptionScope::Session,
         default: "500",
@@ -212,6 +220,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "history-limit",
+        doc: "How many lines of scrollback each new pane keeps.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -222,6 +231,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "mouse",
+        doc: "Mouse support: select, resize, drag and scroll panes and click the status line.",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",
@@ -230,6 +240,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: REMAIN_ON_EXIT,
+        doc: "Keep a pane open after its program exits: always (on), only when it failed (failed), or until a key is pressed (key).",
         // A choice in tmux 3.7b, so `yes` is refused and a bad value is
         // `unknown value`; `failed` keeps a pane only when its command
         // failed (Claude Code's agent teams set it); `key` keeps it until
@@ -244,6 +255,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // spread of resumed panes' start delays. grofe's own names.
     Builtin {
         name: "restore-on-start",
+        doc: "Bring back the last snapshot's sessions when the server starts.",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",
@@ -251,6 +263,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "restore-stagger-ms",
+        doc: "Spread restored panes' resume commands over up to this many milliseconds; 0 starts them all at once.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -264,6 +277,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // (`server::adopt`).
     Builtin {
         name: "start-from-tmux",
+        doc: "When the default server starts with no sessions, take them from a running tmux server or tmux-resurrect's newest save.",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "off",
@@ -271,6 +285,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "resurrect-dir",
+        doc: "Where to look for tmux-resurrect saves for start-from-tmux; empty uses resurrect's own default.",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "",
@@ -278,6 +293,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "automatic-rename",
+        doc: "Rename a window after automatic-rename-format as its pane changes.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -285,6 +301,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "automatic-rename-format",
+        doc: "Format for a window's name while automatic-rename is on; grofe's default is the current folder.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{b:pane_current_path}",
@@ -293,6 +310,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "allow-rename",
+        doc: "Let a program rename its window with an escape sequence.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
@@ -300,6 +318,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "set-titles",
+        doc: "Set the outer terminal's title from set-titles-string.",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "off",
@@ -307,6 +326,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "set-titles-string",
+        doc: "Format for the outer terminal's title when set-titles is on.",
         kind: Kind::String,
         scope: OptionScope::Session,
         // tmux's default, `#S:#I:#W - "#T" #{session_alerts}`, translated
@@ -318,6 +338,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "set-clipboard",
+        doc: "Where clipboard text goes: on makes a program's OSC 52 a paste buffer and passes it to the terminal, external sends only copy-mode copies to the terminal and ignores programs' OSC 52, off does neither.",
         kind: Kind::Choice(&["off", "external", "on"]),
         scope: OptionScope::Global,
         default: "external",
@@ -325,6 +346,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "focus-events",
+        doc: "Pass focus in and out events to programs that ask for them.",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",
@@ -346,6 +368,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // Copy mode reads `mode-keys`.
     Builtin {
         name: "aggressive-resize",
+        doc: "Resize a window to the clients that show it rather than to every client attached to the session.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
@@ -353,6 +376,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "default-command",
+        doc: "Command new panes run; empty runs default-shell.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "",
@@ -360,6 +384,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "default-shell",
+        doc: "Shell new panes run when default-command is empty; set from $SHELL when the server starts.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "/bin/sh",
@@ -367,6 +392,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "default-terminal",
+        doc: "The TERM value programs in panes see.",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "tmux-256color",
@@ -374,6 +400,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "extended-keys",
+        doc: "Whether keys are sent to programs in the extended (CSI u) encoding: off, on (when a program asks) or always.",
         kind: Kind::Choice(&["off", "on", "always"]),
         scope: OptionScope::Global,
         default: "on",
@@ -382,6 +409,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "extended-keys-format",
+        doc: "Encoding for extended keys sent to programs: xterm or csi-u.",
         kind: Kind::Choice(&["csi-u", "xterm"]),
         scope: OptionScope::Global,
         default: "xterm",
@@ -389,6 +417,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "mode-keys",
+        doc: "Key table copy mode and the choose modes use: vi or emacs.",
         kind: Kind::Choice(&["emacs", "vi"]),
         scope: OptionScope::Window,
         default: "vi",
@@ -396,6 +425,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "renumber-windows",
+        doc: "Renumber a session's windows when one is closed, so there are no gaps.",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",
@@ -404,6 +434,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "synchronize-panes",
+        doc: "Send input typed into one pane to every pane in the window.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
@@ -414,6 +445,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // cells in the default colours.
     Builtin {
         name: "window-style",
+        doc: "Default style of inactive panes' content.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -421,6 +453,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-active-style",
+        doc: "Default style of the active pane's content.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -435,6 +468,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // flag styling and no hover focus.
     Builtin {
         name: "prefix2",
+        doc: "A second prefix key; None for none.",
         kind: Kind::Key,
         scope: OptionScope::Session,
         default: "None",
@@ -442,6 +476,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-bg",
+        doc: "Background colour of the status line (an older spelling of status-style's bg).",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "default",
@@ -449,6 +484,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-fg",
+        doc: "Foreground colour of the status line (an older spelling of status-style's fg).",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "default",
@@ -456,6 +492,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-activity-style",
+        doc: "Style of a window's entry in the window list when it has an activity or silence alert.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "reverse",
@@ -463,6 +500,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "focus-follows-mouse",
+        doc: "Make the pane under the mouse the active pane as the pointer moves.",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "off",
@@ -470,6 +508,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "default-size",
+        doc: "Size of new windows when a session starts detached or window-size is manual, as columns x rows.",
         kind: Kind::Size,
         scope: OptionScope::Session,
         default: "80x24",
@@ -477,6 +516,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "exit-empty",
+        doc: "Stop the server when its last session closes.",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",
@@ -484,6 +524,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "detach-on-destroy",
+        doc: "What an attached client does when its session closes: detach (on), switch to the most recent other session (off), switch unless none is detached (no-detached), or go to the previous or next session.",
         kind: Kind::Choice(&["off", "on", "no-detached", "previous", "next"]),
         scope: OptionScope::Session,
         default: "on",
@@ -493,6 +534,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // any string; `select-layout` reads cells or `N%`, TC.8).
     Builtin {
         name: "main-pane-width",
+        doc: "Width of the main pane in the main-vertical layout, in cells or as a percentage.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "80",
@@ -501,6 +543,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // TC.8: as `main-pane-width`, for the `main-horizontal` presets.
     Builtin {
         name: "main-pane-height",
+        doc: "Height of the main pane in the main-horizontal layout, in cells or as a percentage.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "24",
@@ -511,6 +554,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // `latest` (spec D6).
     Builtin {
         name: "window-size",
+        doc: "How a window's size follows the clients attached to it: the largest, the smallest, the latest used, or manual.",
         kind: Kind::Choice(&["largest", "smallest", "manual", "latest"]),
         scope: OptionScope::Window,
         default: "latest",
@@ -523,6 +567,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // identity (`tmux_default`).
     Builtin {
         name: "pane-frames",
+        doc: "Give each tiled pane its own rounded frame with its title, gaps between them; off gives tmux's shared borders.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -531,6 +576,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-gap",
+        doc: "Cells of gap between pane frames and around the outside.",
         kind: Kind::Number { max: 8 },
         scope: OptionScope::Window,
         default: "1",
@@ -540,6 +586,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // grofe's own: how many hidden scratchpads the server keeps.
     Builtin {
         name: "scratchpad-history",
+        doc: "How many hidden scratchpads to keep; the oldest closes past this, 0 closes one as soon as it is hidden.",
         kind: Kind::Number { max: 100 },
         scope: OptionScope::Global,
         default: "10",
@@ -547,6 +594,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-frame-title",
+        doc: "Draw the pane's number, title and controls in its frame's top edge.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -558,6 +606,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // and anything but two one-cell glyphs gives blank ends.
     Builtin {
         name: "pane-frame-tab-ends",
+        doc: "Two glyphs drawn around the frame's number and controls; empty draws none.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "()",
@@ -565,6 +614,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "agent-glyph-blocked",
+        doc: "Glyph for an agent waiting on you, in the window list and the agents badge.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "⏸",
@@ -572,6 +622,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "agent-glyph-error",
+        doc: "Glyph for an agent that stopped with an error, in the window list and the agents badge.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "✗",
@@ -579,6 +630,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "agent-glyph-unseen",
+        doc: "Glyph for an agent that finished and has not been looked at, in the window list and the agents badge.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "✓",
@@ -586,6 +638,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "agent-glyph-working",
+        doc: "Glyph for a working agent, in the window list.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "●",
@@ -593,6 +646,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "notify-muted-glyph",
+        doc: "Glyph the agents badge shows while notifications are muted.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "🔕",
@@ -600,6 +654,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "agent-blocked-border-style",
+        doc: "Border style of a pane whose agent is waiting on you, active or not.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "fg=yellow",
@@ -609,6 +664,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // a box in the middle of the window.
     Builtin {
         name: "prompt-position",
+        doc: "Where the command prompt opens: on the status line (status) or as a box a third down the window (centre).",
         kind: Kind::Choice(&["status", "centre", "center"]),
         scope: OptionScope::Session,
         default: "status",
@@ -616,6 +672,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status",
+        doc: "Show the status line, and how many rows it has (on is one row).",
         kind: Kind::Choice(&["off", "on", "2", "3", "4", "5"]),
         scope: OptionScope::Session,
         default: "on",
@@ -625,6 +682,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-position",
+        doc: "Whether the status line is at the top or bottom of the window.",
         kind: Kind::Choice(&["top", "bottom"]),
         scope: OptionScope::Session,
         default: "bottom",
@@ -633,6 +691,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-style",
+        doc: "Style of the status line.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "bg=green,fg=black",
@@ -641,6 +700,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-left",
+        doc: "Format for the left part of the status line.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "[#{session_name}] ",
@@ -649,6 +709,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-right",
+        doc: "Format for the right part of the status line; grofe's default ends with the agents badge.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "\"#{pane_title}\" %H:%M %d-%b-%y#[range=user|agents]#{agents_badge}#[norange]",
@@ -658,6 +719,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-left-length",
+        doc: "The widest the left part of the status line may be, in cells.",
         kind: Kind::Number {
             max: i16::MAX as i64,
         },
@@ -668,6 +730,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-right-length",
+        doc: "The widest the right part of the status line may be, in cells.",
         kind: Kind::Number {
             max: i16::MAX as i64,
         },
@@ -678,6 +741,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-interval",
+        doc: "Seconds between status line refreshes and runs of its #() commands; 0 turns the timer off.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -688,6 +752,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-format",
+        doc: "Format of a window's entry in the status line's window list; grofe's default adds the window's agent glyph.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
@@ -697,6 +762,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-current-format",
+        doc: "Format of the current window's entry in the window list; grofe's default adds the window's agent glyph.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}",
@@ -708,6 +774,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // of the status line (spec §4.5's status-line row).
     Builtin {
         name: "status-justify",
+        doc: "Where the window list sits in the status line.",
         kind: Kind::Choice(&["left", "centre", "right", "absolute-centre"]),
         scope: OptionScope::Session,
         default: "left",
@@ -716,6 +783,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-left-style",
+        doc: "Style of the left part of the status line.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "default",
@@ -724,6 +792,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-right-style",
+        doc: "Style of the right part of the status line.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "default",
@@ -732,6 +801,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-separator",
+        doc: "Text drawn between windows in the window list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: " ",
@@ -740,6 +810,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-style",
+        doc: "Style of a window's entry in the window list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -748,6 +819,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-current-style",
+        doc: "Style of the current window's entry in the window list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -756,6 +828,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-last-style",
+        doc: "Style of the previously selected window's entry in the window list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -764,6 +837,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-status-bell-style",
+        doc: "Style of a window's entry in the window list when it has a bell alert.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "reverse",
@@ -772,6 +846,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "message-style",
+        doc: "Style of messages and of the command prompt.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "bg=yellow,fg=black,fill=yellow",
@@ -780,6 +855,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "display-time",
+        doc: "How long a message stays, in milliseconds.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -793,6 +869,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // full-width bar in `message-style` (`tmux_default`).
     Builtin {
         name: "message-pill",
+        doc: "Draw messages and the status-line prompt as a pill in the middle of the status line; off gives tmux's full-width bar.",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",
@@ -802,6 +879,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-border-style",
+        doc: "Style of the borders or frames of inactive panes.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -810,6 +888,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-active-border-style",
+        doc: "Style of the active pane's border or frame.",
         kind: Kind::String,
         scope: OptionScope::Window,
         // tmux 3.7b's: yellow in a mode, red while panes are synchronized.
@@ -819,6 +898,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-border-format",
+        doc: "Format of the pane status line shown in a border, and of a frame's title when it is changed from the default.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: PANE_BORDER_FORMAT,
@@ -830,6 +910,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // top or bottom edge give up a row to a title line.
     Builtin {
         name: "pane-border-status",
+        doc: "Show a status line in the top or bottom border of each pane.",
         kind: Kind::Choice(&["off", "top", "bottom"]),
         scope: OptionScope::Window,
         default: "off",
@@ -841,6 +922,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // keeps `single` (`tmux_default`).
     Builtin {
         name: "pane-border-lines",
+        doc: "Characters borders and frames are drawn with.",
         kind: Kind::Choice(&[
             "single", "double", "heavy", "simple", "number", "spaces", "rounded",
         ]),
@@ -852,6 +934,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-border-indicators",
+        doc: "How shared borders mark the active pane: by colour, with arrows, both or not at all.",
         kind: Kind::Choice(&["off", "colour", "arrows", "both"]),
         scope: OptionScope::Window,
         default: "colour",
@@ -860,6 +943,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "status-keys",
+        doc: "Key table the command prompt uses: emacs or vi.",
         kind: Kind::Choice(&["emacs", "vi"]),
         scope: OptionScope::Session,
         default: "emacs",
@@ -869,6 +953,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // The server's identity override (spec D12), read once at start.
     Builtin {
         name: "compat-identity",
+        doc: "Whether the server behaves as grofe or as tmux; auto decides by the name it was started under. Fixed when the server starts.",
         kind: Kind::Choice(&["auto", "tmux", "grofe"]),
         scope: OptionScope::Global,
         default: "auto",
@@ -879,6 +964,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // clients get what T3.8 sent.
     Builtin {
         name: "graphics",
+        doc: "Enable kitty graphics direct placements, animation and sixel (Unicode placeholders work without it).",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "off",
@@ -892,6 +978,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // nothing for `off` to guard; canopy turns it on anyway.
     Builtin {
         name: "allow-passthrough",
+        doc: "Let programs pass escape sequences through to the outer terminal: off, on (visible panes only) or all.",
         kind: Kind::Choice(&["off", "on", "all"]),
         scope: OptionScope::Window,
         default: "off",
@@ -900,6 +987,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // Window alerts (`server::alerts`, TP.10), with tmux's defaults.
     Builtin {
         name: "monitor-bell",
+        doc: "Flag a window that rings the bell.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -907,6 +995,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "monitor-activity",
+        doc: "Flag a window that has output while you are not looking at it.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "off",
@@ -914,6 +1003,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "monitor-silence",
+        doc: "Flag a window that has had no output for this many seconds; 0 turns it off.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -923,6 +1013,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "bell-action",
+        doc: "Which windows' bells are acted on: any, none, the current one or the others.",
         kind: Kind::Choice(ALERT_ACTIONS),
         scope: OptionScope::Session,
         default: "any",
@@ -930,6 +1021,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "activity-action",
+        doc: "Which windows' activity alerts are acted on: any, none, the current one or the others.",
         kind: Kind::Choice(ALERT_ACTIONS),
         scope: OptionScope::Session,
         default: "other",
@@ -937,6 +1029,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "silence-action",
+        doc: "Which windows' silence alerts are acted on: any, none, the current one or the others.",
         kind: Kind::Choice(ALERT_ACTIONS),
         scope: OptionScope::Session,
         default: "other",
@@ -944,6 +1037,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "visual-bell",
+        doc: "Show a message for a bell (on), pass the bell to the terminal (off), or both.",
         kind: Kind::Choice(VISUAL),
         scope: OptionScope::Session,
         default: "off",
@@ -951,6 +1045,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "visual-activity",
+        doc: "Show a message for an activity alert (on), ring the bell (off), or both.",
         kind: Kind::Choice(VISUAL),
         scope: OptionScope::Session,
         default: "off",
@@ -958,6 +1053,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "visual-silence",
+        doc: "Show a message for a silence alert (on), ring the bell (off), or both.",
         kind: Kind::Choice(VISUAL),
         scope: OptionScope::Session,
         default: "off",
@@ -967,6 +1063,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // `escape-time`); at least 1.
     Builtin {
         name: "buffer-limit",
+        doc: "How many automatically named paste buffers to keep; the oldest is dropped past this.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -978,6 +1075,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // and defaults (`4` is blue; `show` prints it so).
     Builtin {
         name: "clock-mode-colour",
+        doc: "Colour of the clock in clock mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "blue",
@@ -985,6 +1083,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "clock-mode-style",
+        doc: "Whether clock mode shows a 12 or 24 hour clock, with or without seconds.",
         kind: Kind::Choice(&["12", "24", "12-with-seconds", "24-with-seconds"]),
         scope: OptionScope::Window,
         default: "24",
@@ -994,6 +1093,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // (`copy-command` is a server option there, global here).
     Builtin {
         name: "word-separators",
+        doc: "Characters that end a word for copy mode's word motions and double-click selection.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~",
@@ -1001,6 +1101,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "wrap-search",
+        doc: "Whether a copy-mode search wraps around at the top or bottom of the history.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -1008,6 +1109,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-command",
+        doc: "A shell command that copy mode's copy-pipe commands send the copied text to when they are given none.",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "",
@@ -1015,6 +1117,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "mode-style",
+        doc: "Style of copy mode and of the choose and tree modes, including the selection.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "noattr,bg=yellow,fg=black",
@@ -1022,6 +1125,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-match-style",
+        doc: "Style of search matches in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=cyan,fg=black",
@@ -1030,6 +1134,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-current-match-style",
+        doc: "Style of the current search match in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=magenta,fg=black",
@@ -1038,6 +1143,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "prefix-timeout",
+        doc: "Milliseconds after the prefix before it is cancelled; 0 waits forever.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -1050,6 +1156,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     // only; the rest are read where the comment on `NO_EFFECT` says.
     Builtin {
         name: "assume-paste-time",
+        doc: "Keys arriving faster than this many milliseconds apart are taken as a paste, not bindings.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -1059,6 +1166,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "destroy-unattached",
+        doc: "Close a session when its last client detaches: off, on, keep-last or keep-group.",
         kind: Kind::Choice(&["off", "on", "keep-last", "keep-group"]),
         scope: OptionScope::Session,
         default: "off",
@@ -1066,6 +1174,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "display-panes-active-colour",
+        doc: "Colour of the active pane's number in display-panes.",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "red",
@@ -1073,6 +1182,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "display-panes-colour",
+        doc: "Colour of the other panes' numbers in display-panes.",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "blue",
@@ -1080,6 +1190,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "display-panes-time",
+        doc: "Milliseconds display-panes shows the pane numbers for.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -1089,6 +1200,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "initial-repeat-time",
+        doc: "Repeat window, in milliseconds, after the first press of a repeatable key; 0 uses repeat-time.",
         kind: Kind::Number { max: 2_000_000 },
         scope: OptionScope::Session,
         default: "0",
@@ -1096,6 +1208,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "key-table",
+        doc: "The key table a client starts in.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "root",
@@ -1103,6 +1216,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "lock-after-time",
+        doc: "Lock a session after this many seconds without input; 0 never locks.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -1112,6 +1226,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "lock-command",
+        doc: "Command run to lock a client.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "lock -np",
@@ -1119,6 +1234,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "message-command-style",
+        doc: "Style of the command prompt while it is in vi command mode.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "bg=black,fg=yellow,fill=black",
@@ -1126,6 +1242,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "message-format",
+        doc: "Format of messages and the prompt line.",
         kind: Kind::String,
         scope: OptionScope::Session,
         default: "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}",
@@ -1133,6 +1250,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "message-line",
+        doc: "Which status row messages and the prompt use.",
         kind: Kind::Choice(&["0", "1", "2", "3", "4"]),
         scope: OptionScope::Session,
         default: "0",
@@ -1140,6 +1258,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "prompt-cursor-colour",
+        doc: "Cursor colour in the command prompt.",
         kind: Kind::Colour,
         scope: OptionScope::Session,
         default: "none",
@@ -1147,6 +1266,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "prompt-cursor-style",
+        doc: "Cursor shape in the command prompt.",
         kind: Kind::Choice(&[
             "default",
             "blinking-block",
@@ -1162,6 +1282,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "prompt-command-cursor-style",
+        doc: "Cursor shape in the command prompt's vi command mode.",
         kind: Kind::Choice(&[
             "default",
             "blinking-block",
@@ -1177,6 +1298,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "cursor-colour",
+        doc: "Cursor colour in panes.",
         kind: Kind::Colour,
         scope: OptionScope::Window,
         default: "none",
@@ -1184,6 +1306,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "cursor-style",
+        doc: "Cursor shape in panes.",
         kind: Kind::Choice(&[
             "default",
             "blinking-block",
@@ -1199,6 +1322,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "menu-style",
+        doc: "Style of menus.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1206,6 +1330,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "menu-selected-style",
+        doc: "Style of a menu's selected item.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=yellow,fg=black",
@@ -1213,6 +1338,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "menu-border-style",
+        doc: "Style of a menu's border.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1220,6 +1346,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "menu-border-lines",
+        doc: "Characters a menu's border is drawn with.",
         kind: Kind::Choice(&[
             "single", "double", "heavy", "simple", "rounded", "padded", "none",
         ]),
@@ -1229,6 +1356,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-status-current-style",
+        doc: "Style of the current pane's entry in a status-format pane list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1236,6 +1364,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-status-style",
+        doc: "Style of a pane's entry in a status-format pane list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1243,6 +1372,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "session-status-current-style",
+        doc: "Style of the current session's entry in a status-format session list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1250,6 +1380,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "session-status-style",
+        doc: "Style of a session's entry in a status-format session list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1257,6 +1388,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "allow-set-title",
+        doc: "Let a program set its pane's title with an escape sequence.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -1264,6 +1396,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "alternate-screen",
+        doc: "Let programs use the alternate screen.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -1271,6 +1404,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-mark-style",
+        doc: "Style of the marked line in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=red,fg=black",
@@ -1278,6 +1412,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-position-format",
+        doc: "Format of the position indicator in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#[align=right]#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}[#{copy_position}/#{copy_position_limit}]#{?search_timed_out, (timed out),#{?search_count, (#{search_count}#{?search_count_partial,+,} results),}}",
@@ -1285,6 +1420,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-position-style",
+        doc: "Style of the position indicator in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{E:mode-style}",
@@ -1292,6 +1428,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-selection-style",
+        doc: "Style of the selection in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{E:mode-style}",
@@ -1299,6 +1436,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-current-line-number-style",
+        doc: "Style of the current line's number in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "fg=yellow",
@@ -1306,6 +1444,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-line-number-style",
+        doc: "Style of line numbers in copy mode.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "fg=white,dim",
@@ -1313,6 +1452,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "copy-mode-line-numbers",
+        doc: "Show line numbers in copy mode, and which kind.",
         kind: Kind::Choice(&["off", "default", "absolute", "relative", "hybrid"]),
         scope: OptionScope::Window,
         default: "off",
@@ -1320,6 +1460,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "fill-character",
+        doc: "Character to fill unused parts of a window with; empty is a space.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "",
@@ -1327,6 +1468,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "other-pane-height",
+        doc: "Height of the other panes in the main-horizontal layout; 0 shares the space.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "0",
@@ -1334,6 +1476,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "other-pane-width",
+        doc: "Width of the other panes in the main-vertical layout; 0 shares the space.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "0",
@@ -1341,6 +1484,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-scrollbars",
+        doc: "Show scrollbars in panes: off, in copy mode only (modal) or always.",
         kind: Kind::Choice(&["off", "modal", "on"]),
         scope: OptionScope::Window,
         default: "off",
@@ -1348,6 +1492,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-scrollbars-style",
+        doc: "Style and width of pane scrollbars.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "bg=black,fg=white,width=1,pad=0",
@@ -1355,6 +1500,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "pane-scrollbars-position",
+        doc: "Which side of the pane its scrollbar is on.",
         kind: Kind::Choice(&["right", "left"]),
         scope: OptionScope::Window,
         default: "right",
@@ -1362,6 +1508,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "popup-style",
+        doc: "Style of popups.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1369,6 +1516,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "popup-border-style",
+        doc: "Style of a popup's border.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "default",
@@ -1376,6 +1524,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "popup-border-lines",
+        doc: "Characters a popup's border is drawn with.",
         kind: Kind::Choice(&[
             "single", "double", "heavy", "simple", "rounded", "padded", "none",
         ]),
@@ -1385,6 +1534,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "remain-on-exit-format",
+        doc: "Text shown at the bottom of a pane kept open by remain-on-exit.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})",
@@ -1392,6 +1542,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "scroll-on-clear",
+        doc: "Push the screen into the history when a program clears it.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -1399,6 +1550,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "tiled-layout-max-columns",
+        doc: "The most columns the tiled layout uses; 0 has no limit.",
         kind: Kind::Number { max: 65_535 },
         scope: OptionScope::Window,
         default: "0",
@@ -1406,6 +1558,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "tree-mode-preview-format",
+        doc: "Format of the labels in choose-tree's preview.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#{?pane_format,#{pane_index}:#{pane_title},#{window_index}:#{window_name}}",
@@ -1413,6 +1566,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "tree-mode-preview-style",
+        doc: "Style of the labels in choose-tree's preview.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "fg=#{?#{||:#{&&:#{pane_format},#{pane_active}},#{&&:#{window_format},#{window_active}}},#{display-panes-active-colour},#{display-panes-colour}}",
@@ -1420,6 +1574,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-pane-current-status-format",
+        doc: "Format of the current pane's entry in a status-format pane list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#P:[#T]#{?pane_flags,#{pane_flags}, }",
@@ -1427,6 +1582,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "window-pane-status-format",
+        doc: "Format of a pane's entry in a status-format pane list.",
         kind: Kind::String,
         scope: OptionScope::Window,
         default: "#P:[#T]#{?pane_flags,#{pane_flags}, }",
@@ -1434,6 +1590,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "xterm-keys",
+        doc: "Send function keys with modifiers in xterm's encoding.",
         kind: Kind::Bool,
         scope: OptionScope::Window,
         default: "on",
@@ -1441,6 +1598,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "backspace",
+        doc: "The key sent for Backspace.",
         kind: Kind::Key,
         scope: OptionScope::Global,
         default: "C-?",
@@ -1448,6 +1606,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "default-client-command",
+        doc: "Command run when grofe is started with no command.",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "new-session",
@@ -1455,6 +1614,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "editor",
+        doc: "Editor run by commands that open one.",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "/usr/bin/vi",
@@ -1462,6 +1622,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "exit-unattached",
+        doc: "Stop the server when no client is attached.",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "off",
@@ -1469,6 +1630,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "get-clipboard",
+        doc: "Whether a program's OSC 52 clipboard query is answered. Only buffer answers it, from the newest paste buffer, and only when set-clipboard is on; off, request and both are never answered, and the terminal's clipboard is never asked.",
         kind: Kind::Choice(&["off", "buffer", "request", "both"]),
         scope: OptionScope::Global,
         default: "buffer",
@@ -1476,6 +1638,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "history-file",
+        doc: "File the command prompt's history is saved to; empty saves none.",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "",
@@ -1483,6 +1646,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "input-buffer-size",
+        doc: "Most bytes one escape sequence from a program may hold.",
         kind: Kind::Number { max: 4_294_967_295 },
         scope: OptionScope::Global,
         default: "1048576",
@@ -1490,6 +1654,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "message-limit",
+        doc: "How many messages to keep in the message log.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -1499,6 +1664,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "prompt-history-limit",
+        doc: "How many command prompt entries to keep in its history.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
@@ -1508,6 +1674,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "variation-selector-always-wide",
+        doc: "Treat a character followed by variation selector 16 as two cells wide.",
         kind: Kind::Bool,
         scope: OptionScope::Global,
         default: "on",

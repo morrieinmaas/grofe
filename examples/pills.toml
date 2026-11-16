@@ -1,0 +1,48 @@
+# A pill status bar on top, in the Gruvbox palette: the look in grofe's
+# screenshots. Copy it into ~/.config/grofe/conf.d/ (it needs a Nerd font for
+# the rounded caps) and adjust the palette below. For a dark terminal, add
+# pills-dark.toml after it.
+
+# The frames' number and controls get the same rounded caps.
+pane-frame-tab-ends = "\ue0b6\ue0b4"
+
+# Colours are user options, read by every format below, so changing a
+# palette (here, or at runtime with `set -g @theme_blue ...`) repaints the
+# whole bar.
+[user-options]
+theme_bg = "#fbf1c7"
+theme_fg = "#3c3836"
+theme_blue = "#458588"
+theme_yellow = "#b57614"
+theme_green = "#79740e"
+theme_grey = "#a89984"
+theme_muted = "#7c6f64"
+theme_red = "#cc241d"
+# The rounded caps, U+E0B6 and U+E0B4. Without a Nerd font, set both to "".
+pill_l = ""
+pill_r = ""
+
+[pane-border]
+style = "fg=#{@theme_grey}"
+active-style = "fg=#{@theme_yellow}"
+
+[status]
+# Two rows: the pills, then an empty row between the bar and the panes.
+lines = 2
+rows = ["", ""]
+position = "top"
+justify = "left"
+style = "bg=default,fg=#{@theme_fg}"
+left-length = 60
+right-length = 80
+# A grey label pill, then the session in blue (red while the prefix is held).
+left = "#[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_grey},bold] grofe #[fg=#{@theme_grey},bg=default,nobold]#{@pill_r} #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bold] #{session_name} #[fg=#{?client_prefix,#{@theme_red},#{@theme_blue}},bg=default,nobold]#{@pill_r}  "
+# The agents badge (click it for the notification tray), the date and the time.
+right = "#[fg=#{@theme_fg},bg=default]#[range=user|agents]#{agents_badge}#[norange]  #[fg=#{@theme_grey},bg=default]#{@pill_l}#[fg=#{@theme_fg},bg=#{@theme_grey}] %a %d %b #[fg=#{@theme_grey},bg=default]#{@pill_r}  #[fg=#{@theme_green},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_green},bold] %H:%M #[fg=#{@theme_green},bg=default,nobold]#{@pill_r} "
+
+[status.window]
+separator = " "
+# Other windows muted, the current one a yellow pill (in the background
+# colour, so it reads on light and dark); each with its agent's glyph.
+format = "#[fg=#{@theme_muted},bg=default] #{window_index} #{window_name}#{?#{==:#{window_agent_state},blocked}, #{agent-glyph-blocked},#{?#{==:#{window_agent_state},error}, #{agent-glyph-error},#{?#{==:#{window_agent_state},unseen}, #{agent-glyph-unseen},#{?#{==:#{window_agent_state},working}, #{agent-glyph-working},}}}} "
+current-format = "#[fg=#{@theme_yellow},bg=default]#{@pill_l}#[fg=#{@theme_bg},bg=#{@theme_yellow},bold] #{window_index} #{window_name}#{?#{==:#{window_agent_state},blocked}, #{agent-glyph-blocked},#{?#{==:#{window_agent_state},error}, #{agent-glyph-error},#{?#{==:#{window_agent_state},unseen}, #{agent-glyph-unseen},#{?#{==:#{window_agent_state},working}, #{agent-glyph-working},}}}} #[fg=#{@theme_yellow},bg=default,nobold]#{@pill_r}"
