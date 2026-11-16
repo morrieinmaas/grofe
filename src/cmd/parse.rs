@@ -1724,6 +1724,14 @@ pub(super) fn parse_new_scratchpad(flags: &Args) -> Result<Command, ParseError> 
     }))
 }
 
+pub(super) fn parse_open_url(flags: &Args) -> Result<Command, ParseError> {
+    let url = flags
+        .positionals
+        .first()
+        .ok_or_else(|| ParseError::MissingArgument("open-url".to_string()))?;
+    Ok(Command::OpenUrl(super::OpenUrl { url: url.clone() }))
+}
+
 pub(super) fn parse_show_scratchpad(flags: &Args) -> Result<Command, ParseError> {
     let word = flags
         .positionals

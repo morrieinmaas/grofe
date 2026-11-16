@@ -252,6 +252,8 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // grofe's own verb: `$BROWSER` in a pane, see `open_url`.
+        "open" if dialect() == Dialect::Grofe => open_url(&globals.socket(), &rest[1..]),
         // grofe's own verb: agent status reports and hook setup.
         "agent" if dialect() == Dialect::Grofe => {
             let hook = rest.iter().any(|a| a == "--hook");
@@ -280,6 +282,31 @@ fn main() -> ExitCode {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
         }
+    }
+}
+
+/// `grofe open <url>`: asks the clients subscribed to `open-url` to open it
+/// (a remote client opens it on its own machine). With no server or no
+/// subscriber it opens the URL here, with `open` or `xdg-open`
+/// (`GROFE_OPENER`). Only http, https and file URLs are opened.
+fn open_url(socket: &Path, args: &[String]) -> ExitCode {
+    let [url] = args else {
+        return fail("grofe open: usage: grofe open <url>");
+    };
+    if let Err(e) = grofe::open::check(url) {
+        return fail(&format!("grofe open: refused {url:?}: {e}"));
+    }
+    let argv = ["open-url".to_string(), url.clone()];
+    let reply = UnixStream::connect(socket)
+        .map_err(|e| e.to_string())
+        .and_then(|stream| request(stream, socket, &argv));
+    match reply {
+        Ok(Reply::Ok { .. }) => ExitCode::SUCCESS,
+        Ok(Reply::Err { err, .. }) if err != grofe::open::NO_SUBSCRIBER => fail(&err),
+        _ => match grofe::open::open_locally(url) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(&format!("grofe open: {e}")),
+        },
     }
 }
 
