@@ -42,6 +42,11 @@ pub const POLL: Duration = Duration::from_secs(2);
 #[derive(Default)]
 pub struct Remote {
     running: bool,
+    /// How many subscriptions named `ports-changed` or `pane-echo` at the
+    /// last look; a rise means someone new needs the current state.
+    subs: usize,
+    /// Set by a new subscription: the next echo poll reports every pane.
+    snapshot: bool,
     ports: BTreeMap<PaneId, Vec<u16>>,
     echo: BTreeMap<PaneId, bool>,
 }
@@ -168,7 +173,24 @@ fn wanted(state: &State) -> bool {
 
 /// After a `subscribe`: starts the poller if the subscription needs it.
 pub fn ensure_poller(state: &mut State) {
-    if state.remote.running || !wanted(state) {
+    let subs = state.events.named_count("ports-changed") + state.events.named_count("pane-echo");
+    let grew = subs > state.remote.subs;
+    state.remote.subs = subs;
+    if !wanted(state) {
+        return;
+    }
+    if grew {
+        // A new subscriber gets the state of every pane once: forget what
+        // was told, so the next poll reports it all (older subscribers see
+        // the same whole-state events again, which is harmless).
+        state.remote.ports.clear();
+        state.remote.echo.clear();
+        state.remote.snapshot = true;
+        if state.remote.running {
+            poll(state);
+        }
+    }
+    if state.remote.running {
         return;
     }
     state.remote.running = true;
@@ -211,14 +233,20 @@ fn poll_echo(state: &mut State) {
         let Some(echo) = pane.handle.echo() else {
             continue;
         };
-        // A pane not seen before echoes, as a pty does at birth.
-        if state.remote.echo.insert(*id, echo).unwrap_or(true) != echo {
+        // A pane not seen before echoes, as a pty does at birth, unless a
+        // new subscriber asked for the state of every pane.
+        let changed = match state.remote.echo.insert(*id, echo) {
+            Some(before) => before != echo,
+            None => state.remote.snapshot || !echo,
+        };
+        if changed {
             changes.push(Event::PaneEcho { pane: *id, echo });
         }
     }
     for event in changes {
         state.events.emit(event);
     }
+    state.remote.snapshot = false;
 }
 
 fn poll_ports(state: &mut State) {
@@ -256,7 +284,7 @@ fn apply_ports(state: &mut State, ports: Vec<(PaneId, Vec<u16>)>) {
             continue;
         }
         let old = state.remote.ports.insert(pane, ports.clone());
-        if old.unwrap_or_default() != ports {
+        if old.as_ref() != Some(&ports) && !(old.is_none() && ports.is_empty()) {
             state.events.emit(Event::PortsChanged { pane, ports });
         }
     }

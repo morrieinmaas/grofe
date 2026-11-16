@@ -452,3 +452,30 @@ fn nothing_polls_without_a_subscriber() {
     let mut bare = srv.subscribe(&[]).expect("bare");
     assert!(bare.next(Duration::from_millis(2500)).is_err());
 }
+
+#[test]
+fn a_late_subscriber_gets_the_current_ports_and_echo_of_every_pane() {
+    let srv = server();
+    // A first subscriber keeps the poller running and has seen everything.
+    let mut first = srv.subscribe(&["ports-changed"]).expect("first");
+    let (port, _stop) = listening_pane(&srv);
+    let pane = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .expect("pane id");
+    let pane = pane.trim().parse().expect("pane id");
+    first.next(WAIT).expect("the first sees the port");
+
+    let mut ports = srv.subscribe(&["ports-changed"]).expect("late ports");
+    assert_eq!(
+        ports.next(WAIT).expect("current ports"),
+        Event::PortsChanged {
+            pane,
+            ports: vec![port]
+        }
+    );
+    let mut echo = srv.subscribe(&["pane-echo"]).expect("late echo");
+    assert_eq!(
+        echo.next(WAIT).expect("current echo"),
+        Event::PaneEcho { pane, echo: true }
+    );
+}

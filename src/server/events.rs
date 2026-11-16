@@ -258,6 +258,14 @@ impl Events {
             .any(|s| !s.tx.is_closed() && s.filters.iter().any(|f| f == name))
     }
 
+    /// How many live subscriptions name event `name`.
+    pub fn named_count(&self, name: &str) -> usize {
+        self.subscribers
+            .iter()
+            .filter(|s| !s.tx.is_closed() && s.filters.iter().any(|f| f == name))
+            .count()
+    }
+
     /// Records an event, sent on the next [`Events::flush`].
     pub fn emit(&mut self, event: Event) {
         self.emit_at(event, Place::default());
