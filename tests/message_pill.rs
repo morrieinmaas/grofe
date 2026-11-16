@@ -1,8 +1,9 @@
 //! Messages and the prompt in grofe identity's look (`message-pill`): a
-//! message is a pill centred in the status line between its left and right
-//! parts, which stay, with an icon for its level; the prompt is a pill on
-//! the status line, or with `prompt-position = "centre"` a rounded box a
-//! third down the window. tmux identity keeps tmux's full-width bar.
+//! message is a pill alone in the middle of the status line, whose own
+//! parts step aside while it shows, with an icon for its level and
+//! `message-pill-ends` for its ends; the prompt is the same kind of pill,
+//! or with `prompt-position = "centre"` a rounded box a third down the
+//! window. tmux identity keeps tmux's full-width bar.
 
 mod common;
 #[allow(dead_code)]
@@ -59,8 +60,8 @@ fn status(t: &str) -> &str {
 }
 
 #[test]
-fn an_error_is_a_pill_between_the_status_parts() {
-    let (_srv, mut h) = attached("");
+fn an_error_is_a_pill_alone_on_the_status_line() {
+    let (_srv, mut h) = attached("[message]\npill-ends = \"()\"\n");
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send("\x1b[15~");
     h.wait_until("the error pill", WAIT, |t| {
@@ -68,8 +69,10 @@ fn an_error_is_a_pill_between_the_status_parts() {
     });
     let shown = h.text();
     let row = status(&shown);
-    assert!(row.starts_with("LEFT"), "{shown}");
-    assert!(row.trim_end().ends_with("RIGHT"), "{shown}");
+    assert!(!row.contains("LEFT") && !row.contains("RIGHT"), "{shown}");
+    h.wait_until("the status line back", WAIT, |t| {
+        status(t).starts_with("LEFT")
+    });
 }
 
 #[test]
@@ -89,7 +92,7 @@ fn display_message_is_an_info_pill() {
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send("\x1b[17~");
     h.wait_until("the info pill", WAIT, |t| {
-        status(t).contains("( ℹ all saved )")
+        status(t).contains(" ℹ all saved ") && !status(t).contains('(')
     });
 }
 
@@ -109,13 +112,12 @@ fn the_prompt_is_a_pill_on_the_status_line() {
     let (_srv, mut h) = attached("");
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send(format!("{PREFIX}:"));
-    h.wait_until("the prompt pill", WAIT, |t| status(t).contains("( :"));
+    h.wait_until("the prompt pill", WAIT, |t| status(t).contains("  :"));
     h.send("abc");
-    h.wait_until("the typed text", WAIT, |t| status(t).contains("( :abc"));
+    h.wait_until("the typed text", WAIT, |t| status(t).contains("  :abc"));
     let shown = h.text();
     let row = status(&shown);
-    assert!(row.starts_with("LEFT"), "{shown}");
-    assert!(row.trim_end().ends_with("RIGHT"), "{shown}");
+    assert!(!row.contains("LEFT") && !row.contains("RIGHT"), "{shown}");
     assert_eq!(h.cursor().1, ROWS - 1);
     h.send("\x1b");
     h.wait_until("the prompt gone", WAIT, |t| !status(t).contains(":abc"));
