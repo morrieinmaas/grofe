@@ -185,19 +185,24 @@ fn main() -> ExitCode {
             if restore {
                 if let Ok(stream) = UnixStream::connect(&socket) {
                     let argv = ["list-sessions", "-F", "#{session_name}"].map(String::from);
-                    return match request(stream, &socket, &argv) {
+                    match request(stream, &socket, &argv) {
                         Ok(Reply::Ok { out, .. }) if !out.trim().is_empty() => {
-                            fail(server::restore::NOT_EMPTY)
+                            return fail(server::restore::NOT_EMPTY);
                         }
+                        // A server exiting as it was asked: none runs, so
+                        // this command starts one, as below.
+                        Err(e) if server_left(&e) && server_gone(&socket) => {}
                         // ponytail: an empty running server cannot be asked
                         // to restore (no verb for it); the restore runs
                         // only in a server this command starts.
-                        Ok(_) => fail(&format!(
-                            "a server is already running on {}: restore runs only at server start",
-                            socket.display()
-                        )),
-                        Err(e) => fail(&e),
-                    };
+                        Ok(_) => {
+                            return fail(&format!(
+                                "a server is already running on {}: restore runs only at server start",
+                                socket.display()
+                            ));
+                        }
+                        Err(e) => return fail(&e),
+                    }
                 }
                 let snapshot = paths::snapshot_path(&Env::from_process(), &socket);
                 if snapshot.exists() {
@@ -768,6 +773,11 @@ fn server_left(err: &str) -> bool {
         || (err.starts_with("reading reply: ") && err.contains("Connection reset"))
 }
 
+/// Whether no server answers on `socket` any more ([`connect`], [`no_server`]).
+fn server_gone(socket: &Path) -> bool {
+    connect(socket).is_err_and(|e| no_server(&e))
+}
+
 /// Sends `argv` as one control-mode request and exits with its status.
 fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     if let Err(e) = control_hello(socket) {
@@ -1141,6 +1151,8 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
         Ok(Reply::Ok { .. }) => {}
         Ok(Reply::Err { err, .. }) => return Err(err),
         Ok(Reply::Event(_)) => return Err("unexpected event reply".to_string()),
+        // The server exited as it was asked: as if none ran.
+        Err(e) if server_left(&e) && server_gone(socket) => return Err("no sessions".to_string()),
         Err(e) => return Err(e),
     }
     let stream = connect_attach()?;
@@ -1579,6 +1591,18 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_server_is_gone_only_when_nothing_listens() {
+        let dir = std::env::temp_dir().join(format!("grofe-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        assert!(server_gone(&sock));
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(!server_gone(&sock));
+        drop(listener);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
