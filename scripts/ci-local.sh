@@ -59,7 +59,12 @@ remove_labelled() {
   fi
 }
 
-LINUX_IMAGE=docker.io/library/ubuntu:26.04@sha256:157dc3d6e4a3e4f2c68d12df9df9ed6e808b59af6d4c3757b432b4f519916725
+# The multi-arch index's digest, not one platform's image: the engine picks
+# the host's own architecture. Pinned to the amd64 image, an Apple silicon
+# host ran it under qemu, where rustc segfaults before a test runs.
+# ponytail: arm64 there, where the hosted runner is amd64; an arch-only
+# difference shows up only on a real runner.
+LINUX_IMAGE=docker.io/library/ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db
 
 linux() {
   # Every container this run starts carries this label, so the exit trap
