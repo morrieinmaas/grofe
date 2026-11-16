@@ -479,3 +479,15 @@ fn a_late_subscriber_gets_the_current_ports_and_echo_of_every_pane() {
         Event::PaneEcho { pane, echo: true }
     );
 }
+
+#[test]
+fn the_links_go_when_the_server_exits() {
+    let srv = server();
+    run_with_agent(&srv, "/tmp/agent-one", &["new-session", "-d", "-s", "main"]);
+    let link = link(&srv, 0);
+    assert!(fs::symlink_metadata(&link).is_ok());
+    srv.cmd(&["kill-server"]).ok();
+    wait_until("the link to go with the server", WAIT, || {
+        fs::symlink_metadata(&link).is_err()
+    });
+}

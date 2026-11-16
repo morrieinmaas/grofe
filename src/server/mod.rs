@@ -336,6 +336,7 @@ impl State {
         if self.model.identity == crate::compat::Identity::Tmux {
             return;
         }
+        remote::remove_links(self);
         let Ok(meta) = fs::symlink_metadata(&self.socket) else {
             return;
         };

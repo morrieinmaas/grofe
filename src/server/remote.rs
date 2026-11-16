@@ -106,6 +106,27 @@ pub fn session_closed(state: &State, session: SessionId) {
     let _ = std::fs::remove_file(paths::agent_link(&state.socket, session.0));
 }
 
+/// The server is exiting: every agent link of this instance goes.
+pub fn remove_links(state: &State) {
+    let link = paths::agent_link(&state.socket, 0);
+    let Some(prefix) = link
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.split_once('-'))
+        .map(|(hash, _)| format!("{hash}-"))
+    else {
+        return;
+    };
+    let Ok(dir) = std::fs::read_dir(paths::agent_dir(&state.socket)) else {
+        return;
+    };
+    for entry in dir.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// The variables a new pane of `session` gets from the remote features,
 /// added last so they win: the agent link (once a client has set it) and
 /// `BROWSER`.
