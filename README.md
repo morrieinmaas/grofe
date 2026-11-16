@@ -60,8 +60,8 @@ cargo install --locked --path .
 
 ## Quickstart
 
-Running `grofe` on its own starts a session and attaches to it. Or start one
-in the background and check that it is there:
+Running `grofe` on its own attaches to your most recent session, or starts
+one when there is none. Or start one in the background and check that it is there:
 
 <!-- readme-test: begin -->
 ```sh

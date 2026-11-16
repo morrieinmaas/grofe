@@ -149,7 +149,8 @@ fn main() -> ExitCode {
             }
         }
     };
-    // Bare `grofe`, like bare `tmux`, means `new-session`.
+    // Bare `grofe`, like bare `tmux`, means `new-session` (but see
+    // `new_and_attach`: bare `grofe` reattaches when sessions exist).
     let bare = rest.is_empty();
     let rest = if bare {
         vec!["new-session".to_string()]
@@ -668,6 +669,9 @@ fn attaches(argv: &[String]) -> bool {
     )
 }
 
+/// What bare `grofe`'s request prints when it made no session.
+const REATTACH: &str = "grofe:reattach";
+
 /// `new-session` without `-d`, as tmux 3.7b: without a terminal it fails
 /// before creating anything; otherwise the session is created detached,
 /// its id read back in the same request, and the client attaches to it
@@ -678,9 +682,9 @@ fn attaches(argv: &[String]) -> bool {
 /// (the one with the latest activity) rather than the pane's; the new
 /// session's cwd is then the CLI's own, as in tmux.
 ///
-/// `bare` (`grofe` with no arguments) that starts the server makes no
-/// session when the server restored some at start: it attaches to the
-/// restored one used last, as tmux-resurrect leaves no extra session.
+/// `bare` (`grofe` with no arguments) makes no session when the server has
+/// some, including ones a server it starts restored: it attaches to the one
+/// used last, as an `attach-session` that fires `client-attached`.
 fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     if !io::stdin().is_terminal() {
         return fail("open terminal failed: not a terminal");
@@ -688,10 +692,19 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     let (socket, own_dir) = globals.resolve();
     let mut new_cmd = vec![argv[0].clone(), "-d".to_string()];
     new_cmd.extend(argv[1..].iter().cloned());
-    let mut create = if bare && UnixStream::connect(&socket).is_err() {
-        ["if-shell", "-F", "#{server_sessions}", "", "new-session -d"]
-            .map(String::from)
-            .to_vec()
+    // Bare `tmux` never gets here as `bare`: the tmux front end rewrites an
+    // empty argv to `new-session`, as tmux does.
+    let mut create = if bare {
+        let reattach = format!("display-message -p {REATTACH}");
+        [
+            "if-shell",
+            "-F",
+            "#{server_sessions}",
+            &reattach,
+            "new-session -d",
+        ]
+        .map(String::from)
+        .to_vec()
     } else {
         new_cmd.clone()
     };
@@ -700,13 +713,16 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
         Ok(h) => h,
         Err(e) => return fail(&e),
     };
-    let id = match connect_or_start(&socket, own_dir, true)
+    let (id, created) = match connect_or_start(&socket, own_dir, true)
         .and_then(|stream| request_with(stream, &hello, &create))
     {
         // The id is the last line; `-P`'s output comes before it.
         // ponytail: tmux 3.7b shows `-P`'s output in view mode over the new
         // pane (recorded); grofe has no view mode and drops it.
-        Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
+        Ok(Reply::Ok { out, .. }) => (
+            out.lines().last().unwrap_or_default().trim().to_string(),
+            !(bare && out.lines().any(|l| l.trim() == REATTACH)),
+        ),
         Ok(Reply::Err { err, .. }) => return fail(&err),
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),
@@ -716,7 +732,7 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&new_cmd) {
         argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
     }
-    match attach_to(&socket, &argv, true) {
+    match attach_to(&socket, &argv, created) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
