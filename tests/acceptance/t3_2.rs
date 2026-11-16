@@ -10,7 +10,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 
 use crate::harness::{Harness, require_tool};
 
@@ -135,12 +135,12 @@ fn a_pane_that_asked_for_the_mouse_gets_it_encoded_as_asked() {
         let left: u16 = pane_var(&srv, &right, "#{pane_left}")
             .parse()
             .expect("pane_left");
-        wait_until(|| srv.capture(&right).contains("ready"), WAIT)
+        try_wait_until(|| srv.capture(&right).contains("ready"), WAIT)
             .unwrap_or_else(|e| panic!("{modes}: the fake TUI never started: {e}"));
         // Pane cell (5, 4), 1-based (6, 5) on the wire.
         a.send(sgr(WHEEL_UP, left + 6, 5, false));
         a.send("\r");
-        wait_until(|| srv.capture(&right).contains(want), WAIT)
+        try_wait_until(|| srv.capture(&right).contains(want), WAIT)
             .unwrap_or_else(|e| panic!("{modes}: want {want:?}: {e}\n{}", srv.capture(&right)));
         assert_eq!(indicator(&a.text()), None);
     }
@@ -160,7 +160,7 @@ fn a_click_focuses_the_pane() {
         + 3;
     a.send(sgr(0, x, 3, false));
     a.send(sgr(0, x, 3, true));
-    wait_until(
+    try_wait_until(
         || pane_var(&srv, &right, "#{pane_active}") == "1",
         Duration::from_secs(1),
     )
@@ -232,23 +232,23 @@ fn a_click_on_a_cropped_client_maps_through_the_viewport() {
     // The small client first; the large one attaching last owns the size.
     let mut small = attach(&srv, 40, 12);
     let _large = attach(&srv, 80, 24);
-    wait_until(|| pane_var(&srv, &left, "#{pane_width}") == "59", WAIT)
+    try_wait_until(|| pane_var(&srv, &left, "#{pane_width}") == "59", WAIT)
         .unwrap_or_else(|e| panic!("left pane width: {e}"));
     assert_eq!(pane_var(&srv, &right, "#{pane_left}"), "60");
 
     // The right pane's cursor, at window column 79, moves the small
     // client's viewport to x = 40; the left pane's, at 58, keeps it there.
-    wait_until(|| small.cursor() == (39, 4), WAIT)
+    try_wait_until(|| small.cursor() == (39, 4), WAIT)
         .unwrap_or_else(|e| panic!("viewport never followed: {e}, {:?}", small.cursor()));
     srv.cmd(&["select-pane", "-t", &left]).expect("select left");
-    wait_until(|| small.cursor() == (18, 4), WAIT)
+    try_wait_until(|| small.cursor() == (18, 4), WAIT)
         .unwrap_or_else(|e| panic!("left cursor: {e}, {:?}", small.cursor()));
 
     // Client column 30 is window column 70: the right pane. Unmapped, it
     // would be column 30, the left pane.
     small.send(sgr(0, 31, 3, false));
     small.send(sgr(0, 31, 3, true));
-    wait_until(
+    try_wait_until(
         || pane_var(&srv, &right, "#{pane_active}") == "1",
         Duration::from_secs(1),
     )

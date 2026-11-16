@@ -21,6 +21,7 @@
 //! event, so `mouse_status_range` and a bare `=` target (M36-R3) work in
 //! it, a shell-form branch too.
 
+use crate::cmd::NoVars;
 use crate::cmd::{
     self, Condition, FormatVars, If, Inner, LoopItem, LoopKind, LoopSort, NameKind, Resolve, Target,
 };
@@ -89,7 +90,6 @@ fn shell_form(
     let jobs = state.jobs.clone();
     let shell_jobs = state.shell_jobs.clone();
     let event = state.mouse.current().cloned();
-    let key = state.event_key.clone();
     // A binding's client types on behind the condition, as tmux's
     // per-client queue waits: its input is held until the branch has run.
     let held = ctx
@@ -105,11 +105,9 @@ fn shell_form(
             .is_ok();
         let job: Job = Box::new(move |state: &mut State| {
             let branch = if yes { Some(then) } else { otherwise };
-            let saved = std::mem::replace(&mut state.event_key, key);
             let result = MouseState::with_current(state, event, |state| {
                 branch.map_or(Ok(String::new()), |b| run_branch(state, &ctx, &b))
             });
-            state.event_key = saved;
             let inner = state.deferred_reply.take();
             state.events.flush(&state.model);
             clients::changed(state);
@@ -237,14 +235,6 @@ impl FormatVars for MouseVars<'_> {
 
     fn reexpand(&self, text: &str) -> String {
         self.inner.vars().reexpand(text)
-    }
-}
-
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 

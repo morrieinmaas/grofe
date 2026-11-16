@@ -13,11 +13,12 @@
 //! (`mode-keys`, `set-clipboard`, `copy-command`, `word-separators`,
 //! `wrap-search`, `buffer-limit`) are in `mod.rs`'s one option-name table.
 
-use super::{FlagMark, GrofeTarget, MappingKind, Row};
+use super::{FlagMark, GrofeTarget, Row};
 
 const SEMANTIC: &[FlagMark] = &[FlagMark::Semantic];
 const SEMANTIC_2: &[FlagMark] = &[FlagMark::Semantic, FlagMark::Semantic];
 
+#[cfg_attr(not(test), allow(unused_variables))]
 const fn pass(
     tmux_form: &'static str,
     verb: &'static str,
@@ -26,10 +27,11 @@ const fn pass(
 ) -> Row {
     Row {
         tmux_form,
-        kind: MappingKind::PassThrough,
         target: GrofeTarget::Native(verb),
+        #[cfg(test)]
         flags,
         milestone: "M5",
+        #[cfg(test)]
         golden_id,
     }
 }
@@ -89,6 +91,7 @@ mod tests {
             env: Vec::new(),
             client: None,
             dialect: Dialect::Tmux,
+            request: Default::default(),
         };
         let argv: Vec<String> = words.iter().map(|w| w.to_string()).collect();
         dispatch_command(&argv, &ctx).map_err(|e| e.0)
@@ -144,7 +147,7 @@ mod tests {
         }
     }
 
-    /// No M5 refusal is left: every M5 row maps or refuses for good.
+    /// No copy refusal is left to lift: every row maps or refuses for good.
     #[test]
     fn no_copy_form_waits_for_m5_any_more() {
         for words in [

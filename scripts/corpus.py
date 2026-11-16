@@ -1724,7 +1724,7 @@ def collect(corpus: dict[str, list[str]]):
                 ):
                     opt = re.sub(r"\[(\d*|<[^<>]*>)\]$", "[N]", p.positionals[0])
                     if opt.startswith("@"):
-                        user_opts[re.sub(r"^(@[a-z]+[-_]?).*$", r"\1*", opt)] += 1
+                        user_opts[re.sub(r"^(@[a-z]+[-_]?).*$", r"\1*", opt).replace("canopy", "private")] += 1
                     elif not opt.startswith("<"):
                         options[opt] += 1
                 if p.name in ("set-hook", "show-hooks") and p.positionals and not p.positionals[0].startswith("<"):
@@ -1850,7 +1850,8 @@ def generate_section() -> str:
         unnamed = ", ".join(f"`{t}`" for t in unnamed_flags(form, text)) if in_scope else ""
         named = ("yes" if verb_named(verb, text) else "**no**") if in_scope and verb not in ("tmux", "(alias)") else ""
         files = " ".join(f"{abbrev[k]}{v}" for k, v in sorted(e["files"].items()))
-        srcs = sorted(e["sources"])
+        # the private repositories are named only by kind: the page is published
+        srcs = sorted({"private" if re.match(r"(canopy|athome):", x) else x for x in e["sources"]})
         shown = ", ".join(s.replace("|", "\\|") for s in srcs[:3]) + (f" (+{len(srcs) - 3})" if len(srcs) > 3 else "")
         out.append(
             f"| `{form}` | {e['lines']} | {e['stored']} | {files} | {row or '**UNMAPPED**'} | {named} | {unnamed} | {shown} |"

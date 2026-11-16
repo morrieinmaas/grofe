@@ -332,14 +332,16 @@ fn a_malformed_requires_is_an_error() {
 #[test]
 fn requires_operators_compare_with_this_version() {
     let s = Setup::new();
+    let v = env!("CARGO_PKG_VERSION");
+    let mm = v.rsplit_once('.').map_or(v, |(head, _)| head);
     for (req, met) in [
-        ("grofe >= 0.1", true),
-        ("grofe > 0.1.0", false),
-        ("grofe <= 0.1", true),
-        ("grofe < 0.1", false),
-        ("grofe = 0.1.0", true),
-        ("grofe=0.1", true),
-        ("grofe < 1.0", true),
+        (format!("grofe >= {mm}"), true),
+        (format!("grofe > {v}"), false),
+        (format!("grofe <= {mm}"), true),
+        (format!("grofe < {mm}"), false),
+        (format!("grofe = {v}"), true),
+        (format!("grofe={mm}"), true),
+        ("grofe < 99.0".to_string(), true),
     ] {
         s.write(
             "config.toml",
@@ -568,7 +570,13 @@ fn a_lua_file_is_not_a_config_format_and_other_extensions_fail() {
         "{}",
         joined(&errs)
     );
-    assert!(!joined(&errs).contains("M6"), "{}", joined(&errs));
+    // Only key and message: the file path is a random temp dir that can contain "M6".
+    assert!(
+        errs.iter()
+            .all(|e| !e.key.contains("M6") && !e.message.contains("M6")),
+        "{}",
+        joined(&errs)
+    );
     let conf = s.write("x.conf", "set -g mouse on\n");
     let errs = errors(config::load_with_file(&s.env, &[conf]));
     assert_eq!(errs.len(), 1);
@@ -831,4 +839,38 @@ fn load_one_reports_errors_and_a_missing_file() {
     let gone = s.dir().join("gone.toml");
     let errs = errors(config::load_one(&gone, &s.env));
     assert_eq!(errs[0].file, gone);
+}
+
+#[test]
+fn the_message_pill_and_prompt_position_are_typed() {
+    let s = Setup::new();
+    s.write(
+        "config.toml",
+        "prompt-position = \"centre\"\n[message]\npill = false\n",
+    );
+    let r = resolved(s.load());
+    let tmux: std::collections::BTreeMap<&str, &str> = r.tmux_options().collect();
+    assert_eq!(tmux.get("prompt-position"), Some(&"centre"));
+    assert_eq!(tmux.get("message-pill"), Some(&"off"));
+
+    // The American spelling is the same setting, not a typo.
+    let s = Setup::new();
+    s.write("config.toml", "prompt-position = \"center\"\n");
+    let r = resolved(s.load());
+    let tmux: std::collections::BTreeMap<&str, &str> = r.tmux_options().collect();
+    assert_eq!(tmux.get("prompt-position"), Some(&"center"));
+
+    let s = Setup::new();
+    s.write(
+        "config.toml",
+        "prompt-position = \"middle\"\n[message]\npill = \"yes\"\npil = true\n",
+    );
+    let errs = errors(s.load());
+    let keys: Vec<&str> = errs.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["prompt-position", "message.pill", "message.pil"],
+        "{}",
+        joined(&errs)
+    );
 }

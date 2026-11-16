@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 
 use crate::harness::Harness;
 use crate::plugin_rig::{
-    PREFIX, Rig, WAIT, private_tmp, read_golden, recording_tmux, wait_until, write_golden,
+    PREFIX, Rig, WAIT, private_tmp, read_golden, recording_tmux, try_wait_until, write_golden,
 };
 
 const TASK: &str = "tp9";
@@ -213,7 +213,7 @@ fn scripts(rig: &Rig) -> String {
 
 /// Waits until the server has installed its hooks and gone quiet.
 fn wait_hooks(os: &Opensessions) {
-    let up = wait_until(
+    let up = try_wait_until(
         || {
             os.rig
                 .try_t(&["show-hooks", "-g"])
@@ -235,7 +235,7 @@ fn open_sidebar(os: &Opensessions) -> Harness {
     rig.start("main");
     let mut a = rig.attach("main");
     a.send(format!("{PREFIX}ot"));
-    let open = wait_until(|| sidebar(rig, "main:0").is_some(), WAIT);
+    let open = try_wait_until(|| sidebar(rig, "main:0").is_some(), WAIT);
     assert!(
         open.is_ok(),
         "the sidebar never opened; panes:\n{}\ncurl:\n{}",
@@ -256,7 +256,10 @@ fn hook_calls(os: &Opensessions) -> String {
     let rig = &os.rig;
     rig.start("main");
     let mut a = rig.attach("main");
-    rig.t(&[
+    // The script exits with its last command's status: a `curl -m 0.2`
+    // POST that times out on a loaded machine, under tmux as here. The
+    // server it starts first is what matters, and `wait_hooks` checks it.
+    let _ = rig.try_t(&[
         "run-shell",
         &format!("sh '{}/ensure-sidebar.sh'", scripts(rig)),
     ]);

@@ -1,6 +1,6 @@
 //! Tests for inner-`TERM` resolution (D7, T0.4, T3.6): the terminfo-dir
 //! lookup in isolation. See the module doc on `grofe::term` and
-//! docs/spike-notes.md's "TERM decision" and "T3.6 re-run" sections; the
+//! docs/archive/spike-notes.md's "TERM decision" and "T3.6 re-run" sections; the
 //! end-to-end evidence for `tmux-256color` is `tests/acceptance/t3_6.rs`.
 
 use std::fs;

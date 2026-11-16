@@ -2,30 +2,31 @@
 //! may be combined (`-dP`), a flag's value may be attached (`-tfoo`) or a
 //! separate token (`-t foo`), and `--` ends flag parsing. `set`/`show` are
 //! recognised as aliases for `set-option`/`show-options`; a handful of
-//! other well-known tmux short names are recognised too.
+//! other well-known tmux short names are recognised too. Each verb is a row
+//! of the command table (`table.rs`); [`parse`] scans its flags, checks its
+//! arity and hands the result to the row's builder.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Deref;
 
 use super::keys;
+use super::table::{self, Row};
 use super::target::parse_target;
 use super::{
-    AttachSession, BindKey, BreakPane, CapturePane, ChooseBuffer, ChooseClient, ChooseOpts,
-    ChooseTree, ClearHistory, ClockMode, Command, CommandPrompt, Condition, ConfirmBefore,
-    CopyMode, CustomizeMode, DeleteBuffer, DetachClient, DisplayMenu, DisplayMessage, DisplayPanes,
-    DisplayPopup, DragPane, FindWindow, FloatPane, HasSession, If, JoinPane, KillPane, KillServer,
-    KillSession, KillWindow, LastPane, LinkWindow, ListBuffers, ListClients, ListKeys, ListPanes,
-    ListPlugins, ListSessions, ListWindows, LoadBuffer, Lock, LockScope, Mark, MenuEntry,
-    MoveWindow, NewPane, NewSession, NewWindow, NextLayout, Offset, OptionScope, Pan,
+    AgentCmd, AgentNew, AgentReport, AttachSession, BindKey, BreakPane, CapturePane, ChooseClient,
+    ChooseOpts, ChooseTree, ClearHistory, Command, CommandPrompt, Condition, ConfirmBefore,
+    DetachClient, DisplayMenu, DisplayMessage, DisplayPanes, DisplayPopup, DragPane, FindWindow,
+    FloatPane, If, JoinPane, LinkWindow, ListClients, ListKeys, Mark, MenuEntry, MoveWindow,
+    NewPane, NewScratchpad, NewSession, NewWindow, NotifyCmd, Offset, OptionScope, Pan,
     PaneSetResume, PaneSetup, ParseError, PasteBuffer, PipePane, PlacePane, PluginRestart,
-    PromptHistory, RebootCheck, RefreshClient, RegisterSource, Reload, Rename, ResizeAction,
-    ResizePane, ResizeWindow, RespawnPane, RotateWindow, RunShell, SaveBuffer, SelectLayout,
-    SelectPane, SelectWindow, SendKeys, SendKeysItem, SendPrefix, ServerAccess, SetBuffer,
-    SetEnvironment, SetHook, SetOption, ShowBuffer, ShowEnvironment, ShowHooks, ShowMessages,
-    ShowOptions, SortFlags, SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane,
-    SwapWindow, SwitchClient, Target, UnbindKey, UnfloatPane, UnlinkWindow, WaitFor, WindowMove,
-    WindowStep,
+    RebootCheck, RefreshClient, RegisterSource, Rename, ResizeAction, ResizePane, ResizeWindow,
+    RespawnPane, RotateWindow, RunShell, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SendKeysItem, SendPrefix, ServerAccess, SetBuffer, SetEnvironment, SetHook, SetOption,
+    ShowEnvironment, ShowHooks, ShowMessages, ShowOptions, ShowScratchpad, SidebarOp, SortFlags,
+    SourceFile, SplitWindow, Subscribe, SuspendClient, SwapPane, SwapWindow, SwitchClient, Target,
+    UnbindKey, UnfloatPane, UnlinkWindow, WaitFor, WindowMove, WindowStep,
 };
-use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, SplitSize, WINDOW_MAXIMUM};
+use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, PaneId, SplitSize, WINDOW_MAXIMUM};
 
 /// Whether a short/long flag takes a value, and if so whether it's
 /// required.
@@ -37,18 +38,8 @@ enum FlagKind {
     Value,
 }
 
-struct FlagTable {
-    short: &'static [(char, FlagKind)],
-    long: &'static [(&'static str, FlagKind)],
-}
-
-const NO_FLAGS: FlagTable = FlagTable {
-    short: &[],
-    long: &[],
-};
-
 #[derive(Default)]
-struct ParsedFlags {
+pub(super) struct ParsedFlags {
     present: BTreeSet<char>,
     /// How many times each bool flag was given (`-EE`).
     counts: BTreeMap<char, u32>,
@@ -59,22 +50,31 @@ struct ParsedFlags {
     positionals: Vec<String>,
 }
 
-fn find_short(table: &FlagTable, c: char) -> Option<FlagKind> {
-    for &(fc, kind) in table.short {
-        if fc == c {
-            return Some(kind);
-        }
-    }
-    None
+/// What a row's builder reads: the verb, its argv and the scanned flags
+/// (`Deref`s to them).
+pub(super) struct Args<'a> {
+    pub name: &'static str,
+    pub argv: &'a [String],
+    flags: ParsedFlags,
 }
 
-fn find_long(table: &FlagTable, name: &str) -> Option<(&'static str, FlagKind)> {
-    for &(n, kind) in table.long {
-        if n == name {
-            return Some((n, kind));
-        }
+impl Deref for Args<'_> {
+    type Target = ParsedFlags;
+
+    fn deref(&self) -> &ParsedFlags {
+        &self.flags
     }
-    None
+}
+
+/// Whether `spec` (`"t:aCg"`: a `:` after a letter means it takes a
+/// value) has the short flag `c`, and of which kind.
+fn find_short(spec: &str, c: char) -> Option<FlagKind> {
+    let at = spec.find(c).filter(|_| c != ':')?;
+    Some(if spec[at + c.len_utf8()..].starts_with(':') {
+        FlagKind::Value
+    } else {
+        FlagKind::Bool
+    })
 }
 
 /// Splits `argv` into recognised flags (per `table`) and trailing
@@ -85,7 +85,12 @@ fn find_long(table: &FlagTable, name: &str) -> Option<(&'static str, FlagKind)> 
 ///
 /// `cmd_name` is threaded through only to word flag errors like tmux's
 /// own CLI (`command <cmd_name>: unknown flag -z`).
-fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<ParsedFlags, ParseError> {
+fn scan(
+    argv: &[String],
+    spec: &str,
+    long: &[&'static str],
+    cmd_name: &str,
+) -> Result<ParsedFlags, ParseError> {
     let mut flags = ParsedFlags::default();
     let mut i = 0;
     let mut flags_done = false;
@@ -102,13 +107,13 @@ fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<Parsed
             continue;
         }
         if let Some(name) = tok.strip_prefix("--") {
-            match find_long(table, name) {
-                Some((canonical, FlagKind::Bool)) => {
+            // No long flag takes a value; if one does, wire attached/separate
+            // value handling in here.
+            match long.iter().find(|n| **n == name) {
+                Some(canonical) => {
                     flags.long_present.insert(canonical);
                 }
-                // No long flag currently takes a value; if one is
-                // added, wire attached/separate value handling in here.
-                _ => return Err(ParseError::UnknownLongFlag(cmd_name.to_string())),
+                None => return Err(ParseError::UnknownLongFlag(cmd_name.to_string())),
             }
             i += 1;
             continue;
@@ -118,7 +123,7 @@ fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<Parsed
             let mut ci = 0;
             while ci < chars.len() {
                 let c = chars[ci];
-                match find_short(table, c) {
+                match find_short(spec, c) {
                     None => return Err(ParseError::UnknownFlag(cmd_name.to_string(), c)),
                     Some(FlagKind::Bool) => {
                         flags.present.insert(c);
@@ -155,11 +160,43 @@ fn tokenize(argv: &[String], table: &FlagTable, cmd_name: &str) -> Result<Parsed
     Ok(flags)
 }
 
+impl ParsedFlags {
+    /// Whether the bool flag `c` was given.
+    pub(super) fn on(&self, c: char) -> bool {
+        self.present.contains(&c)
+    }
+
+    /// The value of the value flag `c`.
+    pub(super) fn val(&self, c: char) -> Option<String> {
+        self.values.get(&c).cloned()
+    }
+
+    /// The target of `c`, the current one when it is not given.
+    pub(super) fn target(&self, c: char) -> Result<Target, ParseError> {
+        target_or_current(&self.values, c)
+    }
+
+    /// The target of `c`, when it is given.
+    pub(super) fn target_opt(&self, c: char) -> Result<Option<Target>, ParseError> {
+        target_if_given(&self.values, c)
+    }
+
+    /// The first positional.
+    pub(super) fn first(&self) -> Option<String> {
+        self.positionals.first().cloned()
+    }
+
+    /// Every positional, when there is one: a trailing command.
+    pub(super) fn command(&self) -> Option<Vec<String>> {
+        (!self.positionals.is_empty()).then(|| self.positionals.clone())
+    }
+}
+
 /// The `-O order` and `-r` of a listing command.
-fn sort_flags(flags: &ParsedFlags) -> SortFlags {
+pub(super) fn sort_flags(flags: &ParsedFlags) -> SortFlags {
     SortFlags {
-        order: flags.values.get(&'O').cloned(),
-        reversed: flags.present.contains(&'r'),
+        order: flags.val('O'),
+        reversed: flags.on('r'),
     }
 }
 
@@ -220,36 +257,7 @@ fn env_values(flags: &ParsedFlags) -> Vec<(String, String)> {
         .collect()
 }
 
-const NEW_SESSION_SHORT: &[(char, FlagKind)] = &[
-    ('A', FlagKind::Bool),
-    ('d', FlagKind::Bool),
-    ('P', FlagKind::Bool),
-    ('F', FlagKind::Value),
-    ('n', FlagKind::Value),
-    ('s', FlagKind::Value),
-    ('c', FlagKind::Value),
-    ('x', FlagKind::Value),
-    ('y', FlagKind::Value),
-    ('n', FlagKind::Value),
-    ('P', FlagKind::Bool),
-    ('F', FlagKind::Value),
-    ('t', FlagKind::Value),
-    ('e', FlagKind::Value),
-    ('D', FlagKind::Bool),
-    ('X', FlagKind::Bool),
-    ('E', FlagKind::Bool),
-    ('f', FlagKind::Value),
-];
-
-fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: NEW_SESSION_SHORT,
-            long: &[],
-        },
-        "new-session",
-    )?;
+pub(super) fn parse_new_session(flags: &Args) -> Result<Command, ParseError> {
     let width = flags
         .values
         .get(&'x')
@@ -260,315 +268,92 @@ fn parse_new_session(argv: &[String]) -> Result<Command, ParseError> {
         .get(&'y')
         .map(|s| parse_window_size(s, "height"))
         .transpose()?;
-    let env = env_values(&flags);
+    let env = env_values(flags);
     Ok(Command::NewSession(NewSession {
-        detached: flags.present.contains(&'d'),
-        name: flags.values.get(&'s').cloned(),
-        cwd: flags.values.get(&'c').cloned(),
+        detached: flags.on('d'),
+        name: flags.val('s'),
+        cwd: flags.val('c'),
         width,
         height,
-        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
-        attach: flags.present.contains(&'A'),
-        print: flags.present.contains(&'P'),
-        format: flags.values.get(&'F').cloned(),
-        window_name: flags.values.get(&'n').cloned(),
-        group: flags.values.get(&'t').cloned(),
+        command: flags.command(),
+        attach: flags.on('A'),
+        print: flags.on('P'),
+        format: flags.val('F'),
+        window_name: flags.val('n'),
+        group: flags.val('t'),
         env,
-        detach_others: flags.present.contains(&'D') || flags.present.contains(&'X'),
-        kill_parent: flags.present.contains(&'X'),
-        no_env: flags.present.contains(&'E'),
-        flags: flags.values.get(&'f').cloned(),
+        detach_others: flags.on('D') || flags.on('X'),
+        kill_parent: flags.on('X'),
+        no_env: flags.on('E'),
+        flags: flags.val('f'),
     }))
 }
 
-const TARGET_ONLY_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value)];
-
-fn parse_target_only(argv: &[String], cmd_name: &str) -> Result<Target, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: TARGET_ONLY_SHORT,
-            long: &[],
-        },
-        cmd_name,
-    )?;
-    no_extra_positionals(&flags, cmd_name, 0)?;
-    target_or_current(&flags.values, 't')
-}
-
-fn parse_kill_session(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('a', FlagKind::Bool),
-        ('C', FlagKind::Bool),
-        ('g', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "kill-session")?;
-    no_extra_positionals(&flags, "kill-session", 0)?;
-    Ok(Command::KillSession(KillSession {
-        target: target_or_current(&flags.values, 't')?,
-        others: flags.present.contains(&'a'),
-        clear_alerts: flags.present.contains(&'C'),
-        group: flags.present.contains(&'g'),
-    }))
-}
-
-fn parse_has_session(argv: &[String]) -> Result<Command, ParseError> {
-    Ok(Command::HasSession(HasSession {
-        target: parse_target_only(argv, "has-session")?,
-    }))
-}
-
-fn parse_kill_window(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: &[('t', FlagKind::Value), ('a', FlagKind::Bool)],
-            long: &[],
-        },
-        "kill-window",
-    )?;
-    no_extra_positionals(&flags, "kill-window", 0)?;
-    Ok(Command::KillWindow(KillWindow {
-        target: target_or_current(&flags.values, 't')?,
-        all: flags.present.contains(&'a'),
-    }))
-}
-
-fn parse_select_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('l', FlagKind::Bool),
-        ('n', FlagKind::Bool),
-        ('p', FlagKind::Bool),
-        ('T', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "select-window")?;
-    no_extra_positionals(&flags, "select-window", 0)?;
+pub(super) fn select_window(f: &Args) -> Result<Command, ParseError> {
     // tmux tries next, then previous, then last.
-    let step = if flags.present.contains(&'n') {
+    let step = if f.on('n') {
         Some(WindowMove::Next)
-    } else if flags.present.contains(&'p') {
+    } else if f.on('p') {
         Some(WindowMove::Previous)
-    } else if flags.present.contains(&'l') {
+    } else if f.on('l') {
         Some(WindowMove::Last)
     } else {
         None
     };
     Ok(Command::SelectWindow(SelectWindow {
-        target: target_or_current(&flags.values, 't')?,
+        target: f.target('t')?,
         step,
-        toggle: flags.present.contains(&'T'),
+        toggle: f.on('T'),
     }))
 }
 
 /// `-e` (input on) and `-d` (input off): `-e` wins, as in tmux.
-fn input_flag(flags: &ParsedFlags) -> Option<bool> {
-    if flags.present.contains(&'e') {
+pub(super) fn input_flag(flags: &ParsedFlags) -> Option<bool> {
+    if flags.on('e') {
         Some(true)
-    } else if flags.present.contains(&'d') {
+    } else if flags.on('d') {
         Some(false)
     } else {
         None
     }
 }
 
-const LAST_PANE_SHORT: &[(char, FlagKind)] = &[
-    ('t', FlagKind::Value),
-    ('Z', FlagKind::Bool),
-    ('d', FlagKind::Bool),
-    ('e', FlagKind::Bool),
-];
-
-fn parse_last_pane(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, LAST_PANE_SHORT, "last-pane")?;
-    no_extra_positionals(&flags, "last-pane", 0)?;
-    Ok(Command::LastPane(LastPane {
-        target: target_or_current(&flags.values, 't')?,
-        keep_zoom: flags.present.contains(&'Z'),
-        input: input_flag(&flags),
-    }))
-}
-
-fn parse_kill_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('a', FlagKind::Bool)];
-    let flags = flags_for(argv, SHORT, "kill-pane")?;
-    no_extra_positionals(&flags, "kill-pane", 0)?;
-    Ok(Command::KillPane(KillPane {
-        target: target_or_current(&flags.values, 't')?,
-        others: flags.present.contains(&'a'),
-    }))
-}
-
-const LIST_SESSIONS_SHORT: &[(char, FlagKind)] = &[
-    ('F', FlagKind::Value),
-    ('f', FlagKind::Value),
-    ('O', FlagKind::Value),
-    ('r', FlagKind::Bool),
-];
-
-fn parse_list_sessions(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: LIST_SESSIONS_SHORT,
-            long: &[],
-        },
-        "list-sessions",
-    )?;
-    no_extra_positionals(&flags, "list-sessions", 0)?;
-    Ok(Command::ListSessions(ListSessions {
-        format: flags.values.get(&'F').cloned(),
-        filter: flags.values.get(&'f').cloned(),
-        sort: sort_flags(&flags),
-    }))
-}
-
-const LIST_WINDOWS_SHORT: &[(char, FlagKind)] = &[
-    ('t', FlagKind::Value),
-    ('F', FlagKind::Value),
-    ('a', FlagKind::Bool),
-    ('f', FlagKind::Value),
-    ('O', FlagKind::Value),
-    ('r', FlagKind::Bool),
-];
-
-fn parse_list_windows(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: LIST_WINDOWS_SHORT,
-            long: &[],
-        },
-        "list-windows",
-    )?;
-    no_extra_positionals(&flags, "list-windows", 0)?;
-    Ok(Command::ListWindows(ListWindows {
-        target: target_or_current(&flags.values, 't')?,
-        format: flags.values.get(&'F').cloned(),
-        all: flags.present.contains(&'a'),
-        filter: flags.values.get(&'f').cloned(),
-        sort: sort_flags(&flags),
-    }))
-}
-
-const LIST_PANES_SHORT: &[(char, FlagKind)] = &[
-    ('t', FlagKind::Value),
-    ('F', FlagKind::Value),
-    ('a', FlagKind::Bool),
-    ('s', FlagKind::Bool),
-    ('f', FlagKind::Value),
-    ('O', FlagKind::Value),
-    ('r', FlagKind::Bool),
-];
-
-fn parse_list_panes(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: LIST_PANES_SHORT,
-            long: &[],
-        },
-        "list-panes",
-    )?;
-    no_extra_positionals(&flags, "list-panes", 0)?;
-    Ok(Command::ListPanes(ListPanes {
-        target: target_or_current(&flags.values, 't')?,
-        format: flags.values.get(&'F').cloned(),
-        all: flags.present.contains(&'a'),
-        session: flags.present.contains(&'s'),
-        filter: flags.values.get(&'f').cloned(),
-        sort: sort_flags(&flags),
-    }))
-}
-
-const NEW_WINDOW_SHORT: &[(char, FlagKind)] = &[
-    ('d', FlagKind::Bool),
-    ('a', FlagKind::Bool),
-    ('P', FlagKind::Bool),
-    ('F', FlagKind::Value),
-    ('t', FlagKind::Value),
-    ('n', FlagKind::Value),
-    ('c', FlagKind::Value),
-    ('e', FlagKind::Value),
-    ('b', FlagKind::Bool),
-    ('k', FlagKind::Bool),
-    ('S', FlagKind::Bool),
-];
-
-fn parse_new_window(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: NEW_WINDOW_SHORT,
-            long: &[],
-        },
-        "new-window",
-    )?;
-    let env = env_values(&flags);
+pub(super) fn parse_new_window(flags: &Args) -> Result<Command, ParseError> {
+    let env = env_values(flags);
     Ok(Command::NewWindow(NewWindow {
-        detached: flags.present.contains(&'d'),
-        target: target_or_current(&flags.values, 't')?,
-        name: flags.values.get(&'n').cloned(),
-        cwd: flags.values.get(&'c').cloned(),
-        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
-        after: flags.present.contains(&'a'),
-        print: flags.present.contains(&'P'),
-        format: flags.values.get(&'F').cloned(),
+        detached: flags.on('d'),
+        target: flags.target('t')?,
+        name: flags.val('n'),
+        cwd: flags.val('c'),
+        command: flags.command(),
+        after: flags.on('a'),
+        print: flags.on('P'),
+        format: flags.val('F'),
         env,
-        before: flags.present.contains(&'b'),
-        kill: flags.present.contains(&'k'),
-        select_existing: flags.present.contains(&'S'),
+        before: flags.on('b'),
+        kill: flags.on('k'),
+        select_existing: flags.on('S'),
     }))
 }
-
-const SPLIT_WINDOW_SHORT: &[(char, FlagKind)] = &[
-    ('h', FlagKind::Bool),
-    ('b', FlagKind::Bool),
-    ('f', FlagKind::Bool),
-    ('d', FlagKind::Bool),
-    ('P', FlagKind::Bool),
-    ('F', FlagKind::Value),
-    ('v', FlagKind::Bool),
-    ('c', FlagKind::Value),
-    ('p', FlagKind::Value),
-    ('l', FlagKind::Value),
-    ('t', FlagKind::Value),
-    ('e', FlagKind::Value),
-    ('Z', FlagKind::Bool),
-    ('s', FlagKind::Value),
-    ('S', FlagKind::Value),
-    ('R', FlagKind::Value),
-    ('k', FlagKind::Bool),
-    ('m', FlagKind::Value),
-];
 
 /// The styles and the staying of a new pane (`-s -S -R -k -m`).
 fn pane_setup(flags: &ParsedFlags) -> PaneSetup {
     PaneSetup {
-        style: flags.values.get(&'s').cloned(),
-        active_border: flags.values.get(&'S').cloned(),
-        inactive_border: flags.values.get(&'R').cloned(),
-        keep: flags.present.contains(&'k') || flags.present.contains(&'m'),
-        message: flags.values.get(&'m').cloned(),
+        style: flags.val('s'),
+        active_border: flags.val('S'),
+        inactive_border: flags.val('R'),
+        keep: flags.on('k') || flags.on('m'),
+        message: flags.val('m'),
     }
 }
 
-fn parse_split_window(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: SPLIT_WINDOW_SHORT,
-            long: &[],
-        },
-        "split-window",
-    )?;
+pub(super) fn parse_split_window(flags: &Args) -> Result<Command, ParseError> {
     split_window_of(flags).map(Command::SplitWindow)
 }
 
 /// The `split-window` the parsed flags mean (`new-pane -L` shares them).
-fn split_window_of(flags: ParsedFlags) -> Result<SplitWindow, ParseError> {
-    let dir = match (flags.present.contains(&'h'), flags.present.contains(&'v')) {
+fn split_window_of(flags: &ParsedFlags) -> Result<SplitWindow, ParseError> {
+    let dir = match (flags.on('h'), flags.on('v')) {
         (true, true) => {
             return Err(ParseError::Other(
                 "only one of -h or -v allowed".to_string(),
@@ -610,49 +395,25 @@ fn split_window_of(flags: ParsedFlags) -> Result<SplitWindow, ParseError> {
         (None, Some(c), _) => SplitSize::Cells(c),
         (None, None, None) => SplitSize::Half,
     };
-    let env = env_values(&flags);
+    let env = env_values(flags);
     Ok(SplitWindow {
-        setup: pane_setup(&flags),
+        setup: pane_setup(flags),
         dir,
-        cwd: flags.values.get(&'c').cloned(),
+        cwd: flags.val('c'),
         size,
-        target: target_or_current(&flags.values, 't')?,
-        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
-        before: flags.present.contains(&'b'),
-        full: flags.present.contains(&'f'),
-        detached: flags.present.contains(&'d'),
-        print: flags.present.contains(&'P'),
-        format: flags.values.get(&'F').cloned(),
+        target: flags.target('t')?,
+        command: flags.command(),
+        before: flags.on('b'),
+        full: flags.on('f'),
+        detached: flags.on('d'),
+        print: flags.on('P'),
+        format: flags.val('F'),
         env,
-        zoom: flags.present.contains(&'Z'),
+        zoom: flags.on('Z'),
     })
 }
 
-const SELECT_PANE_SHORT: &[(char, FlagKind)] = &[
-    ('T', FlagKind::Value),
-    ('L', FlagKind::Bool),
-    ('l', FlagKind::Bool),
-    ('Z', FlagKind::Bool),
-    ('R', FlagKind::Bool),
-    ('U', FlagKind::Bool),
-    ('D', FlagKind::Bool),
-    ('d', FlagKind::Bool),
-    ('e', FlagKind::Bool),
-    ('m', FlagKind::Bool),
-    ('M', FlagKind::Bool),
-    ('t', FlagKind::Value),
-];
-
-fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: SELECT_PANE_SHORT,
-            long: &[],
-        },
-        "select-pane",
-    )?;
-    no_extra_positionals(&flags, "select-pane", 0)?;
+pub(super) fn parse_select_pane(flags: &Args) -> Result<Command, ParseError> {
     let edges: Vec<Edge> = [
         ('L', Edge::Left),
         ('R', Edge::Right),
@@ -670,15 +431,15 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
     }
     Ok(Command::SelectPane(SelectPane {
         edge: edges.into_iter().next(),
-        target: target_or_current(&flags.values, 't')?,
-        last: flags.present.contains(&'l'),
-        keep_zoom: flags.present.contains(&'Z'),
-        title: flags.values.get(&'T').cloned(),
-        input: input_flag(&flags),
+        target: flags.target('t')?,
+        last: flags.on('l'),
+        keep_zoom: flags.on('Z'),
+        title: flags.val('T'),
+        input: input_flag(flags),
         // tmux acts on -m and -M before anything else; -M wins.
-        mark: if flags.present.contains(&'M') {
+        mark: if flags.on('M') {
             Mark::Clear
-        } else if flags.present.contains(&'m') {
+        } else if flags.on('m') {
             Mark::Toggle
         } else {
             Mark::No
@@ -686,31 +447,7 @@ fn parse_select_pane(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-// tmux's own resize-pane grammar: -L/-R/-U/-D/-Z are all boolean flags
-// (`-LR` sets two directions at once), and the cell count is a single
-// trailing positional shared by whichever directions were given, not a
-// per-flag value.
-const RESIZE_PANE_SHORT: &[(char, FlagKind)] = &[
-    ('L', FlagKind::Bool),
-    ('R', FlagKind::Bool),
-    ('U', FlagKind::Bool),
-    ('D', FlagKind::Bool),
-    ('Z', FlagKind::Bool),
-    ('t', FlagKind::Value),
-    ('x', FlagKind::Value),
-    ('y', FlagKind::Value),
-];
-
-fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: RESIZE_PANE_SHORT,
-            long: &[],
-        },
-        "resize-pane",
-    )?;
-    no_extra_positionals(&flags, "resize-pane", 1)?;
+pub(super) fn parse_resize_pane(flags: &Args) -> Result<Command, ParseError> {
     let edges: Vec<Edge> = [
         ('L', Edge::Left),
         ('R', Edge::Right),
@@ -721,9 +458,9 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     .filter(|(c, _)| flags.present.contains(c))
     .map(|(_, edge)| edge)
     .collect();
-    let width = extent_value(&flags, 'x', 0, SizeWords::Trio("width"))?;
-    let height = extent_value(&flags, 'y', 0, SizeWords::Trio("height"))?;
-    let zoom = flags.present.contains(&'Z');
+    let width = extent_value(flags, 'x', 0, SizeWords::Trio("width"))?;
+    let height = extent_value(flags, 'y', 0, SizeWords::Trio("height"))?;
+    let zoom = flags.on('Z');
     if zoom && !edges.is_empty() {
         return Err(ParseError::Other(
             "resize-pane: -Z can't combine with a direction".to_string(),
@@ -745,64 +482,28 @@ fn parse_resize_pane(argv: &[String]) -> Result<Command, ParseError> {
     };
     Ok(Command::ResizePane(ResizePane {
         action,
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         width,
         height,
     }))
 }
 
-const RESPAWN_PANE_SHORT: &[(char, FlagKind)] = &[
-    ('k', FlagKind::Bool),
-    ('t', FlagKind::Value),
-    ('c', FlagKind::Value),
-    ('e', FlagKind::Value),
-];
-
 /// `respawn-pane`, and `respawn-window` (M36-R6), which has its shape.
-fn parse_respawn(argv: &[String], cmd_name: &str) -> Result<RespawnPane, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: RESPAWN_PANE_SHORT,
-            long: &[],
-        },
-        cmd_name,
-    )?;
+pub(super) fn respawn(flags: &Args) -> Result<RespawnPane, ParseError> {
     Ok(RespawnPane {
-        kill: flags.present.contains(&'k'),
-        target: target_or_current(&flags.values, 't')?,
-        cwd: flags.values.get(&'c').cloned(),
-        env: env_values(&flags),
-        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+        kill: flags.on('k'),
+        target: flags.target('t')?,
+        cwd: flags.val('c'),
+        env: env_values(flags),
+        command: flags.command(),
     })
 }
 
-const SEND_KEYS_SHORT: &[(char, FlagKind)] = &[
-    ('l', FlagKind::Bool),
-    ('H', FlagKind::Bool),
-    ('t', FlagKind::Value),
-    ('X', FlagKind::Bool),
-    ('N', FlagKind::Value),
-    ('F', FlagKind::Bool),
-    ('R', FlagKind::Bool),
-    ('K', FlagKind::Bool),
-    ('c', FlagKind::Value),
-    ('M', FlagKind::Bool),
-];
-
-fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: SEND_KEYS_SHORT,
-            long: &[],
-        },
-        "send-keys",
-    )?;
-    let literal = flags.present.contains(&'l');
-    let hex = flags.present.contains(&'H');
-    // `-X` (M5): the words are a copy-mode command and its arguments.
-    let command = flags.present.contains(&'X');
+pub(super) fn parse_send_keys(flags: &Args) -> Result<Command, ParseError> {
+    let literal = flags.on('l');
+    let hex = flags.on('H');
+    // `-X`: the words are a copy-mode command and its arguments.
+    let command = flags.on('X');
     if literal && hex {
         return Err(ParseError::Other(
             "send-keys: only one of -l or -H allowed".to_string(),
@@ -823,38 +524,17 @@ fn parse_send_keys(argv: &[String]) -> Result<Command, ParseError> {
         });
     }
     Ok(Command::SendKeys(SendKeys {
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         items,
         command,
-        count: flags.values.get(&'N').cloned(),
-        format: flags.present.contains(&'F'),
-        reset: flags.present.contains(&'R'),
-        client_key: flags.present.contains(&'K'),
-        client: flags.values.get(&'c').cloned(),
-        mouse: flags.present.contains(&'M'),
+        count: flags.val('N'),
+        format: flags.on('F'),
+        reset: flags.on('R'),
+        client_key: flags.on('K'),
+        client: flags.val('c'),
+        mouse: flags.on('M'),
     }))
 }
-
-const CAPTURE_PANE_SHORT: &[(char, FlagKind)] = &[
-    ('p', FlagKind::Bool),
-    ('e', FlagKind::Bool),
-    ('J', FlagKind::Bool),
-    ('N', FlagKind::Bool),
-    ('T', FlagKind::Bool),
-    // Only for `-a`, which says "no alternate screen" without it.
-    ('q', FlagKind::Bool),
-    ('a', FlagKind::Bool),
-    ('C', FlagKind::Bool),
-    ('F', FlagKind::Bool),
-    ('H', FlagKind::Bool),
-    ('L', FlagKind::Bool),
-    ('M', FlagKind::Bool),
-    ('P', FlagKind::Bool),
-    ('S', FlagKind::Value),
-    ('E', FlagKind::Value),
-    ('t', FlagKind::Value),
-    ('b', FlagKind::Value),
-];
 
 fn parse_capture_line(s: &str) -> Result<CaptureBound, ParseError> {
     s.parse::<i32>()
@@ -862,16 +542,7 @@ fn parse_capture_line(s: &str) -> Result<CaptureBound, ParseError> {
         .map_err(|_| ParseError::Other(format!("invalid capture-pane bound: {s}")))
 }
 
-fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: CAPTURE_PANE_SHORT,
-            long: &[],
-        },
-        "capture-pane",
-    )?;
-    no_extra_positionals(&flags, "capture-pane", 0)?;
+pub(super) fn parse_capture_pane(flags: &Args) -> Result<Command, ParseError> {
     let start = match flags.values.get(&'S') {
         Some(s) if s == "-" => Some(CaptureBound::HistoryStart),
         Some(s) => Some(parse_capture_line(s)?),
@@ -883,61 +554,34 @@ fn parse_capture_pane(argv: &[String]) -> Result<Command, ParseError> {
         None => None,
     };
     Ok(Command::CapturePane(CapturePane {
-        target: target_or_current(&flags.values, 't')?,
-        print: flags.present.contains(&'p'),
-        buffer: flags.values.get(&'b').cloned(),
+        target: flags.target('t')?,
+        print: flags.on('p'),
+        buffer: flags.val('b'),
         opts: CaptureOpts {
             start,
             end,
-            escapes: flags.present.contains(&'e'),
+            escapes: flags.on('e'),
         },
-        join: flags.present.contains(&'J'),
-        keep_blanks: flags.present.contains(&'N'),
-        written_only: flags.present.contains(&'T'),
-        numbered: flags.present.contains(&'L'),
-        flags: flags.present.contains(&'F'),
-        escaped: flags.present.contains(&'C'),
-        links: flags.present.contains(&'H'),
-        alternate: flags.present.contains(&'a'),
-        mode: flags.present.contains(&'M'),
-        pending: flags.present.contains(&'P'),
-        quiet: flags.present.contains(&'q'),
+        join: flags.on('J'),
+        keep_blanks: flags.on('N'),
+        written_only: flags.on('T'),
+        numbered: flags.on('L'),
+        flags: flags.on('F'),
+        escaped: flags.on('C'),
+        links: flags.on('H'),
+        alternate: flags.on('a'),
+        mode: flags.on('M'),
+        pending: flags.on('P'),
+        quiet: flags.on('q'),
     }))
 }
 
-const CLEAR_HISTORY_SHORT: &[(char, FlagKind)] = &[('H', FlagKind::Bool), ('t', FlagKind::Value)];
-
-fn parse_clear_history(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: CLEAR_HISTORY_SHORT,
-            long: &[],
-        },
-        "clear-history",
-    )?;
-    no_extra_positionals(&flags, "clear-history", 0)?;
+pub(super) fn parse_clear_history(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ClearHistory(ClearHistory {
-        target: target_or_current(&flags.values, 't')?,
-        hyperlinks: flags.present.contains(&'H'),
+        target: flags.target('t')?,
+        hyperlinks: flags.on('H'),
     }))
 }
-
-const SET_OPTION_SHORT: &[(char, FlagKind)] = &[
-    ('g', FlagKind::Bool),
-    ('s', FlagKind::Bool),
-    ('w', FlagKind::Bool),
-    ('p', FlagKind::Bool),
-    ('u', FlagKind::Bool),
-    ('t', FlagKind::Value),
-    ('a', FlagKind::Bool),
-    ('F', FlagKind::Bool),
-    ('q', FlagKind::Bool),
-    ('o', FlagKind::Bool),
-    ('U', FlagKind::Bool),
-];
-const SET_OPTION_LONG: &[(&str, FlagKind)] =
-    &[("persist", FlagKind::Bool), ("no-persist", FlagKind::Bool)];
 
 /// Resolves `-g -s -w -p` to a scope, by tmux's own precedence: never an
 /// error, just a fixed order of preference over whichever flags were
@@ -954,29 +598,21 @@ const SET_OPTION_LONG: &[(&str, FlagKind)] =
 /// `-w`. Confirmed live: `set -wp`/`set -pw` land on the pane (not the
 /// window), and `set -sw`/`set -sp` land on grofe's session scope.
 fn parse_scope(flags: &ParsedFlags) -> Option<OptionScope> {
-    if flags.present.contains(&'g') {
+    if flags.on('g') {
         Some(OptionScope::Global)
-    } else if flags.present.contains(&'s') {
+    } else if flags.on('s') {
         Some(OptionScope::Session)
-    } else if flags.present.contains(&'p') {
+    } else if flags.on('p') {
         Some(OptionScope::Pane)
-    } else if flags.present.contains(&'w') {
+    } else if flags.on('w') {
         Some(OptionScope::Window)
     } else {
         None
     }
 }
 
-fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: SET_OPTION_SHORT,
-            long: SET_OPTION_LONG,
-        },
-        "set-option",
-    )?;
-    let scope = parse_scope(&flags);
+pub(super) fn parse_set_option(flags: &Args) -> Result<Command, ParseError> {
+    let scope = parse_scope(flags);
     let mut positionals = flags.positionals.iter();
     let name = positionals
         .next()
@@ -988,43 +624,23 @@ fn parse_set_option(argv: &[String]) -> Result<Command, ParseError> {
     }
     Ok(Command::SetOption(SetOption {
         scope,
-        unset: flags.present.contains(&'u') || flags.present.contains(&'U'),
-        unset_panes: flags.present.contains(&'U'),
+        unset: flags.on('u') || flags.on('U'),
+        unset_panes: flags.on('U'),
         persist: flags.long_present.contains("persist"),
         no_persist: flags.long_present.contains("no-persist"),
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         name,
         value,
-        append: flags.present.contains(&'a'),
-        expand: flags.present.contains(&'F'),
-        quiet: flags.present.contains(&'q'),
-        only_if_unset: flags.present.contains(&'o'),
+        append: flags.on('a'),
+        expand: flags.on('F'),
+        quiet: flags.on('q'),
+        only_if_unset: flags.on('o'),
         shown: None,
     }))
 }
 
-const SHOW_OPTIONS_SHORT: &[(char, FlagKind)] = &[
-    ('g', FlagKind::Bool),
-    ('s', FlagKind::Bool),
-    ('w', FlagKind::Bool),
-    ('p', FlagKind::Bool),
-    ('t', FlagKind::Value),
-    ('v', FlagKind::Bool),
-    ('q', FlagKind::Bool),
-    ('A', FlagKind::Bool),
-    ('H', FlagKind::Bool),
-];
-
-fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: SHOW_OPTIONS_SHORT,
-            long: &[],
-        },
-        "show-options",
-    )?;
-    let scope = parse_scope(&flags);
+pub(super) fn parse_show_options(flags: &Args) -> Result<Command, ParseError> {
+    let scope = parse_scope(flags);
     let mut positionals = flags.positionals.iter();
     let name = positionals.next().cloned();
     if positionals.next().is_some() {
@@ -1032,40 +648,16 @@ fn parse_show_options(argv: &[String]) -> Result<Command, ParseError> {
     }
     Ok(Command::ShowOptions(ShowOptions {
         scope,
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         name,
-        value_only: flags.present.contains(&'v'),
-        quiet: flags.present.contains(&'q'),
-        inherited: flags.present.contains(&'A'),
-        hooks: flags.present.contains(&'H'),
+        value_only: flags.on('v'),
+        quiet: flags.on('q'),
+        inherited: flags.on('A'),
+        hooks: flags.on('H'),
     }))
 }
 
-const DISPLAY_MESSAGE_SHORT: &[(char, FlagKind)] = &[
-    ('p', FlagKind::Bool),
-    ('a', FlagKind::Bool),
-    ('l', FlagKind::Bool),
-    ('v', FlagKind::Bool),
-    ('t', FlagKind::Value),
-    ('c', FlagKind::Value),
-    ('d', FlagKind::Value),
-    ('F', FlagKind::Value),
-    ('N', FlagKind::Bool),
-    // The message of `display-message` freezes the terminal's pane output
-    // while it shows in tmux; here nothing does, so `-C` has nothing to
-    // switch off.
-    ('C', FlagKind::Bool),
-];
-
-fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: DISPLAY_MESSAGE_SHORT,
-            long: &[],
-        },
-        "display-message",
-    )?;
+pub(super) fn parse_display_message(flags: &Args) -> Result<Command, ParseError> {
     let mut positionals = flags.positionals.iter();
     let text = positionals
         .next()
@@ -1078,51 +670,32 @@ fn parse_display_message(argv: &[String]) -> Result<Command, ParseError> {
         ));
     }
     Ok(Command::DisplayMessage(DisplayMessage {
-        print: flags.present.contains(&'p'),
-        target: target_or_current(&flags.values, 't')?,
+        print: flags.on('p'),
+        target: flags.target('t')?,
         text,
-        client: flags.values.get(&'c').cloned(),
-        delay: flags.values.get(&'d').cloned(),
-        all: flags.present.contains(&'a'),
-        literal: flags.present.contains(&'l'),
-        verbose: flags.present.contains(&'v'),
-        ignore_keys: flags.present.contains(&'N'),
+        client: flags.val('c'),
+        delay: flags.val('d'),
+        all: flags.on('a'),
+        literal: flags.on('l'),
+        verbose: flags.on('v'),
+        ignore_keys: flags.on('N'),
     }))
 }
 
-fn parse_kill_server(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS, "kill-server")?;
-    no_extra_positionals(&flags, "kill-server", 0)?;
-    Ok(Command::KillServer(KillServer))
-}
-
-fn parse_list_plugins(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS, "list-plugins")?;
-    no_extra_positionals(&flags, "list-plugins", 0)?;
-    Ok(Command::ListPlugins(ListPlugins))
-}
-
-fn parse_plugin_restart(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS, "plugin-restart")?;
-    no_extra_positionals(&flags, "plugin-restart", 1)?;
+pub(super) fn parse_plugin_restart(flags: &Args) -> Result<Command, ParseError> {
     let name = flags
-        .positionals
         .first()
-        .cloned()
         .ok_or_else(|| ParseError::TooFewArguments("plugin-restart".to_string(), 1))?;
     Ok(Command::PluginRestart(PluginRestart { name }))
 }
-
-const SUBSCRIBE_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value)];
-
-const PANE_SET_RESUME_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('u', FlagKind::Bool)];
 
 /// `pane-set-resume [-t pane] [-u] [--expect <reason>] [-- argv...]` (T4.2,
 /// spec §6). `--expect` is the one long flag here that takes a value,
 /// which `tokenize` does not do, so it is taken out first: from the flags
 /// before `--` or the first positional, as `--expect <reason>` or
 /// `--expect=<reason>`.
-fn parse_pane_set_resume(argv: &[String]) -> Result<Command, ParseError> {
+pub(super) fn pane_set_resume(flags: &Args) -> Result<Command, ParseError> {
+    let argv = flags.argv;
     const NAME: &str = "pane-set-resume";
     let mut rest = Vec::with_capacity(argv.len());
     let mut expect = None;
@@ -1156,16 +729,9 @@ fn parse_pane_set_resume(argv: &[String]) -> Result<Command, ParseError> {
         }
         i += 1;
     }
-    let flags = tokenize(
-        &rest,
-        &FlagTable {
-            short: PANE_SET_RESUME_SHORT,
-            long: &[],
-        },
-        NAME,
-    )?;
-    let unset = flags.present.contains(&'u');
-    let argv = flags.positionals;
+    let flags = flags_for(&rest, "t:u", NAME)?;
+    let unset = flags.on('u');
+    let argv = flags.positionals.clone();
     let given = [unset, expect.is_some(), !argv.is_empty()]
         .iter()
         .filter(|&&g| g)
@@ -1181,29 +747,202 @@ fn parse_pane_set_resume(argv: &[String]) -> Result<Command, ParseError> {
         )));
     }
     Ok(Command::PaneSetResume(PaneSetResume {
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         unset,
         expect,
         argv,
     }))
 }
 
-const REBOOT_CHECK_LONG: &[(&str, FlagKind)] = &[("json", FlagKind::Bool)];
+/// `agent report|list|next|seen` (grofe's own). The report's long flags
+/// take values, which `tokenize` does not do, so `report` is read by hand.
+pub(super) fn agent(flags: &Args) -> Result<Command, ParseError> {
+    let (sub, rest) = flags
+        .argv
+        .split_first()
+        .ok_or_else(|| ParseError::Other("agent: subcommand required".into()))?;
+    match sub.as_str() {
+        "report" => parse_agent_report(rest),
+        "list" => {
+            let flags = flags_for(rest, "F:", "agent list")?;
+            no_extra_positionals(&flags, "agent list", 0)?;
+            Ok(Command::Agent(AgentCmd::List {
+                format: flags.val('F'),
+            }))
+        }
+        "next" => {
+            let flags = flags_for(rest, "", "agent next")?;
+            no_extra_positionals(&flags, "agent next", 0)?;
+            Ok(Command::Agent(AgentCmd::Next))
+        }
+        "seen" => {
+            let flags = flags_for(rest, "t:a", "agent seen")?;
+            no_extra_positionals(&flags, "agent seen", 0)?;
+            let all = flags.on('a');
+            if all && flags.values.contains_key(&'t') {
+                return Err(ParseError::Other("agent seen: -a and -t conflict".into()));
+            }
+            Ok(Command::Agent(AgentCmd::Seen {
+                target: flags.target('t')?,
+                all,
+            }))
+        }
+        "new" => {
+            // The kind may come first (`agent new claude -w`), so flags
+            // are read from what follows it.
+            let (lead, flag_argv) = match rest.split_first() {
+                Some((k, tail)) if !k.starts_with('-') => (Some(k.clone()), tail),
+                _ => (None, rest),
+            };
+            let flags = flags_for(flag_argv, "pc:n:wWb:d", "agent new")?;
+            let mut positionals = flags.positionals.clone();
+            if let Some(k) = lead {
+                positionals.insert(0, k);
+            }
+            if positionals.len() > 1 {
+                return Err(ParseError::TooManyArguments("agent new".into(), 1));
+            }
+            let kind = positionals
+                .pop()
+                .ok_or_else(|| ParseError::Other("agent new: kind required".into()))?;
+            let worktree = match (flags.on('w'), flags.on('W')) {
+                (true, true) => {
+                    return Err(ParseError::Other("agent new: -w and -W conflict".into()));
+                }
+                (true, false) => Some(true),
+                (false, true) => Some(false),
+                (false, false) => None,
+            };
+            Ok(Command::Agent(AgentCmd::New(AgentNew {
+                kind,
+                split: flags.on('p'),
+                cwd: flags.val('c'),
+                name: flags.val('n'),
+                worktree,
+                branch: flags.val('b'),
+                detached: flags.on('d'),
+            })))
+        }
+        other => Err(ParseError::Other(format!(
+            "agent: unknown subcommand {other}"
+        ))),
+    }
+}
+
+/// `notify list|dismiss <id>|clear|mute [duration]|unmute`.
+pub(super) fn notify(flags: &Args) -> Result<Command, ParseError> {
+    let (sub, rest) = flags
+        .argv
+        .split_first()
+        .ok_or_else(|| ParseError::Other("notify: subcommand required".into()))?;
+    let name = format!("notify {sub}");
+    let flags = flags_for(rest, "", &name)?;
+    let cmd = match sub.as_str() {
+        "list" | "clear" | "unmute" => {
+            no_extra_positionals(&flags, &name, 0)?;
+            match sub.as_str() {
+                "list" => NotifyCmd::List,
+                "clear" => NotifyCmd::Clear,
+                _ => NotifyCmd::Unmute,
+            }
+        }
+        "dismiss" => {
+            let id = one_positional(&flags, &name)?;
+            NotifyCmd::Dismiss(
+                id.parse()
+                    .map_err(|_| ParseError::Other(format!("notify dismiss: bad id {id}")))?,
+            )
+        }
+        "mute" => {
+            no_extra_positionals(&flags, &name, 1)?;
+            let until = flags.positionals.first().map(|d| parse_mute_duration(d));
+            NotifyCmd::Mute(until.transpose()?)
+        }
+        other => {
+            return Err(ParseError::Other(format!(
+                "notify: unknown subcommand {other}"
+            )));
+        }
+    };
+    Ok(Command::Notify(cmd))
+}
+
+/// `30s`, `10m`, `2h`: a positive whole number and a unit.
+fn parse_mute_duration(s: &str) -> Result<std::time::Duration, ParseError> {
+    let bad = || ParseError::Other(format!("notify mute: bad duration {s}"));
+    let split = s.find(|c: char| !c.is_ascii_digit()).ok_or_else(bad)?;
+    let n: u64 = s[..split].parse().ok().filter(|n| *n > 0).ok_or_else(bad)?;
+    let unit = match &s[split..] {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        _ => return Err(bad()),
+    };
+    n.checked_mul(unit)
+        .map(std::time::Duration::from_secs)
+        .ok_or_else(bad)
+}
+
+fn parse_agent_report(argv: &[String]) -> Result<Command, ParseError> {
+    const NAME: &str = "agent report";
+    let mut state = None;
+    let mut target = Target::Current;
+    let (mut kind, mut msg, mut blocked, mut session_id, mut ts) = (None, None, None, None, None);
+    let mut i = 0;
+    while i < argv.len() {
+        let tok = argv[i].as_str();
+        if !tok.starts_with('-') || tok == "-" {
+            if state.replace(tok.to_string()).is_some() {
+                return Err(ParseError::TooManyArguments(NAME.to_string(), 1));
+            }
+            i += 1;
+            continue;
+        }
+        let value = argv
+            .get(i + 1)
+            .ok_or_else(|| ParseError::Other(format!("{NAME}: {tok} needs a value")))?;
+        match tok {
+            "-t" => target = parse_target(value)?,
+            "--kind" => kind = Some(value.clone()),
+            "--msg" => msg = Some(value.clone()),
+            "--blocked" => {
+                if !matches!(value.as_str(), "permission" | "question" | "auth") {
+                    return Err(ParseError::Other(format!(
+                        "{NAME}: --blocked must be permission, question or auth"
+                    )));
+                }
+                blocked = Some(value.clone());
+            }
+            "--session-id" => session_id = Some(value.clone()),
+            "--ts" => {
+                ts = Some(
+                    value
+                        .parse()
+                        .map_err(|_| ParseError::Other(format!("invalid --ts: {value}")))?,
+                )
+            }
+            _ => return Err(ParseError::Other(format!("{NAME}: unknown flag {tok}"))),
+        }
+        i += 2;
+    }
+    let state = state.ok_or_else(|| ParseError::Other(format!("{NAME}: state required")))?;
+    Ok(Command::Agent(AgentCmd::Report(AgentReport {
+        state,
+        target,
+        kind,
+        msg,
+        blocked,
+        session_id,
+        ts,
+    })))
+}
 
 /// `reboot-check [--json]` (T4.5, spec §6).
-fn parse_reboot_check(argv: &[String]) -> Result<Command, ParseError> {
-    const NAME: &str = "reboot-check";
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: &[],
-            long: REBOOT_CHECK_LONG,
-        },
-        NAME,
-    )?;
+pub(super) fn reboot_check(flags: &Args) -> Result<Command, ParseError> {
     if let Some(word) = flags.positionals.first() {
         return Err(ParseError::Other(format!(
-            "{NAME}: unexpected argument {word}"
+            "{}: unexpected argument {word}",
+            flags.name
         )));
     }
     Ok(Command::RebootCheck(RebootCheck {
@@ -1211,24 +950,12 @@ fn parse_reboot_check(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: SUBSCRIBE_SHORT,
-            long: &[],
-        },
-        "subscribe",
-    )?;
-    let mut target = flags
-        .values
-        .get(&'t')
-        .map(|t| parse_target(t))
-        .transpose()?;
+pub(super) fn parse_subscribe(flags: &Args) -> Result<Command, ParseError> {
+    let mut target = flags.target_opt('t')?;
     // The usage is `subscribe <event>... [-t target]`: the flag comes after
     // the names, where the flag scan has already stopped.
     let mut events = Vec::new();
-    let mut words = flags.positionals.into_iter();
+    let mut words = flags.positionals.iter().cloned();
     while let Some(word) = words.next() {
         if word == "-t" {
             let value = words
@@ -1242,218 +969,89 @@ fn parse_subscribe(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::Subscribe(Subscribe { events, target }))
 }
 
-const ATTACH_SESSION_SHORT: &[(char, FlagKind)] = &[
-    ('t', FlagKind::Value),
-    ('d', FlagKind::Bool),
-    ('c', FlagKind::Value),
-    ('E', FlagKind::Bool),
-    ('r', FlagKind::Bool),
-    ('x', FlagKind::Bool),
-    ('f', FlagKind::Value),
-];
-const ATTACH_SESSION_LONG: &[(&str, FlagKind)] = &[("nest", FlagKind::Bool)];
-
-fn parse_attach_session(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: ATTACH_SESSION_SHORT,
-            long: ATTACH_SESSION_LONG,
-        },
-        "attach-session",
-    )?;
-    no_extra_positionals(&flags, "attach-session", 0)?;
+pub(super) fn parse_attach_session(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::AttachSession(AttachSession {
-        target: target_or_current(&flags.values, 't')?,
-        detach_others: flags.present.contains(&'d') || flags.present.contains(&'x'),
+        target: flags.target('t')?,
+        detach_others: flags.on('d') || flags.on('x'),
         nest: flags.long_present.contains("nest"),
-        cwd: flags.values.get(&'c').cloned(),
-        no_env: flags.present.contains(&'E'),
-        read_only: flags.present.contains(&'r'),
-        kill_parent: flags.present.contains(&'x'),
-        flags: flags.values.get(&'f').cloned(),
+        cwd: flags.val('c'),
+        no_env: flags.on('E'),
+        read_only: flags.on('r'),
+        kill_parent: flags.on('x'),
+        flags: flags.val('f'),
     }))
 }
 
-fn parse_server_access(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('a', FlagKind::Bool),
-        ('d', FlagKind::Bool),
-        ('l', FlagKind::Bool),
-        ('r', FlagKind::Bool),
-        ('w', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "server-access")?;
-    no_extra_positionals(&flags, "server-access", 1)?;
+pub(super) fn parse_server_access(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ServerAccess(ServerAccess {
-        add: flags.present.contains(&'a'),
-        deny: flags.present.contains(&'d'),
-        list: flags.present.contains(&'l'),
-        read_only: flags.present.contains(&'r'),
-        write: flags.present.contains(&'w'),
-        user: flags.positionals.first().cloned(),
+        add: flags.on('a'),
+        deny: flags.on('d'),
+        list: flags.on('l'),
+        read_only: flags.on('r'),
+        write: flags.on('w'),
+        user: flags.first(),
     }))
 }
 
-const DETACH_CLIENT_SHORT: &[(char, FlagKind)] = &[
-    ('s', FlagKind::Value),
-    ('t', FlagKind::Value),
-    ('a', FlagKind::Bool),
-    ('P', FlagKind::Bool),
-];
-
-fn parse_detach_client(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: DETACH_CLIENT_SHORT,
-            long: &[],
-        },
-        "detach-client",
-    )?;
-    no_extra_positionals(&flags, "detach-client", 0)?;
+pub(super) fn parse_detach_client(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::DetachClient(DetachClient {
-        session: flags
-            .values
-            .get(&'s')
-            .map(|s| parse_target(s))
-            .transpose()?,
-        client: flags.values.get(&'t').cloned(),
-        all_others: flags.present.contains(&'a'),
-        kill_parent: flags.present.contains(&'P'),
+        session: flags.target_opt('s')?,
+        client: flags.val('t'),
+        all_others: flags.on('a'),
+        kill_parent: flags.on('P'),
     }))
 }
 
-const LIST_CLIENTS_SHORT: &[(char, FlagKind)] = &[
-    ('F', FlagKind::Value),
-    ('f', FlagKind::Value),
-    ('t', FlagKind::Value),
-    ('O', FlagKind::Value),
-    ('r', FlagKind::Bool),
-];
-
-fn parse_list_clients(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: LIST_CLIENTS_SHORT,
-            long: &[],
-        },
-        "list-clients",
-    )?;
-    no_extra_positionals(&flags, "list-clients", 0)?;
+pub(super) fn parse_list_clients(flags: &Args) -> Result<Command, ParseError> {
     let target = match flags.values.get(&'t') {
         Some(raw) => Some(parse_target(raw)?),
         None => None,
     };
     Ok(Command::ListClients(ListClients {
-        format: flags.values.get(&'F').cloned(),
+        format: flags.val('F'),
         target,
-        filter: flags.values.get(&'f').cloned(),
-        sort: sort_flags(&flags),
+        filter: flags.val('f'),
+        sort: sort_flags(flags),
     }))
 }
 
-fn parse_last_window(argv: &[String]) -> Result<WindowStep, ParseError> {
-    Ok(WindowStep {
-        target: parse_target_only(argv, "last-window")?,
-        alert: false,
-    })
-}
-
-const WINDOW_STEP_SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('a', FlagKind::Bool)];
-
 /// `next-window`/`previous-window` (`-t` session, `-a` alert).
-fn parse_window_step(argv: &[String], cmd_name: &str) -> Result<WindowStep, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: WINDOW_STEP_SHORT,
-            long: &[],
-        },
-        cmd_name,
-    )?;
-    no_extra_positionals(&flags, cmd_name, 0)?;
+pub(super) fn window_step(flags: &Args) -> Result<WindowStep, ParseError> {
     Ok(WindowStep {
-        target: target_or_current(&flags.values, 't')?,
-        alert: flags.present.contains(&'a'),
+        target: flags.target('t')?,
+        alert: flags.on('a'),
     })
 }
 
-fn parse_rename(argv: &[String], cmd_name: &str) -> Result<Rename, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: TARGET_ONLY_SHORT,
-            long: &[],
-        },
-        cmd_name,
-    )?;
-    no_extra_positionals(&flags, cmd_name, 1)?;
+pub(super) fn rename(flags: &Args) -> Result<Rename, ParseError> {
     let name = flags
-        .positionals
         .first()
-        .cloned()
-        .ok_or_else(|| ParseError::MissingArgument(cmd_name.to_string()))?;
+        .ok_or_else(|| ParseError::MissingArgument(flags.name.to_string()))?;
     Ok(Rename {
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         name,
     })
 }
 
-const SWITCH_CLIENT_SHORT: &[(char, FlagKind)] = &[
-    ('t', FlagKind::Value),
-    ('l', FlagKind::Bool),
-    ('n', FlagKind::Bool),
-    ('p', FlagKind::Bool),
-    ('T', FlagKind::Value),
-    ('c', FlagKind::Value),
-    ('Z', FlagKind::Bool),
-    ('E', FlagKind::Bool),
-    ('r', FlagKind::Bool),
-    ('O', FlagKind::Value),
-    // In tmux's args template and read by nothing.
-    ('F', FlagKind::Bool),
-];
-
-fn parse_switch_client(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: SWITCH_CLIENT_SHORT,
-            long: &[],
-        },
-        "switch-client",
-    )?;
-    no_extra_positionals(&flags, "switch-client", 0)?;
+pub(super) fn parse_switch_client(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SwitchClient(SwitchClient {
-        target: flags
-            .values
-            .get(&'t')
-            .map(|s| parse_target(s))
-            .transpose()?,
-        last: flags.present.contains(&'l'),
-        next: flags.present.contains(&'n'),
-        previous: flags.present.contains(&'p'),
-        key_table: flags.values.get(&'T').cloned(),
-        client: flags.values.get(&'c').cloned(),
-        keep_zoom: flags.present.contains(&'Z'),
-        no_env: flags.present.contains(&'E'),
-        toggle_read_only: flags.present.contains(&'r'),
-        order: flags.values.get(&'O').cloned(),
+        target: flags.target_opt('t')?,
+        last: flags.on('l'),
+        next: flags.on('n'),
+        previous: flags.on('p'),
+        key_table: flags.val('T'),
+        client: flags.val('c'),
+        keep_zoom: flags.on('Z'),
+        no_env: flags.on('E'),
+        toggle_read_only: flags.on('r'),
+        order: flags.val('O'),
     }))
 }
 
-fn parse_send_prefix(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(
-        argv,
-        &[('t', FlagKind::Value), ('2', FlagKind::Bool)],
-        "send-prefix",
-    )?;
-    no_extra_positionals(&flags, "send-prefix", 0)?;
+pub(super) fn parse_send_prefix(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SendPrefix(SendPrefix {
-        target: target_or_current(&flags.values, 't')?,
-        second: flags.present.contains(&'2'),
+        target: flags.target('t')?,
+        second: flags.on('2'),
     }))
 }
 
@@ -1462,60 +1060,30 @@ fn parse_send_prefix(argv: &[String]) -> Result<Command, ParseError> {
 fn key_table(flags: &ParsedFlags) -> String {
     match flags.values.get(&'T') {
         Some(t) => t.clone(),
-        None if flags.present.contains(&'n') => "root".to_string(),
+        None if flags.on('n') => "root".to_string(),
         None => "prefix".to_string(),
     }
 }
 
-const BIND_KEY_SHORT: &[(char, FlagKind)] = &[
-    ('n', FlagKind::Bool),
-    ('r', FlagKind::Bool),
-    ('T', FlagKind::Value),
-    ('N', FlagKind::Value),
-];
-
-fn parse_bind_key(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: BIND_KEY_SHORT,
-            long: &[],
-        },
-        "bind-key",
-    )?;
+pub(super) fn parse_bind_key(flags: &Args) -> Result<Command, ParseError> {
     let (key, command) = flags
         .positionals
         .split_first()
         .ok_or_else(|| ParseError::MissingArgument("bind-key".to_string()))?;
     Ok(Command::BindKey(BindKey {
-        table: key_table(&flags),
-        repeat: flags.present.contains(&'r'),
-        note: flags.values.get(&'N').cloned(),
+        table: key_table(flags),
+        repeat: flags.on('r'),
+        note: flags.val('N'),
+        group: flags.val('G'),
         key: key.clone(),
         command: command.to_vec(),
     }))
 }
 
-const UNBIND_KEY_SHORT: &[(char, FlagKind)] = &[
-    ('n', FlagKind::Bool),
-    ('a', FlagKind::Bool),
-    ('q', FlagKind::Bool),
-    ('T', FlagKind::Value),
-];
-
-fn parse_unbind_key(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: UNBIND_KEY_SHORT,
-            long: &[],
-        },
-        "unbind-key",
-    )?;
-    no_extra_positionals(&flags, "unbind-key", 1)?;
-    let mut all = flags.present.contains(&'a');
-    let mut key = flags.positionals.first().cloned();
-    let quiet = flags.present.contains(&'q');
+pub(super) fn parse_unbind_key(flags: &Args) -> Result<Command, ParseError> {
+    let mut all = flags.on('a');
+    let mut key = flags.first();
+    let quiet = flags.on('q');
     // tmux's wording; `-q` keeps it quiet and does nothing.
     match (all, &key) {
         (true, Some(_)) | (false, None) if quiet => (all, key) = (false, None),
@@ -1524,185 +1092,81 @@ fn parse_unbind_key(argv: &[String]) -> Result<Command, ParseError> {
         _ => {}
     }
     Ok(Command::UnbindKey(UnbindKey {
-        table: key_table(&flags),
+        table: key_table(flags),
         all,
         key,
         quiet,
     }))
 }
 
-const LIST_KEYS_SHORT: &[(char, FlagKind)] = &[
-    ('T', FlagKind::Value),
-    ('1', FlagKind::Bool),
-    ('N', FlagKind::Bool),
-    ('a', FlagKind::Bool),
-    ('F', FlagKind::Value),
-    ('P', FlagKind::Value),
-    ('O', FlagKind::Value),
-    ('r', FlagKind::Bool),
-];
-
-fn parse_list_keys(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: LIST_KEYS_SHORT,
-            long: &[],
-        },
-        "list-keys",
-    )?;
-    no_extra_positionals(&flags, "list-keys", 1)?;
+pub(super) fn parse_list_keys(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ListKeys(ListKeys {
-        table: flags.values.get(&'T').cloned(),
-        first: flags.present.contains(&'1'),
-        notes: flags.present.contains(&'N'),
-        key: flags.positionals.first().cloned(),
-        all: flags.present.contains(&'a'),
-        format: flags.values.get(&'F').cloned(),
-        prefix: flags.values.get(&'P').cloned(),
-        sort: sort_flags(&flags),
+        table: flags.val('T'),
+        first: flags.on('1'),
+        notes: flags.on('N'),
+        key: flags.first(),
+        all: flags.on('a'),
+        format: flags.val('F'),
+        prefix: flags.val('P'),
+        sort: sort_flags(flags),
     }))
+}
+
+/// The `missing argument` of the verb `flags` was parsed for.
+pub(super) fn missing(flags: &Args) -> ParseError {
+    ParseError::MissingArgument(flags.name.to_string())
 }
 
 /// The single required positional of `cmd_name`.
 fn one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<String, ParseError> {
     no_extra_positionals(flags, cmd_name, 1)?;
     flags
-        .positionals
         .first()
-        .cloned()
         .ok_or_else(|| ParseError::MissingArgument(cmd_name.to_string()))
 }
 
-fn at_least_one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<Vec<String>, ParseError> {
-    if flags.positionals.is_empty() {
-        return Err(ParseError::MissingArgument(cmd_name.to_string()));
-    }
-    Ok(flags.positionals.clone())
-}
-
-fn parse_source_file(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: &[
-                ('t', FlagKind::Value),
-                ('q', FlagKind::Bool),
-                ('F', FlagKind::Bool),
-                ('n', FlagKind::Bool),
-                ('v', FlagKind::Bool),
-            ],
-            long: &[],
-        },
-        "source-file",
-    )?;
+pub(super) fn parse_source_file(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SourceFile(SourceFile {
-        quiet: flags.present.contains(&'q'),
-        format: flags.present.contains(&'F'),
-        parse_only: flags.present.contains(&'n'),
-        verbose: flags.present.contains(&'v'),
-        target: flags
-            .values
-            .get(&'t')
-            .map(|t| parse_target(t))
-            .transpose()?,
-        paths: at_least_one_positional(&flags, "source-file")?,
+        quiet: flags.on('q'),
+        format: flags.on('F'),
+        parse_only: flags.on('n'),
+        verbose: flags.on('v'),
+        target: flags.target_opt('t')?,
+        paths: flags.command().ok_or_else(|| missing(flags))?,
     }))
 }
 
-fn parse_reload(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(argv, &NO_FLAGS, "reload")?;
-    no_extra_positionals(&flags, "reload", 0)?;
-    Ok(Command::Reload(Reload))
-}
-
-const COMMAND_PROMPT_SHORT: &[(char, FlagKind)] = &[
-    ('p', FlagKind::Value),
-    ('I', FlagKind::Value),
-    ('b', FlagKind::Bool),
-    ('k', FlagKind::Bool),
-    ('1', FlagKind::Bool),
-    ('T', FlagKind::Value),
-    ('N', FlagKind::Bool),
-    ('i', FlagKind::Bool),
-    ('F', FlagKind::Bool),
-    ('e', FlagKind::Bool),
-    ('C', FlagKind::Bool),
-    ('l', FlagKind::Bool),
-    ('t', FlagKind::Value),
-];
-
-fn parse_command_prompt(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: COMMAND_PROMPT_SHORT,
-            long: &[],
-        },
-        "command-prompt",
-    )?;
-    no_extra_positionals(&flags, "command-prompt", 1)?;
+pub(super) fn parse_command_prompt(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::CommandPrompt(CommandPrompt {
-        prompt: flags.values.get(&'p').cloned(),
-        initial: flags.values.get(&'I').cloned(),
-        template: flags.positionals.first().cloned(),
-        background: flags.present.contains(&'b'),
-        key: flags.present.contains(&'k'),
-        single: flags.present.contains(&'1'),
-        prompt_type: flags.values.get(&'T').cloned(),
-        numeric: flags.present.contains(&'N'),
-        incremental: flags.present.contains(&'i'),
-        expand: flags.present.contains(&'F'),
-        bspace_exit: flags.present.contains(&'e'),
-        literal: flags.present.contains(&'l'),
-        client: flags.values.get(&'t').cloned(),
+        prompt: flags.val('p'),
+        initial: flags.val('I'),
+        template: flags.first(),
+        background: flags.on('b'),
+        key: flags.on('k'),
+        single: flags.on('1'),
+        prompt_type: flags.val('T'),
+        numeric: flags.on('N'),
+        incremental: flags.on('i'),
+        expand: flags.on('F'),
+        bspace_exit: flags.on('e'),
+        literal: flags.on('l'),
+        client: flags.val('t'),
     }))
 }
 
-fn parse_pipe_pane(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: &[
-                ('I', FlagKind::Bool),
-                ('O', FlagKind::Bool),
-                ('o', FlagKind::Bool),
-                ('t', FlagKind::Value),
-            ],
-            long: &[],
-        },
-        "pipe-pane",
-    )?;
-    no_extra_positionals(&flags, "pipe-pane", 1)?;
-    let input = flags.present.contains(&'I');
+pub(super) fn parse_pipe_pane(flags: &Args) -> Result<Command, ParseError> {
+    let input = flags.on('I');
     Ok(Command::PipePane(PipePane {
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         input,
         // Neither -I nor -O is -O.
-        output: flags.present.contains(&'O') || !input,
-        toggle: flags.present.contains(&'o'),
-        command: flags.positionals.first().cloned(),
+        output: flags.on('O') || !input,
+        toggle: flags.on('o'),
+        command: flags.first(),
     }))
 }
 
-fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: &[
-                ('b', FlagKind::Bool),
-                ('d', FlagKind::Value),
-                ('t', FlagKind::Value),
-                ('C', FlagKind::Bool),
-                ('E', FlagKind::Bool),
-                ('c', FlagKind::Value),
-                // In tmux's args template and read by nothing.
-                ('s', FlagKind::Value),
-            ],
-            long: &[],
-        },
-        "run-shell",
-    )?;
+pub(super) fn parse_run_shell(flags: &Args) -> Result<Command, ParseError> {
     // `-d <seconds>` (FE.1), as tmux 3.7b's `strtod`: a delay with no
     // command only waits (recorded: `invalid delay time: x`).
     let delay = match flags.values.get(&'d') {
@@ -1715,7 +1179,7 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
         ),
         None => None,
     };
-    let command = flags.present.contains(&'C');
+    let command = flags.on('C');
     // A shell command is the first word, the others its `#{1}`, `#{2}`; a
     // command (`-C`) is the first word alone.
     let mut words = flags.positionals.iter();
@@ -1734,58 +1198,30 @@ fn parse_run_shell(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::RunShell(RunShell {
         cmd,
         delay,
-        background: flags.present.contains(&'b'),
-        target: target_or_current(&flags.values, 't')?,
+        background: flags.on('b'),
+        target: flags.target('t')?,
         command,
-        stderr: flags.present.contains(&'E'),
-        cwd: flags.values.get(&'c').cloned(),
+        stderr: flags.on('E'),
+        cwd: flags.val('c'),
         args: words.cloned().collect(),
     }))
 }
 
-fn parse_register_source(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: &[('n', FlagKind::Value)],
-            long: &[],
-        },
-        "__register-source",
-    )?;
-    no_extra_positionals(&flags, "__register-source", 1)?;
+pub(super) fn parse_register_source(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::RegisterSource(RegisterSource {
-        name: flags.values.get(&'n').cloned(),
-        command: one_positional(&flags, "__register-source")?,
+        name: flags.val('n'),
+        command: flags.first().ok_or_else(|| missing(flags))?,
     }))
 }
 
-fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = tokenize(
-        argv,
-        &FlagTable {
-            short: &[
-                ('t', FlagKind::Value),
-                ('E', FlagKind::Bool),
-                ('n', FlagKind::Bool),
-                ('o', FlagKind::Bool),
-                ('p', FlagKind::Bool),
-            ],
-            long: &[],
-        },
-        "select-layout",
-    )?;
-    let (next, previous, undo, spread) = (
-        flags.present.contains(&'n'),
-        flags.present.contains(&'p'),
-        flags.present.contains(&'o'),
-        flags.present.contains(&'E'),
-    );
+pub(super) fn parse_select_layout(flags: &Args) -> Result<Command, ParseError> {
+    let (next, previous, undo, spread) =
+        (flags.on('n'), flags.on('p'), flags.on('o'), flags.on('E'));
     // A layout name is optional: tmux takes none to mean the last preset
     // used (`-o`: the layout before the last change).
-    no_extra_positionals(&flags, "select-layout", 1)?;
-    let name = flags.positionals.first().cloned().unwrap_or_default();
+    let name = flags.first().unwrap_or_default();
     Ok(Command::SelectLayout(SelectLayout {
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         name,
         spread,
         next,
@@ -1794,7 +1230,7 @@ fn parse_select_layout(argv: &[String]) -> Result<Command, ParseError> {
     }))
 }
 
-// ---- M3.6 verbs (TC.2) ----
+// ---- Structure, client and overlay verbs ----
 
 /// A number as tmux's `args_percentage` reads it: an integer, or one
 /// with a `%` suffix. `None` when it is neither.
@@ -1898,53 +1334,18 @@ fn target_if_given(
     values.get(&key).map(|s| parse_target(s)).transpose()
 }
 
-/// At least `min` positionals, worded like tmux (`too few arguments`),
-/// unless `argv` is empty: a bare M3.6 verb parses, with its required
-/// positionals `None`, so that its handler answers (the stub-phase tests
-/// run every verb bare) and refuses it.
-fn needs_positionals(
-    argv: &[String],
-    flags: &ParsedFlags,
-    cmd_name: &str,
-    min: usize,
-) -> Result<(), ParseError> {
-    if argv.is_empty() || flags.positionals.len() >= min {
-        Ok(())
-    } else {
-        Err(ParseError::TooFewArguments(cmd_name.to_string(), min))
-    }
+fn flags_for(argv: &[String], spec: &str, cmd_name: &str) -> Result<ParsedFlags, ParseError> {
+    scan(argv, spec, &[], cmd_name)
 }
-
-fn flags_for(
-    argv: &[String],
-    short: &'static [(char, FlagKind)],
-    cmd_name: &str,
-) -> Result<ParsedFlags, ParseError> {
-    tokenize(argv, &FlagTable { short, long: &[] }, cmd_name)
-}
-
-const JOIN_PANE_SHORT: &[(char, FlagKind)] = &[
-    ('b', FlagKind::Bool),
-    ('d', FlagKind::Bool),
-    ('f', FlagKind::Bool),
-    ('h', FlagKind::Bool),
-    ('v', FlagKind::Bool),
-    ('l', FlagKind::Value),
-    ('p', FlagKind::Value),
-    ('s', FlagKind::Value),
-    ('t', FlagKind::Value),
-];
 
 /// `join-pane` and `move-pane`, which share tmux's flags. `-p` is the
 /// hidden one (in the args template, not the usage): a percentage, which
 /// `-l` overrides when both are given (`layout_get_tiled_cell`).
-fn parse_join_pane(argv: &[String], cmd_name: &str) -> Result<JoinPane, ParseError> {
-    let flags = flags_for(argv, JOIN_PANE_SHORT, cmd_name)?;
-    no_extra_positionals(&flags, cmd_name, 0)?;
+pub(super) fn join_pane(flags: &Args) -> Result<JoinPane, ParseError> {
     let invalid = || ParseError::Other("size or position invalid tiled geometry".to_string());
     let size = match (flags.values.get(&'l'), flags.values.get(&'p')) {
         (Some(_), _) | (None, None) => extent_value(
-            &flags,
+            flags,
             'l',
             0,
             SizeWords::Fixed("size or position invalid tiled geometry"),
@@ -1957,92 +1358,50 @@ fn parse_join_pane(argv: &[String], cmd_name: &str) -> Result<JoinPane, ParseErr
         )),
     };
     Ok(JoinPane {
-        src: target_or_current(&flags.values, 's')?,
-        dst: target_or_current(&flags.values, 't')?,
-        before: flags.present.contains(&'b'),
-        detach: flags.present.contains(&'d'),
-        full: flags.present.contains(&'f'),
-        horizontal: flags.present.contains(&'h'),
-        vertical: flags.present.contains(&'v'),
+        src: flags.target('s')?,
+        dst: flags.target('t')?,
+        before: flags.on('b'),
+        detach: flags.on('d'),
+        full: flags.on('f'),
+        horizontal: flags.on('h'),
+        vertical: flags.on('v'),
         size,
     })
 }
 
-fn parse_swap_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('s', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('U', FlagKind::Bool),
-        ('D', FlagKind::Bool),
-        ('d', FlagKind::Bool),
-        ('Z', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "swap-pane")?;
-    no_extra_positionals(&flags, "swap-pane", 0)?;
+pub(super) fn parse_swap_pane(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SwapPane(SwapPane {
-        src: target_if_given(&flags.values, 's')?,
-        dst: target_or_current(&flags.values, 't')?,
-        up: flags.present.contains(&'U'),
-        down: flags.present.contains(&'D'),
-        detach: flags.present.contains(&'d'),
-        keep_zoom: flags.present.contains(&'Z'),
+        src: flags.target_opt('s')?,
+        dst: flags.target('t')?,
+        up: flags.on('U'),
+        down: flags.on('D'),
+        detach: flags.on('d'),
+        keep_zoom: flags.on('Z'),
     }))
 }
 
-fn parse_swap_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('d', FlagKind::Bool),
-        ('s', FlagKind::Value),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "swap-window")?;
-    no_extra_positionals(&flags, "swap-window", 0)?;
+pub(super) fn parse_swap_window(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SwapWindow(SwapWindow {
-        src: target_if_given(&flags.values, 's')?,
-        dst: target_or_current(&flags.values, 't')?,
-        select: flags.present.contains(&'d'),
+        src: flags.target_opt('s')?,
+        dst: flags.target('t')?,
+        select: flags.on('d'),
     }))
 }
 
-fn parse_break_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('d', FlagKind::Bool),
-        ('a', FlagKind::Bool),
-        ('b', FlagKind::Bool),
-        ('P', FlagKind::Bool),
-        ('F', FlagKind::Value),
-        ('n', FlagKind::Value),
-        ('s', FlagKind::Value),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "break-pane")?;
-    no_extra_positionals(&flags, "break-pane", 0)?;
+pub(super) fn parse_break_pane(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::BreakPane(BreakPane {
-        src: target_or_current(&flags.values, 's')?,
-        dst: target_if_given(&flags.values, 't')?,
-        detach: flags.present.contains(&'d'),
-        name: flags.values.get(&'n').cloned(),
-        after: flags.present.contains(&'a'),
-        before: flags.present.contains(&'b'),
-        print: flags.present.contains(&'P'),
-        format: flags.values.get(&'F').cloned(),
+        src: flags.target('s')?,
+        dst: flags.target_opt('t')?,
+        detach: flags.on('d'),
+        name: flags.val('n'),
+        after: flags.on('a'),
+        before: flags.on('b'),
+        print: flags.on('P'),
+        format: flags.val('F'),
     }))
 }
 
-fn parse_resize_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('x', FlagKind::Value),
-        ('y', FlagKind::Value),
-        ('A', FlagKind::Bool),
-        ('a', FlagKind::Bool),
-        ('L', FlagKind::Bool),
-        ('R', FlagKind::Bool),
-        ('U', FlagKind::Bool),
-        ('D', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "resize-window")?;
-    no_extra_positionals(&flags, "resize-window", 1)?;
+pub(super) fn parse_resize_window(flags: &Args) -> Result<Command, ParseError> {
     let adjust = match flags.positionals.first() {
         Some(s) => s
             .parse::<u32>()
@@ -2064,7 +1423,7 @@ fn parse_resize_window(argv: &[String]) -> Result<Command, ParseError> {
     Ok(Command::ResizeWindow(ResizeWindow {
         direction,
         adjust,
-        target: target_or_current(&flags.values, 't')?,
+        target: flags.target('t')?,
         width: flags
             .values
             .get(&'x')
@@ -2075,8 +1434,8 @@ fn parse_resize_window(argv: &[String]) -> Result<Command, ParseError> {
             .get(&'y')
             .map(|s| parse_window_size(s, "height"))
             .transpose()?,
-        largest: flags.present.contains(&'A'),
-        smallest: flags.present.contains(&'a'),
+        largest: flags.on('A'),
+        smallest: flags.on('a'),
     }))
 }
 
@@ -2096,96 +1455,46 @@ fn adjustment_why(s: &str) -> &'static str {
     }
 }
 
-fn parse_rotate_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('U', FlagKind::Bool),
-        ('D', FlagKind::Bool),
-        ('Z', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "rotate-window")?;
-    no_extra_positionals(&flags, "rotate-window", 0)?;
+pub(super) fn parse_rotate_window(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::RotateWindow(RotateWindow {
-        target: target_or_current(&flags.values, 't')?,
-        up: flags.present.contains(&'U'),
-        down: flags.present.contains(&'D'),
-        keep_zoom: flags.present.contains(&'Z'),
+        target: flags.target('t')?,
+        up: flags.on('U'),
+        down: flags.on('D'),
+        keep_zoom: flags.on('Z'),
     }))
 }
 
-fn parse_move_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('s', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('a', FlagKind::Bool),
-        ('b', FlagKind::Bool),
-        ('d', FlagKind::Bool),
-        ('k', FlagKind::Bool),
-        ('r', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "move-window")?;
-    no_extra_positionals(&flags, "move-window", 0)?;
+pub(super) fn parse_move_window(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::MoveWindow(MoveWindow {
-        src: target_or_current(&flags.values, 's')?,
-        dst: target_if_given(&flags.values, 't')?,
-        after: flags.present.contains(&'a'),
-        renumber: flags.present.contains(&'r'),
-        before: flags.present.contains(&'b'),
-        detach: flags.present.contains(&'d'),
-        kill: flags.present.contains(&'k'),
+        src: flags.target('s')?,
+        dst: flags.target_opt('t')?,
+        after: flags.on('a'),
+        renumber: flags.on('r'),
+        before: flags.on('b'),
+        detach: flags.on('d'),
+        kill: flags.on('k'),
     }))
 }
 
-fn parse_link_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('s', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('a', FlagKind::Bool),
-        ('b', FlagKind::Bool),
-        ('d', FlagKind::Bool),
-        ('k', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "link-window")?;
-    no_extra_positionals(&flags, "link-window", 0)?;
+pub(super) fn parse_link_window(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::LinkWindow(LinkWindow {
-        src: target_or_current(&flags.values, 's')?,
-        dst: target_if_given(&flags.values, 't')?,
-        after: flags.present.contains(&'a'),
-        before: flags.present.contains(&'b'),
-        detach: flags.present.contains(&'d'),
-        kill: flags.present.contains(&'k'),
+        src: flags.target('s')?,
+        dst: flags.target_opt('t')?,
+        after: flags.on('a'),
+        before: flags.on('b'),
+        detach: flags.on('d'),
+        kill: flags.on('k'),
     }))
 }
 
-fn parse_unlink_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('t', FlagKind::Value), ('k', FlagKind::Bool)];
-    let flags = flags_for(argv, SHORT, "unlink-window")?;
-    no_extra_positionals(&flags, "unlink-window", 0)?;
+pub(super) fn parse_unlink_window(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::UnlinkWindow(UnlinkWindow {
-        target: target_or_current(&flags.values, 't')?,
-        kill: flags.present.contains(&'k'),
+        target: flags.target('t')?,
+        kill: flags.on('k'),
     }))
 }
 
-fn parse_refresh_client(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('S', FlagKind::Bool),
-        ('c', FlagKind::Bool),
-        ('L', FlagKind::Bool),
-        ('R', FlagKind::Bool),
-        ('U', FlagKind::Bool),
-        ('D', FlagKind::Bool),
-        ('F', FlagKind::Value),
-        ('f', FlagKind::Value),
-        ('l', FlagKind::Bool),
-        ('r', FlagKind::Value),
-        ('A', FlagKind::Value),
-        ('B', FlagKind::Value),
-        ('C', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "refresh-client")?;
-    no_extra_positionals(&flags, "refresh-client", 1)?;
+pub(super) fn parse_refresh_client(flags: &Args) -> Result<Command, ParseError> {
     let pan = [
         ('c', Pan::Reset),
         ('L', Pan::Left),
@@ -2197,49 +1506,28 @@ fn parse_refresh_client(argv: &[String]) -> Result<Command, ParseError> {
     .find(|(f, _)| flags.present.contains(f))
     .map(|(_, p)| p);
     Ok(Command::RefreshClient(RefreshClient {
-        client: flags.values.get(&'t').cloned(),
-        status: flags.present.contains(&'S'),
+        client: flags.val('t'),
+        status: flags.on('S'),
         pan,
-        adjustment: flags.positionals.first().cloned(),
+        adjustment: flags.first(),
         // `-F` is `-f`'s alias, and goes first.
         flags: ['F', 'f']
             .iter()
             .filter_map(|f| flags.values.get(f).cloned())
             .collect(),
-        clipboard: flags.present.contains(&'l'),
-        report: flags.values.get(&'r').cloned(),
+        clipboard: flags.on('l'),
+        report: flags.val('r'),
         control: ['A', 'B', 'C'].iter().any(|f| flags.present.contains(f)),
     }))
 }
 
-fn parse_show_messages(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('J', FlagKind::Bool),
-        ('T', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "show-messages")?;
-    no_extra_positionals(&flags, "show-messages", 0)?;
+pub(super) fn parse_show_messages(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ShowMessages(ShowMessages {
-        client: flags.values.get(&'t').cloned(),
-        jobs: flags.present.contains(&'J'),
-        terminals: flags.present.contains(&'T'),
+        client: flags.val('t'),
+        jobs: flags.on('J'),
+        terminals: flags.on('T'),
     }))
 }
-
-/// The flags `choose-tree`, `choose-client` and `choose-buffer` take
-/// beside their own.
-const CHOOSE_SHORT: &[(char, FlagKind)] = &[
-    ('F', FlagKind::Value),
-    ('f', FlagKind::Value),
-    ('K', FlagKind::Value),
-    ('N', FlagKind::Bool),
-    ('O', FlagKind::Value),
-    ('r', FlagKind::Bool),
-    ('t', FlagKind::Value),
-    ('y', FlagKind::Bool),
-    ('Z', FlagKind::Bool),
-];
 
 /// How many times the bool flag `flag` is given in `argv` (`-NN` is two),
 /// which the flag table does not count.
@@ -2269,182 +1557,96 @@ fn count_flag(argv: &[String], flag: char, valued: &str) -> u8 {
     count
 }
 
-fn choose_opts(
-    argv: &[String],
-    flags: &ParsedFlags,
-    cmd_name: &str,
-) -> Result<ChooseOpts, ParseError> {
-    no_extra_positionals(flags, cmd_name, 1)?;
+pub(super) fn choose_opts(flags: &Args) -> Result<ChooseOpts, ParseError> {
     Ok(ChooseOpts {
-        target: target_or_current(&flags.values, 't')?,
-        format: flags.values.get(&'F').cloned(),
-        filter: flags.values.get(&'f').cloned(),
-        key_format: flags.values.get(&'K').cloned(),
-        sort: flags.values.get(&'O').cloned(),
-        reversed: flags.present.contains(&'r'),
-        no_preview: count_flag(argv, 'N', "FfKOt"),
-        prompt_yes: flags.present.contains(&'y'),
-        groups: flags.present.contains(&'G'),
-        template: flags.positionals.first().cloned(),
+        target: flags.target('t')?,
+        format: flags.val('F'),
+        filter: flags.val('f'),
+        key_format: flags.val('K'),
+        sort: flags.val('O'),
+        reversed: flags.on('r'),
+        no_preview: count_flag(flags.argv, 'N', "FfKOt"),
+        prompt_yes: flags.on('y'),
+        groups: flags.on('G'),
+        template: flags.first(),
     })
 }
 
-fn parse_choose_client(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, CHOOSE_SHORT, "choose-client")?;
+pub(super) fn parse_choose_client(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ChooseClient(ChooseClient {
-        zoom: flags.present.contains(&'Z'),
-        opts: choose_opts(argv, &flags, "choose-client")?,
+        zoom: flags.on('Z'),
+        opts: choose_opts(flags)?,
     }))
 }
 
-fn parse_suspend_client(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(argv, &[('t', FlagKind::Value)], "suspend-client")?;
-    no_extra_positionals(&flags, "suspend-client", 0)?;
+pub(super) fn parse_suspend_client(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SuspendClient(SuspendClient {
-        client: flags.values.get(&'t').cloned(),
+        client: flags.val('t'),
     }))
 }
 
-fn parse_find_window(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('Z', FlagKind::Bool),
-        ('C', FlagKind::Bool),
-        ('N', FlagKind::Bool),
-        ('T', FlagKind::Bool),
-        ('r', FlagKind::Bool),
-        ('i', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "find-window")?;
-    needs_positionals(argv, &flags, "find-window", 1)?;
-    no_extra_positionals(&flags, "find-window", 1)?;
+pub(super) fn parse_find_window(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::FindWindow(FindWindow {
-        target: target_or_current(&flags.values, 't')?,
-        zoom: flags.present.contains(&'Z'),
-        pattern: flags.positionals.first().cloned(),
-        content: flags.present.contains(&'C'),
-        name: flags.present.contains(&'N'),
-        title: flags.present.contains(&'T'),
-        regex: flags.present.contains(&'r'),
-        ignore: flags.present.contains(&'i'),
+        target: flags.target('t')?,
+        zoom: flags.on('Z'),
+        pattern: flags.first(),
+        content: flags.on('C'),
+        name: flags.on('N'),
+        title: flags.on('T'),
+        regex: flags.on('r'),
+        ignore: flags.on('i'),
     }))
 }
 
-fn parse_choose_tree(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('F', FlagKind::Value),
-        ('f', FlagKind::Value),
-        ('G', FlagKind::Bool),
-        ('K', FlagKind::Value),
-        ('N', FlagKind::Bool),
-        ('O', FlagKind::Value),
-        ('r', FlagKind::Bool),
-        ('s', FlagKind::Bool),
-        ('t', FlagKind::Value),
-        ('w', FlagKind::Bool),
-        ('y', FlagKind::Bool),
-        ('Z', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "choose-tree")?;
+pub(super) fn parse_choose_tree(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ChooseTree(ChooseTree {
-        zoom: flags.present.contains(&'Z'),
-        sessions: flags.present.contains(&'s'),
-        windows: flags.present.contains(&'w'),
-        opts: choose_opts(argv, &flags, "choose-tree")?,
+        zoom: flags.on('Z'),
+        sessions: flags.on('s'),
+        windows: flags.on('w'),
+        opts: choose_opts(flags)?,
     }))
 }
 
-fn parse_wait_for(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(
-        argv,
-        &[
-            ('S', FlagKind::Bool),
-            ('L', FlagKind::Bool),
-            ('U', FlagKind::Bool),
-        ],
-        "wait-for",
-    )?;
-    needs_positionals(argv, &flags, "wait-for", 1)?;
-    no_extra_positionals(&flags, "wait-for", 1)?;
+pub(super) fn parse_wait_for(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::WaitFor(WaitFor {
-        channel: flags.positionals.first().cloned(),
-        signal: flags.present.contains(&'S'),
-        lock: flags.present.contains(&'L'),
-        unlock: flags.present.contains(&'U'),
+        channel: flags.first(),
+        signal: flags.on('S'),
+        lock: flags.on('L'),
+        unlock: flags.on('U'),
     }))
 }
 
-fn parse_set_buffer(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('a', FlagKind::Bool),
-        ('b', FlagKind::Value),
-        ('n', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('w', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "set-buffer")?;
-    no_extra_positionals(&flags, "set-buffer", 1)?;
+pub(super) fn parse_set_buffer(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::SetBuffer(SetBuffer {
-        append: flags.present.contains(&'a'),
-        name: flags.values.get(&'b').cloned(),
-        rename: flags.values.get(&'n').cloned(),
-        data: flags.positionals.first().cloned(),
-        clipboard: flags.present.contains(&'w'),
-        client: flags.values.get(&'t').cloned(),
+        append: flags.on('a'),
+        name: flags.val('b'),
+        rename: flags.val('n'),
+        data: flags.first(),
+        clipboard: flags.on('w'),
+        client: flags.val('t'),
     }))
 }
 
-fn parse_paste_buffer(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('d', FlagKind::Bool),
-        ('p', FlagKind::Bool),
-        ('r', FlagKind::Bool),
-        ('S', FlagKind::Bool),
-        ('b', FlagKind::Value),
-        ('s', FlagKind::Value),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "paste-buffer")?;
-    no_extra_positionals(&flags, "paste-buffer", 0)?;
+pub(super) fn parse_paste_buffer(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::PasteBuffer(PasteBuffer {
-        bracket: flags.present.contains(&'p'),
-        name: flags.values.get(&'b').cloned(),
-        delete: flags.present.contains(&'d'),
-        raw: flags.present.contains(&'r'),
-        separator: flags.values.get(&'s').cloned(),
-        unsanitized: flags.present.contains(&'S'),
-        target: target_or_current(&flags.values, 't')?,
+        bracket: flags.on('p'),
+        name: flags.val('b'),
+        delete: flags.on('d'),
+        raw: flags.on('r'),
+        separator: flags.val('s'),
+        unsanitized: flags.on('S'),
+        target: flags.target('t')?,
     }))
 }
 
-fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('E', FlagKind::Bool),
-        ('B', FlagKind::Bool),
-        ('b', FlagKind::Value),
-        ('c', FlagKind::Value),
-        ('d', FlagKind::Value),
-        ('e', FlagKind::Value),
-        ('T', FlagKind::Value),
-        ('w', FlagKind::Value),
-        ('h', FlagKind::Value),
-        ('x', FlagKind::Value),
-        ('y', FlagKind::Value),
-        ('s', FlagKind::Value),
-        ('S', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('C', FlagKind::Bool),
-        ('k', FlagKind::Bool),
-        ('N', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "display-popup")?;
+pub(super) fn parse_display_popup(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::DisplayPopup(DisplayPopup {
-        close_on_exit: flags.present.contains(&'E'),
+        close_on_exit: flags.on('E'),
         close_on_zero: flags.counts.get(&'E').is_some_and(|n| *n > 1),
-        no_border: flags.present.contains(&'B'),
-        border: flags.values.get(&'b').cloned(),
-        client: flags.values.get(&'c').cloned(),
-        cwd: flags.values.get(&'d').cloned(),
+        no_border: flags.on('B'),
+        border: flags.val('b'),
+        client: flags.val('c'),
+        cwd: flags.val('d'),
         env: flags
             .repeated
             .iter()
@@ -2452,139 +1654,121 @@ fn parse_display_popup(argv: &[String]) -> Result<Command, ParseError> {
             .filter_map(|(_, v)| v.split_once('='))
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
-        title: flags.values.get(&'T').cloned(),
-        style: flags.values.get(&'s').cloned(),
-        border_style: flags.values.get(&'S').cloned(),
-        close: flags.present.contains(&'C'),
-        any_key: flags.present.contains(&'k'),
-        reset_flags: flags.present.contains(&'N'),
-        target: target_if_given(&flags.values, 't')?,
-        width: extent_value(&flags, 'w', 1, SizeWords::Trio("width"))?,
-        height: extent_value(&flags, 'h', 1, SizeWords::Trio("height"))?,
-        x: flags.values.get(&'x').cloned(),
-        y: flags.values.get(&'y').cloned(),
-        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+        title: flags.val('T'),
+        style: flags.val('s'),
+        border_style: flags.val('S'),
+        close: flags.on('C'),
+        any_key: flags.on('k'),
+        reset_flags: flags.on('N'),
+        target: flags.target_opt('t')?,
+        width: extent_value(flags, 'w', 1, SizeWords::Trio("width"))?,
+        height: extent_value(flags, 'h', 1, SizeWords::Trio("height"))?,
+        x: flags.val('x'),
+        y: flags.val('y'),
+        command: flags.command(),
     }))
 }
 
-fn parse_new_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('P', FlagKind::Bool),
-        ('F', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('c', FlagKind::Value),
-        ('x', FlagKind::Value),
-        ('y', FlagKind::Value),
-        ('X', FlagKind::Value),
-        ('Y', FlagKind::Value),
-        ('e', FlagKind::Value),
-        ('Z', FlagKind::Bool),
-        ('d', FlagKind::Bool),
-        // `-L` makes it a tiled pane, which `split-window` has the rest of
-        // the flags for; for a floating one tmux reads and ignores them.
-        ('L', FlagKind::Bool),
-        ('b', FlagKind::Bool),
-        ('f', FlagKind::Bool),
-        ('h', FlagKind::Bool),
-        ('v', FlagKind::Bool),
-        ('l', FlagKind::Value),
-        ('p', FlagKind::Value),
-        ('s', FlagKind::Value),
-        ('S', FlagKind::Value),
-        ('R', FlagKind::Value),
-        ('k', FlagKind::Bool),
-        ('m', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "new-pane")?;
-    if flags.present.contains(&'L') {
+pub(super) fn parse_new_pane(flags: &Args) -> Result<Command, ParseError> {
+    if flags.on('L') {
         return split_window_of(flags).map(Command::SplitWindow);
     }
-    let env = env_values(&flags);
+    let env = env_values(flags);
     Ok(Command::NewPane(NewPane {
-        print: flags.present.contains(&'P'),
-        format: flags.values.get(&'F').cloned(),
-        target: target_or_current(&flags.values, 't')?,
-        cwd: flags.values.get(&'c').cloned(),
-        width: extent_value(&flags, 'x', 0, NEW_PANE_WORDS)?,
-        height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
-        x: offset_value(&flags, 'X')?,
-        y: offset_value(&flags, 'Y')?,
+        print: flags.on('P'),
+        format: flags.val('F'),
+        target: flags.target('t')?,
+        cwd: flags.val('c'),
+        width: extent_value(flags, 'x', 0, NEW_PANE_WORDS)?,
+        height: extent_value(flags, 'y', 0, NEW_PANE_WORDS)?,
+        x: offset_value(flags, 'X')?,
+        y: offset_value(flags, 'Y')?,
         env,
-        zoom: flags.present.contains(&'Z'),
-        detached: flags.present.contains(&'d'),
-        setup: pane_setup(&flags),
-        command: (!flags.positionals.is_empty()).then_some(flags.positionals),
+        zoom: flags.on('Z'),
+        detached: flags.on('d'),
+        setup: pane_setup(flags),
+        command: flags.command(),
     }))
 }
 
-fn parse_float_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('x', FlagKind::Value),
-        ('y', FlagKind::Value),
-        ('X', FlagKind::Value),
-        ('Y', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "float-pane")?;
-    no_extra_positionals(&flags, "float-pane", 0)?;
+pub(super) fn parse_float_pane(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::FloatPane(FloatPane {
-        target: target_or_current(&flags.values, 't')?,
-        width: extent_value(&flags, 'x', 0, NEW_PANE_WORDS)?,
-        height: extent_value(&flags, 'y', 0, NEW_PANE_WORDS)?,
-        x: offset_value(&flags, 'X')?,
-        y: offset_value(&flags, 'Y')?,
+        target: flags.target('t')?,
+        width: extent_value(flags, 'x', 0, NEW_PANE_WORDS)?,
+        height: extent_value(flags, 'y', 0, NEW_PANE_WORDS)?,
+        x: offset_value(flags, 'X')?,
+        y: offset_value(flags, 'Y')?,
     }))
 }
 
-fn parse_unfloat_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('s', FlagKind::Value),
-        ('h', FlagKind::Bool),
-        ('v', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "unfloat-pane")?;
-    no_extra_positionals(&flags, "unfloat-pane", 0)?;
-    let dir = if flags.present.contains(&'h') {
+pub(super) fn parse_unfloat_pane(flags: &Args) -> Result<Command, ParseError> {
+    let dir = if flags.on('h') {
         Some(Dir::Horizontal)
-    } else if flags.present.contains(&'v') {
+    } else if flags.on('v') {
         Some(Dir::Vertical)
     } else {
         None
     };
     Ok(Command::UnfloatPane(UnfloatPane {
-        target: target_or_current(&flags.values, 't')?,
-        split: flags
-            .values
-            .get(&'s')
-            .map(|s| parse_target(s))
-            .transpose()?,
+        target: flags.target('t')?,
+        split: flags.target_opt('s')?,
         dir,
     }))
 }
 
-fn parse_drag_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[('M', FlagKind::Bool)];
-    let flags = flags_for(argv, SHORT, "drag-pane")?;
-    no_extra_positionals(&flags, "drag-pane", 0)?;
-    if !flags.present.contains(&'M') {
+pub(super) fn parse_new_scratchpad(flags: &Args) -> Result<Command, ParseError> {
+    Ok(Command::NewScratchpad(NewScratchpad {
+        target: flags.target('t')?,
+        cwd: flags.val('c'),
+        command: flags.command(),
+    }))
+}
+
+pub(super) fn parse_show_scratchpad(flags: &Args) -> Result<Command, ParseError> {
+    let word = flags
+        .positionals
+        .first()
+        .ok_or_else(|| ParseError::MissingArgument("show-scratchpad".to_string()))?;
+    let pane = word
+        .parse::<PaneId>()
+        .map_err(|_| ParseError::Other(format!("invalid pane id: {word}")))?;
+    Ok(Command::ShowScratchpad(ShowScratchpad {
+        target: flags.target('t')?,
+        pane,
+    }))
+}
+
+pub(super) fn lua(flags: &Args) -> Result<Command, ParseError> {
+    if flags.argv.is_empty() {
+        return Err(ParseError::MissingArgument("lua".to_string()));
+    }
+    Ok(Command::Lua {
+        src: flags.argv.join(" "),
+    })
+}
+
+pub(super) fn lua_call(flags: &Args) -> Result<Command, ParseError> {
+    let [id] = flags.argv else {
+        return Err(ParseError::Other("lua-call needs one id".to_string()));
+    };
+    let id = id
+        .parse()
+        .map_err(|_| ParseError::Other(format!("lua-call: not a number: {id}")))?;
+    Ok(Command::LuaCall { id })
+}
+
+pub(super) fn parse_drag_pane(flags: &Args) -> Result<Command, ParseError> {
+    if !flags.on('M') {
         return Err(ParseError::Other("drag-pane needs -M".to_string()));
     }
     Ok(Command::DragPane(DragPane))
 }
 
-fn parse_place_pane(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('t', FlagKind::Value),
-        ('X', FlagKind::Value),
-        ('Y', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "place-pane")?;
-    no_extra_positionals(&flags, "place-pane", 0)?;
+pub(super) fn parse_place_pane(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::PlacePane(PlacePane {
-        target: target_or_current(&flags.values, 't')?,
-        x: offset_value(&flags, 'X')?,
-        y: offset_value(&flags, 'Y')?,
+        target: flags.target('t')?,
+        x: offset_value(flags, 'X')?,
+        y: offset_value(flags, 'Y')?,
     }))
 }
 
@@ -2613,91 +1797,49 @@ fn menu_entries(args: &[String]) -> Result<Vec<MenuEntry>, ParseError> {
     Ok(items)
 }
 
-fn parse_display_menu(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('T', FlagKind::Value),
-        ('x', FlagKind::Value),
-        ('y', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('c', FlagKind::Value),
-        ('b', FlagKind::Value),
-        ('s', FlagKind::Value),
-        ('H', FlagKind::Value),
-        ('S', FlagKind::Value),
-        ('C', FlagKind::Value),
-        ('O', FlagKind::Bool),
-        ('M', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "display-menu")?;
-    needs_positionals(argv, &flags, "display-menu", 1)?;
+pub(super) fn parse_display_menu(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::DisplayMenu(DisplayMenu {
-        title: flags.values.get(&'T').cloned(),
-        x: flags.values.get(&'x').cloned(),
-        y: flags.values.get(&'y').cloned(),
-        target: target_if_given(&flags.values, 't')?,
-        client: flags.values.get(&'c').cloned(),
-        border: flags.values.get(&'b').cloned(),
-        style: flags.values.get(&'s').cloned(),
-        selected_style: flags.values.get(&'H').cloned(),
-        border_style: flags.values.get(&'S').cloned(),
-        starting_choice: flags.values.get(&'C').cloned(),
-        stay_open: flags.present.contains(&'O'),
-        mouse: flags.present.contains(&'M'),
+        title: flags.val('T'),
+        x: flags.val('x'),
+        y: flags.val('y'),
+        target: flags.target_opt('t')?,
+        client: flags.val('c'),
+        border: flags.val('b'),
+        style: flags.val('s'),
+        selected_style: flags.val('H'),
+        border_style: flags.val('S'),
+        starting_choice: flags.val('C'),
+        stay_open: flags.on('O'),
+        mouse: flags.on('M'),
         items: menu_entries(&flags.positionals)?,
     }))
 }
 
-fn parse_display_panes(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('b', FlagKind::Bool),
-        ('d', FlagKind::Value),
-        ('N', FlagKind::Bool),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "display-panes")?;
-    no_extra_positionals(&flags, "display-panes", 1)?;
+pub(super) fn parse_display_panes(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::DisplayPanes(DisplayPanes {
-        duration: flags.values.get(&'d').cloned(),
-        background: flags.present.contains(&'b'),
-        no_keys: flags.present.contains(&'N'),
-        client: flags.values.get(&'t').cloned(),
-        template: flags.positionals.first().cloned(),
+        duration: flags.val('d'),
+        background: flags.on('b'),
+        no_keys: flags.on('N'),
+        client: flags.val('t'),
+        template: flags.first(),
     }))
 }
 
-fn parse_confirm_before(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('b', FlagKind::Bool),
-        ('c', FlagKind::Value),
-        ('p', FlagKind::Value),
-        ('t', FlagKind::Value),
-        ('y', FlagKind::Bool),
-    ];
-    let flags = flags_for(argv, SHORT, "confirm-before")?;
-    needs_positionals(argv, &flags, "confirm-before", 1)?;
-    no_extra_positionals(&flags, "confirm-before", 1)?;
+pub(super) fn parse_confirm_before(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ConfirmBefore(ConfirmBefore {
-        prompt: flags.values.get(&'p').cloned(),
-        default_yes: flags.present.contains(&'y'),
-        confirm_key: flags.values.get(&'c').cloned(),
-        background: flags.present.contains(&'b'),
-        client: flags.values.get(&'t').cloned(),
-        command: flags.positionals.first().cloned(),
+        prompt: flags.val('p'),
+        default_yes: flags.on('y'),
+        confirm_key: flags.val('c'),
+        background: flags.on('b'),
+        client: flags.val('t'),
+        command: flags.first(),
     }))
 }
 
-fn parse_if_shell(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('F', FlagKind::Bool),
-        ('b', FlagKind::Bool),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "if-shell")?;
-    needs_positionals(argv, &flags, "if-shell", 2)?;
-    no_extra_positionals(&flags, "if-shell", 3)?;
+pub(super) fn parse_if_shell(flags: &Args) -> Result<Command, ParseError> {
     let mut positionals = flags.positionals.iter().cloned();
     let condition = positionals.next().map(|c| {
-        if flags.present.contains(&'F') {
+        if flags.on('F') {
             Condition::Format(c)
         } else {
             Condition::Shell(c)
@@ -2707,101 +1849,59 @@ fn parse_if_shell(argv: &[String]) -> Result<Command, ParseError> {
         condition,
         then: positionals.next(),
         otherwise: positionals.next(),
-        background: flags.present.contains(&'b'),
-        target: target_or_current(&flags.values, 't')?,
+        background: flags.on('b'),
+        target: flags.target('t')?,
     }))
 }
 
-fn parse_set_hook(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('g', FlagKind::Bool),
-        ('u', FlagKind::Bool),
-        ('a', FlagKind::Bool),
-        ('p', FlagKind::Bool),
-        ('w', FlagKind::Bool),
-        ('R', FlagKind::Bool),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "set-hook")?;
-    needs_positionals(argv, &flags, "set-hook", 1)?;
-    no_extra_positionals(&flags, "set-hook", 2)?;
+pub(super) fn parse_set_hook(flags: &Args) -> Result<Command, ParseError> {
     let mut positionals = flags.positionals.iter().cloned();
     Ok(Command::SetHook(SetHook {
-        global: flags.present.contains(&'g'),
-        unset: flags.present.contains(&'u'),
-        append: flags.present.contains(&'a'),
-        pane: flags.present.contains(&'p'),
-        window: flags.present.contains(&'w'),
-        run: flags.present.contains(&'R'),
-        target: target_or_current(&flags.values, 't')?,
-        target_text: flags.values.get(&'t').cloned(),
+        global: flags.on('g'),
+        unset: flags.on('u'),
+        append: flags.on('a'),
+        pane: flags.on('p'),
+        window: flags.on('w'),
+        run: flags.on('R'),
+        target: flags.target('t')?,
+        target_text: flags.val('t'),
         hook: positionals.next(),
         command: positionals.next(),
     }))
 }
 
-fn parse_show_hooks(argv: &[String]) -> Result<Command, ParseError> {
-    let flags = flags_for(
-        argv,
-        &[
-            ('g', FlagKind::Bool),
-            ('w', FlagKind::Bool),
-            ('p', FlagKind::Bool),
-            ('t', FlagKind::Value),
-        ],
-        "show-hooks",
-    )?;
-    no_extra_positionals(&flags, "show-hooks", 1)?;
+pub(super) fn parse_show_hooks(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ShowHooks(ShowHooks {
-        global: flags.present.contains(&'g'),
-        window: flags.present.contains(&'w'),
-        pane: flags.present.contains(&'p'),
-        target: target_or_current(&flags.values, 't')?,
-        target_text: flags.values.get(&'t').cloned(),
-        hook: flags.positionals.first().cloned(),
+        global: flags.on('g'),
+        window: flags.on('w'),
+        pane: flags.on('p'),
+        target: flags.target('t')?,
+        target_text: flags.val('t'),
+        hook: flags.first(),
     }))
 }
 
-fn parse_set_environment(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('g', FlagKind::Bool),
-        ('u', FlagKind::Bool),
-        ('h', FlagKind::Bool),
-        ('r', FlagKind::Bool),
-        ('F', FlagKind::Bool),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "set-environment")?;
-    needs_positionals(argv, &flags, "set-environment", 1)?;
-    no_extra_positionals(&flags, "set-environment", 2)?;
+pub(super) fn parse_set_environment(flags: &Args) -> Result<Command, ParseError> {
     let mut positionals = flags.positionals.iter().cloned();
     Ok(Command::SetEnvironment(SetEnvironment {
-        global: flags.present.contains(&'g'),
-        unset: flags.present.contains(&'u'),
-        hidden: flags.present.contains(&'h'),
-        clear: flags.present.contains(&'r'),
-        format: flags.present.contains(&'F'),
-        target: target_or_current(&flags.values, 't')?,
+        global: flags.on('g'),
+        unset: flags.on('u'),
+        hidden: flags.on('h'),
+        clear: flags.on('r'),
+        format: flags.on('F'),
+        target: flags.target('t')?,
         name: positionals.next(),
         value: positionals.next(),
     }))
 }
 
-fn parse_show_environment(argv: &[String]) -> Result<Command, ParseError> {
-    const SHORT: &[(char, FlagKind)] = &[
-        ('g', FlagKind::Bool),
-        ('h', FlagKind::Bool),
-        ('s', FlagKind::Bool),
-        ('t', FlagKind::Value),
-    ];
-    let flags = flags_for(argv, SHORT, "show-environment")?;
-    no_extra_positionals(&flags, "show-environment", 1)?;
+pub(super) fn parse_show_environment(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::ShowEnvironment(ShowEnvironment {
-        global: flags.present.contains(&'g'),
-        hidden: flags.present.contains(&'h'),
-        shell: flags.present.contains(&'s'),
-        target: target_or_current(&flags.values, 't')?,
-        name: flags.positionals.first().cloned(),
+        global: flags.on('g'),
+        hidden: flags.on('h'),
+        shell: flags.on('s'),
+        target: flags.target('t')?,
+        name: flags.first(),
     }))
 }
 
@@ -2910,14 +2010,14 @@ fn split_commands(
             break;
         };
         let fresh = !l.started;
-        if !c.is_whitespace() && !(c == '\\' && fresh) {
+        if !c.is_ascii_whitespace() && !(c == '\\' && fresh) {
             l.escaped_semicolon = false;
         }
         if fresh {
             l.formats = 0;
         }
         match c {
-            c if c.is_whitespace() => l.end_word(),
+            c if c.is_ascii_whitespace() => l.end_word(),
             // A command cannot start with a list (tmux's grammar: `{{`
             // is a syntax error, recorded).
             '{' if fresh && l.words.is_empty() => return Err(syntax_error()),
@@ -3453,73 +2553,6 @@ fn quote_word(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
-/// One argument as tmux 3.7b's `args_escape` prints it: `''` when empty;
-/// double quotes around a word holding any of ` #';${}%`, else single
-/// quotes around one holding a space or `"`; a single such character
-/// (or `~`) as a backslash and itself; inside, `\\`, `\"` (in double
-/// quotes), `\$` before a name, C escapes (`\n`, `\t`, ...) and octal
-/// for other control characters; a leading `~` escaped.
-pub fn escape_arg(s: &str) -> String {
-    const DQUOTED: &[char] = &[' ', '#', '\'', ';', '$', '{', '}', '%'];
-    const SQUOTED: &[char] = &[' ', '"'];
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    let quote = if s.contains(DQUOTED) {
-        Some('"')
-    } else if s.contains(SQUOTED) {
-        Some('\'')
-    } else {
-        None
-    };
-    let mut chars = s.chars();
-    if let (Some(c), None) = (chars.next(), chars.next())
-        && c != ' '
-        && (quote.is_some() || c == '~')
-    {
-        return format!("\\{c}");
-    }
-    let dq = quote == Some('"');
-    let mut out = String::new();
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
-        match c {
-            '$' if dq => {
-                if it
-                    .peek()
-                    .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{')
-                {
-                    out.push('\\');
-                }
-                out.push('$');
-            }
-            '"' if dq => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{7}' => out.push_str("\\a"),
-            '\u{b}' => out.push_str("\\v"),
-            '\u{c}' => out.push_str("\\f"),
-            '\0' => {
-                out.push_str("\\0");
-                if it.peek().is_some_and(|n| ('0'..='7').contains(n)) {
-                    out.push_str("00");
-                }
-            }
-            c if c.is_ascii_control() => out.push_str(&format!("\\{:03o}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    match quote {
-        Some(q) if out.starts_with('~') => format!("{q}\\{out}{q}"),
-        Some(q) => format!("{q}{out}{q}"),
-        None if out.starts_with('~') => format!("\\{out}"),
-        None => out,
-    }
-}
-
 /// The character a backslash before `c` stands for, in a bare word or in
 /// double quotes, as tmux 3.7b's lexer reads it (recorded: `"a\tb\nc\sd\ee"`
 /// is a tab, a newline, a space and an escape): `\a \b \e \f \n \r \s \t
@@ -3761,303 +2794,174 @@ pub fn split_argv(argv: &[String]) -> Vec<Vec<String>> {
     cmds
 }
 
-/// Resolves a handful of well-known tmux short names to the full command
-/// name `parse` matches on. `set`/`show` are load-bearing (spec §4.5);
-/// the rest are recognised where trivially table-driven. Public for
-/// `confirm-before`'s prompt, which names the command (TC.7).
-pub fn canonical_name(name: &str) -> &str {
-    match name {
-        "set" => "set-option",
-        "show" => "show-options",
-        "new" => "new-session",
-        "neww" => "new-window",
-        "splitw" => "split-window",
-        "killp" => "kill-pane",
-        "killw" => "kill-window",
-        "selectp" => "select-pane",
-        "selectw" => "select-window",
-        "resizep" => "resize-pane",
-        "respawnp" => "respawn-pane",
-        "lsp" => "list-panes",
-        "lsw" => "list-windows",
-        "send" => "send-keys",
-        "display" => "display-message",
-        "capturep" => "capture-pane",
-        "clearhist" => "clear-history",
-        "attach" => "attach-session",
-        "bind" => "bind-key",
-        "unbind" => "unbind-key",
-        "lsk" => "list-keys",
-        "source" => "source-file",
-        "run" => "run-shell",
-        "selectl" => "select-layout",
-        "prevl" => "previous-layout",
-        "nextl" => "next-layout",
-        "lock" => "lock-server",
-        "locks" => "lock-session",
-        "lockc" => "lock-client",
-        "showphist" => "show-prompt-history",
-        "clearphist" => "clear-prompt-history",
-        other => other,
+pub use super::table::canonical_name;
+
+/// The generic path of every table verb: scan the flags, check the
+/// positional bounds (tmux's wording), hand them to the row's builder.
+fn build(row: &Row, rest: &[String]) -> Result<Command, ParseError> {
+    let flags = if row.raw {
+        ParsedFlags::default()
+    } else {
+        scan(rest, row.flags, row.long, row.name)?
+    };
+    let given = flags.positionals.len();
+    if !rest.is_empty() && given < row.min {
+        return Err(ParseError::TooFewArguments(row.name.to_string(), row.min));
     }
+    if given > row.max {
+        return Err(ParseError::TooManyArguments(row.name.to_string(), row.max));
+    }
+    (row.build)(&Args {
+        name: row.name,
+        argv: rest,
+        flags,
+    })
 }
 
 /// Parses one command's argv (spec §4.5): `argv[0]` is the command name,
 /// the rest are that command's own flags and positionals.
 pub fn parse(argv: &[String]) -> Result<Command, ParseError> {
     let (name, rest) = argv.split_first().ok_or(ParseError::EmptyCommand)?;
-    match canonical_name(name) {
-        "new-session" => parse_new_session(rest),
-        "kill-session" => parse_kill_session(rest),
-        "has-session" => parse_has_session(rest),
-        "list-sessions" => parse_list_sessions(rest),
-        "new-window" => parse_new_window(rest),
-        "kill-window" => parse_kill_window(rest),
-        "select-window" => parse_select_window(rest),
-        "list-windows" => parse_list_windows(rest),
-        "split-window" => parse_split_window(rest),
-        "kill-pane" => parse_kill_pane(rest),
-        "select-pane" => parse_select_pane(rest),
-        "resize-pane" => parse_resize_pane(rest),
-        "respawn-pane" => Ok(Command::RespawnPane(parse_respawn(rest, "respawn-pane")?)),
-        "list-panes" => parse_list_panes(rest),
-        "send-keys" => parse_send_keys(rest),
-        "capture-pane" => parse_capture_pane(rest),
-        "clear-history" => parse_clear_history(rest),
-        "set-option" => parse_set_option(rest),
-        "show-options" => parse_show_options(rest),
-        "display-message" => parse_display_message(rest),
-        "kill-server" => parse_kill_server(rest),
-        "subscribe" => parse_subscribe(rest),
-        "attach-session" => parse_attach_session(rest),
-        "detach-client" => parse_detach_client(rest),
-        "list-clients" => parse_list_clients(rest),
-        "next-window" => Ok(Command::NextWindow(parse_window_step(rest, "next-window")?)),
-        "previous-window" => Ok(Command::PreviousWindow(parse_window_step(
-            rest,
-            "previous-window",
-        )?)),
-        "last-window" => Ok(Command::LastWindow(parse_last_window(rest)?)),
-        "rename-session" => Ok(Command::RenameSession(parse_rename(
-            rest,
-            "rename-session",
-        )?)),
-        "rename-window" => Ok(Command::RenameWindow(parse_rename(rest, "rename-window")?)),
-        "switch-client" => parse_switch_client(rest),
-        "send-prefix" => parse_send_prefix(rest),
-        "bind-key" => parse_bind_key(rest),
-        "unbind-key" => parse_unbind_key(rest),
-        "list-keys" => parse_list_keys(rest),
-        "source-file" => parse_source_file(rest),
-        "reload" => parse_reload(rest),
-        "list-plugins" => parse_list_plugins(rest),
-        "plugin-restart" => parse_plugin_restart(rest),
-        "pane-set-resume" => parse_pane_set_resume(rest),
-        "reboot-check" => parse_reboot_check(rest),
-        "command-prompt" => parse_command_prompt(rest),
-        "run-shell" => parse_run_shell(rest),
-        "select-layout" => parse_select_layout(rest),
-        "join-pane" => Ok(Command::JoinPane(parse_join_pane(rest, "join-pane")?)),
-        "move-pane" => Ok(Command::MovePane(parse_join_pane(rest, "move-pane")?)),
-        "swap-pane" => parse_swap_pane(rest),
-        "swap-window" => parse_swap_window(rest),
-        "break-pane" => parse_break_pane(rest),
-        "resize-window" => parse_resize_window(rest),
-        "clock-mode" => Ok(Command::ClockMode(ClockMode {
-            target: parse_target_only(rest, "clock-mode")?,
-        })),
-        "pipe-pane" => parse_pipe_pane(rest),
-        "last-pane" => parse_last_pane(rest),
-        "rotate-window" => parse_rotate_window(rest),
-        "move-window" => parse_move_window(rest),
-        "link-window" => parse_link_window(rest),
-        "unlink-window" => parse_unlink_window(rest),
-        "next-layout" => Ok(Command::NextLayout(NextLayout {
-            target: parse_target_only(rest, "next-layout")?,
-        })),
-        "previous-layout" => Ok(Command::PreviousLayout(NextLayout {
-            target: parse_target_only(rest, "previous-layout")?,
-        })),
-        "lock-server" => {
-            let flags = flags_for(rest, &[], "lock-server")?;
-            no_extra_positionals(&flags, "lock-server", 0)?;
-            Ok(Command::Lock(Lock {
-                scope: LockScope::Server,
-            }))
-        }
-        "lock-session" => Ok(Command::Lock(Lock {
-            scope: LockScope::Session(parse_target_only(rest, "lock-session")?),
-        })),
-        "lock-client" => {
-            let flags = flags_for(rest, &[('t', FlagKind::Value)], "lock-client")?;
-            no_extra_positionals(&flags, "lock-client", 0)?;
-            Ok(Command::Lock(Lock {
-                scope: LockScope::Client(flags.values.get(&'t').cloned()),
-            }))
-        }
-        "server-access" => parse_server_access(rest),
-        "show-prompt-history" | "clear-prompt-history" => {
-            let name = canonical_name(name);
-            let flags = flags_for(rest, &[('T', FlagKind::Value)], name)?;
-            no_extra_positionals(&flags, name, 0)?;
-            Ok(Command::PromptHistory(PromptHistory {
-                clear: name == "clear-prompt-history",
-                kind: flags.values.get(&'T').cloned(),
-            }))
-        }
-        "respawn-window" => Ok(Command::RespawnWindow(parse_respawn(
-            rest,
-            "respawn-window",
-        )?)),
-        "refresh-client" => parse_refresh_client(rest),
-        "show-messages" => parse_show_messages(rest),
-        "choose-client" => parse_choose_client(rest),
-        "suspend-client" => parse_suspend_client(rest),
-        "find-window" => parse_find_window(rest),
-        "choose-tree" => parse_choose_tree(rest),
-        "wait-for" => parse_wait_for(rest),
-        "display-popup" => parse_display_popup(rest),
-        "new-pane" => parse_new_pane(rest),
-        "float-pane" => parse_float_pane(rest),
-        "unfloat-pane" => parse_unfloat_pane(rest),
-        "drag-pane" => parse_drag_pane(rest),
-        "place-pane" => parse_place_pane(rest),
-        "display-menu" => parse_display_menu(rest),
-        "display-panes" => parse_display_panes(rest),
-        "confirm-before" => parse_confirm_before(rest),
-        "if-shell" => parse_if_shell(rest),
-        "set-hook" => parse_set_hook(rest),
-        "show-hooks" => parse_show_hooks(rest),
-        "set-environment" => parse_set_environment(rest),
-        "show-environment" => parse_show_environment(rest),
-        "__register-source" => parse_register_source(rest),
-        "set-buffer" => parse_set_buffer(rest),
-        "show-buffer" => {
-            let flags = flags_for(rest, &[('b', FlagKind::Value)], "show-buffer")?;
-            no_extra_positionals(&flags, "show-buffer", 0)?;
-            Ok(Command::ShowBuffer(ShowBuffer {
-                name: flags.values.get(&'b').cloned(),
-            }))
-        }
-        "load-buffer" => {
-            const SHORT: &[(char, FlagKind)] = &[
-                ('b', FlagKind::Value),
-                ('t', FlagKind::Value),
-                ('w', FlagKind::Bool),
-            ];
-            let flags = flags_for(rest, SHORT, "load-buffer")?;
-            no_extra_positionals(&flags, "load-buffer", 1)?;
-            Ok(Command::LoadBuffer(LoadBuffer {
-                name: flags.values.get(&'b').cloned(),
-                client: flags.values.get(&'t').cloned(),
-                clipboard: flags.present.contains(&'w'),
-                path: flags
-                    .positionals
-                    .first()
-                    .cloned()
-                    .ok_or_else(|| ParseError::MissingArgument("load-buffer".to_string()))?,
-            }))
-        }
-        "save-buffer" => {
-            const SHORT: &[(char, FlagKind)] = &[('a', FlagKind::Bool), ('b', FlagKind::Value)];
-            let flags = flags_for(rest, SHORT, "save-buffer")?;
-            no_extra_positionals(&flags, "save-buffer", 1)?;
-            Ok(Command::SaveBuffer(SaveBuffer {
-                append: flags.present.contains(&'a'),
-                name: flags.values.get(&'b').cloned(),
-                path: flags
-                    .positionals
-                    .first()
-                    .cloned()
-                    .ok_or_else(|| ParseError::MissingArgument("save-buffer".to_string()))?,
-            }))
-        }
-        "list-buffers" => {
-            let flags = flags_for(
-                rest,
-                &[
-                    ('F', FlagKind::Value),
-                    ('f', FlagKind::Value),
-                    ('O', FlagKind::Value),
-                    ('r', FlagKind::Bool),
-                ],
-                "list-buffers",
-            )?;
-            no_extra_positionals(&flags, "list-buffers", 0)?;
-            Ok(Command::ListBuffers(ListBuffers {
-                format: flags.values.get(&'F').cloned(),
-                filter: flags.values.get(&'f').cloned(),
-                sort: sort_flags(&flags),
-            }))
-        }
-        "delete-buffer" => {
-            let flags = flags_for(rest, &[('b', FlagKind::Value)], "delete-buffer")?;
-            no_extra_positionals(&flags, "delete-buffer", 0)?;
-            Ok(Command::DeleteBuffer(DeleteBuffer {
-                name: flags.values.get(&'b').cloned(),
-            }))
-        }
-        "paste-buffer" => parse_paste_buffer(rest),
-        "copy-mode" => {
-            const SHORT: &[(char, FlagKind)] = &[
-                ('e', FlagKind::Bool),
-                ('H', FlagKind::Bool),
-                ('M', FlagKind::Bool),
-                ('u', FlagKind::Bool),
-                ('d', FlagKind::Bool),
-                ('q', FlagKind::Bool),
-                ('S', FlagKind::Bool),
-                ('s', FlagKind::Value),
-                ('t', FlagKind::Value),
-            ];
-            let flags = flags_for(rest, SHORT, "copy-mode")?;
-            no_extra_positionals(&flags, "copy-mode", 0)?;
-            Ok(Command::CopyMode(CopyMode {
-                page_up: flags.present.contains(&'u'),
-                scroll_exit: flags.present.contains(&'e'),
-                hide_position: flags.present.contains(&'H'),
-                mouse: flags.present.contains(&'M'),
-                cancel: flags.present.contains(&'q'),
-                page_down: flags.present.contains(&'d'),
-                slider: flags.present.contains(&'S'),
-                source: target_if_given(&flags.values, 's')?,
-                target: target_or_current(&flags.values, 't')?,
-            }))
-        }
-        "customize-mode" => {
-            let flags = flags_for(
-                rest,
-                &[
-                    ('F', FlagKind::Value),
-                    ('f', FlagKind::Value),
-                    ('N', FlagKind::Bool),
-                    ('t', FlagKind::Value),
-                    ('y', FlagKind::Bool),
-                    ('Z', FlagKind::Bool),
-                ],
-                "customize-mode",
-            )?;
-            no_extra_positionals(&flags, "customize-mode", 0)?;
-            Ok(Command::CustomizeMode(CustomizeMode {
-                zoom: flags.present.contains(&'Z'),
-                opts: choose_opts(rest, &flags, "customize-mode")?,
-            }))
-        }
-        "choose-buffer" => {
-            let flags = flags_for(rest, CHOOSE_SHORT, "choose-buffer")?;
-            Ok(Command::ChooseBuffer(ChooseBuffer {
-                zoom: flags.present.contains(&'Z'),
-                opts: choose_opts(rest, &flags, "choose-buffer")?,
-            }))
-        }
-        _ => Err(ParseError::UnknownCommand(name.clone())),
+    if let Some(row) = table::find(name) {
+        return build(row, rest);
     }
+    Err(ParseError::UnknownCommand(name.clone()))
+}
+
+pub(super) fn agent_sidebar(flags: &Args) -> Result<Command, ParseError> {
+    let op = match flags.positionals.first().map(String::as_str) {
+        Some("on") => SidebarOp::On,
+        Some("off") => SidebarOp::Off,
+        Some("toggle") => SidebarOp::Toggle,
+        Some("focus") => SidebarOp::Focus,
+        Some(other) => {
+            return Err(ParseError::Other(format!(
+                "agent-sidebar: unknown operation {other}"
+            )));
+        }
+        None => {
+            return Err(ParseError::Other(
+                "agent-sidebar: on, off, toggle or focus required".into(),
+            ));
+        }
+    };
+    Ok(Command::AgentSidebar(op))
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_report_parses_flags() {
+        assert_eq!(
+            parse(&argv(&[
+                "agent", "report", "done", "-t", "%3", "--msg", "ok", "--ts", "5"
+            ])),
+            Ok(Command::Agent(AgentCmd::Report(AgentReport {
+                state: "done".into(),
+                target: parse_target("%3").unwrap(),
+                kind: None,
+                msg: Some("ok".into()),
+                blocked: None,
+                session_id: None,
+                ts: Some(5),
+            })))
+        );
+    }
+
+    #[test]
+    fn report_needs_state() {
+        assert_eq!(
+            parse(&argv(&["agent", "report"])),
+            Err(ParseError::Other("agent report: state required".into()))
+        );
+    }
+
+    #[test]
+    fn blocked_values() {
+        assert!(parse(&argv(&["agent", "report", "blocked", "--blocked", "foo"])).is_err());
+        assert!(parse(&argv(&["agent", "report", "blocked", "--blocked", "auth"])).is_ok());
+    }
+
+    #[test]
+    fn seen_a_and_t_conflict() {
+        assert!(parse(&argv(&["agent", "seen", "-a", "-t", "%1"])).is_err());
+        assert_eq!(
+            parse(&argv(&["agent", "seen", "-a"])),
+            Ok(Command::Agent(AgentCmd::Seen {
+                target: Target::Current,
+                all: true
+            }))
+        );
+    }
+
+    #[test]
+    fn unknown_subcommand() {
+        assert_eq!(
+            parse(&argv(&["agent", "x"])),
+            Err(ParseError::Other("agent: unknown subcommand x".into()))
+        );
+    }
+
+    #[test]
+    fn agent_new_example() {
+        assert_eq!(
+            parse(&argv(&["agent", "new", "claude", "-w", "-b", "feat/x"])),
+            Ok(Command::Agent(AgentCmd::New(AgentNew {
+                kind: "claude".into(),
+                split: false,
+                cwd: None,
+                name: None,
+                worktree: Some(true),
+                branch: Some("feat/x".into()),
+                detached: false,
+            })))
+        );
+        let Ok(Command::Agent(AgentCmd::New(n))) = parse(&argv(&[
+            "agent", "new", "pi", "-p", "-d", "-W", "-c", "/r", "-n", "nm",
+        ])) else {
+            panic!("parse")
+        };
+        assert!(n.split && n.detached);
+        assert_eq!(n.worktree, Some(false));
+        assert_eq!(n.cwd.as_deref(), Some("/r"));
+        assert_eq!(n.name.as_deref(), Some("nm"));
+        assert!(parse(&argv(&["agent", "new"])).is_err());
+    }
+
+    #[test]
+    fn w_and_big_w_conflict() {
+        assert!(parse(&argv(&["agent", "new", "claude", "-w", "-W"])).is_err());
+    }
+
+    #[test]
+    fn sidebar_op_required() {
+        assert!(parse(&argv(&["agent-sidebar"])).is_err());
+        assert!(parse(&argv(&["agent-sidebar", "sideways"])).is_err());
+        assert_eq!(
+            parse(&argv(&["agent-sidebar", "focus"])),
+            Ok(Command::AgentSidebar(SidebarOp::Focus))
+        );
+        assert_eq!(parse(&argv(&["agent-grid"])), Ok(Command::AgentGrid));
+        assert!(parse(&argv(&["agent-grid", "x"])).is_err());
+    }
+
+    #[test]
+    fn agent_list_and_next() {
+        assert_eq!(
+            parse(&argv(&["agent", "list", "-F", "#{x}"])),
+            Ok(Command::Agent(AgentCmd::List {
+                format: Some("#{x}".into())
+            }))
+        );
+        assert_eq!(
+            parse(&argv(&["agent", "next"])),
+            Ok(Command::Agent(AgentCmd::Next))
+        );
+    }
+
     use super::*;
     use crate::cmd::target::{PanePart, PaneRef, SessionRef, WindowRef};
+    use crate::cmd::*;
     use crate::types::{PaneId, WindowId};
 
     fn argv(words: &[&str]) -> Vec<String> {
@@ -5591,33 +4495,6 @@ mod tests {
         );
     }
 
-    /// `args_escape` as tmux 3.7b prints arguments (recorded in
-    /// `list-keys` of tmux's stock table and of bound strings).
-    #[test]
-    fn escape_arg_is_tmux_s() {
-        for (arg, want) in [
-            ("", "''"),
-            ("kill-pane", "kill-pane"),
-            ("#S", "\"#S\""),
-            ("%%", "\"%%\""),
-            ("a b", "\"a b\""),
-            ("a\"b", "'a\"b'"),
-            ("say \"hi\" #x", "\"say \\\"hi\\\" #x\""),
-            ("$", "\\$"),
-            ("\"", "\\\""),
-            (";", "\\;"),
-            ("~", "\\~"),
-            ("~/x", "\\~/x"),
-            ("$HOME x", "\"\\$HOME x\""),
-            ("$1 x", "\"$1 x\""),
-            ("a\\b", "a\\\\b"),
-            ("a\tb", "a\\tb"),
-            (":=0", ":=0"),
-        ] {
-            assert_eq!(escape_arg(arg), want, "{arg:?}");
-        }
-    }
-
     #[test]
     fn parse_sequence_splits_at_semicolon_arguments() {
         assert_eq!(
@@ -5662,6 +4539,7 @@ mod tests {
                 table: "prefix".to_string(),
                 repeat: false,
                 note: None,
+                group: None,
                 key: "X".to_string(),
                 command: argv(&["split-window", "-h"]),
             }))
@@ -5679,6 +4557,7 @@ mod tests {
                 table: "root".to_string(),
                 repeat: true,
                 note: Some("a note".to_string()),
+                group: None,
                 key: "M-h".to_string(),
                 command: argv(&["select-pane"]),
             }))
@@ -5693,6 +4572,107 @@ mod tests {
             parse(&argv(&["bind-key"])),
             Err(ParseError::MissingArgument("bind-key".to_string()))
         );
+    }
+
+    #[test]
+    fn choose_agent_no_args() {
+        assert_eq!(parse(&argv(&["choose-agent"])), Ok(Command::ChooseAgent));
+        assert!(parse(&argv(&["choose-agent", "x"])).is_err());
+    }
+
+    #[test]
+    fn choose_notification_no_args() {
+        assert_eq!(
+            parse(&argv(&["choose-notification"])),
+            Ok(Command::ChooseNotification)
+        );
+        assert!(parse(&argv(&["choose-notification", "x"])).is_err());
+    }
+
+    #[test]
+    fn notify_subcommands() {
+        use std::time::Duration;
+        let n = |w: &[&str]| parse(&argv(w));
+        assert_eq!(n(&["notify", "list"]), Ok(Command::Notify(NotifyCmd::List)));
+        assert_eq!(
+            n(&["notify", "clear"]),
+            Ok(Command::Notify(NotifyCmd::Clear))
+        );
+        assert_eq!(
+            n(&["notify", "unmute"]),
+            Ok(Command::Notify(NotifyCmd::Unmute))
+        );
+        assert_eq!(
+            n(&["notify", "dismiss", "7"]),
+            Ok(Command::Notify(NotifyCmd::Dismiss(7)))
+        );
+        assert_eq!(
+            n(&["notify", "mute"]),
+            Ok(Command::Notify(NotifyCmd::Mute(None)))
+        );
+        for (d, secs) in [("10m", 600), ("30s", 30), ("2h", 7200)] {
+            assert_eq!(
+                n(&["notify", "mute", d]),
+                Ok(Command::Notify(NotifyCmd::Mute(Some(Duration::from_secs(
+                    secs
+                )))))
+            );
+        }
+        assert!(n(&["notify", "dismiss", "x"]).is_err());
+        assert!(n(&["notify", "dismiss"]).is_err());
+        assert!(n(&["notify", "list", "x"]).is_err());
+    }
+
+    #[test]
+    fn notify_unknown_sub() {
+        assert!(parse(&argv(&["notify"])).is_err());
+        assert_eq!(
+            parse(&argv(&["notify", "frob"])),
+            Err(ParseError::Other("notify: unknown subcommand frob".into()))
+        );
+    }
+
+    #[test]
+    fn mute_bad_duration() {
+        for d in ["10", "m", "0m", "5d", "-3m", "1.5h", "10m5"] {
+            assert!(parse(&argv(&["notify", "mute", d])).is_err(), "{d}");
+        }
+        assert!(parse(&argv(&["notify", "mute", "1m", "2m"])).is_err());
+    }
+
+    #[test]
+    fn key_menu_flags() {
+        assert_eq!(
+            parse(&argv(&["key-menu"])),
+            Ok(Command::KeyMenu(KeyMenu { table: None }))
+        );
+        assert_eq!(
+            parse(&argv(&["key-menu", "-T", "prefix"])),
+            Ok(Command::KeyMenu(KeyMenu {
+                table: Some("prefix".to_string())
+            }))
+        );
+    }
+
+    #[test]
+    fn key_menu_unknown_flag() {
+        assert_eq!(
+            parse(&argv(&["key-menu", "-x"])),
+            Err(ParseError::UnknownFlag("key-menu".to_string(), 'x'))
+        );
+    }
+
+    #[test]
+    fn bind_g_requires_value() {
+        assert!(parse(&argv(&["bind-key", "-G"])).is_err());
+        let Ok(Command::BindKey(c)) =
+            parse(&argv(&["bind-key", "-G", "agents", "u", "agent", "next"]))
+        else {
+            panic!("bind-key -G");
+        };
+        assert_eq!(c.group.as_deref(), Some("agents"));
+        assert_eq!(c.key, "u");
+        assert_eq!(c.command, argv(&["agent", "next"]));
     }
 
     #[test]
@@ -6170,5 +5150,164 @@ mod unfloat_pane_tests {
             "command unfloat-pane: unknown flag -x"
         );
         assert!(parse(&argv(&["unfloat-pane", "extra"])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod scratchpad_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn new_scratchpad_defaults_to_the_current_pane_and_shell() {
+        let Ok(Command::NewScratchpad(c)) = parse(&argv(&["new-scratchpad"])) else {
+            panic!("new-scratchpad");
+        };
+        assert_eq!(c.target, Target::Current);
+        assert_eq!(c.cwd, None);
+        assert_eq!(c.command, None);
+    }
+
+    #[test]
+    fn new_scratchpad_reads_target_cwd_and_command() {
+        let Ok(Command::NewScratchpad(c)) = parse(&argv(&["new-scratchpad", "-c", "/tmp", "htop"]))
+        else {
+            panic!("new-scratchpad -c");
+        };
+        assert_eq!(c.target, Target::Current);
+        assert_eq!(c.cwd, Some("/tmp".to_string()));
+        assert_eq!(c.command, Some(vec!["htop".to_string()]));
+        let Ok(Command::NewScratchpad(c)) = parse(&argv(&["new-scratchpad", "-t", "%2"])) else {
+            panic!("new-scratchpad -t");
+        };
+        assert_eq!(c.target, parse_target("%2").unwrap());
+    }
+
+    #[test]
+    fn toggle_scratchpad_defaults_and_reads_target() {
+        let Ok(Command::ToggleScratchpad(c)) = parse(&argv(&["toggle-scratchpad"])) else {
+            panic!("toggle-scratchpad");
+        };
+        assert_eq!(c.target, Target::Current);
+        let Ok(Command::ToggleScratchpad(c)) = parse(&argv(&["toggle-scratchpad", "-t", "%3"]))
+        else {
+            panic!("toggle-scratchpad -t");
+        };
+        assert_eq!(c.target, parse_target("%3").unwrap());
+    }
+
+    #[test]
+    fn toggle_scratchpad_unknown_flag() {
+        assert_eq!(
+            parse(&argv(&["toggle-scratchpad", "-x"]))
+                .unwrap_err()
+                .to_string(),
+            "command toggle-scratchpad: unknown flag -x"
+        );
+    }
+
+    #[test]
+    fn show_scratchpad_reads_its_pane_id() {
+        let Ok(Command::ShowScratchpad(c)) = parse(&argv(&["show-scratchpad", "%4"])) else {
+            panic!("show-scratchpad %4");
+        };
+        assert_eq!(c.target, Target::Current);
+        assert_eq!(c.pane, PaneId(4));
+        let Ok(Command::ShowScratchpad(c)) = parse(&argv(&["show-scratchpad", "-t", "%2", "%4"]))
+        else {
+            panic!("show-scratchpad -t");
+        };
+        assert_eq!(c.target, parse_target("%2").unwrap());
+        assert_eq!(c.pane, PaneId(4));
+    }
+
+    #[test]
+    fn show_scratchpad_needs_a_pane_id() {
+        assert!(parse(&argv(&["show-scratchpad"])).is_err());
+        assert!(parse(&argv(&["show-scratchpad", "4"])).is_err());
+        assert!(parse(&argv(&["show-scratchpad", "%4", "%5"])).is_err());
+    }
+
+    #[test]
+    fn list_scratchpads_takes_no_args() {
+        assert!(matches!(
+            parse(&argv(&["list-scratchpads"])),
+            Ok(Command::ListScratchpads)
+        ));
+        assert!(parse(&argv(&["list-scratchpads", "x"])).is_err());
+    }
+
+    #[test]
+    fn choose_scratchpad_takes_no_args() {
+        assert!(matches!(
+            parse(&argv(&["choose-scratchpad"])),
+            Ok(Command::ChooseScratchpad)
+        ));
+        assert!(parse(&argv(&["choose-scratchpad", "x"])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod fuzz_regression_tests {
+    use super::*;
+
+    /// Found by the `parse_command` fuzz target: only ASCII whitespace
+    /// separates words, as in tmux. A no-break space or U+0085 is a word
+    /// character, so `tmux_arg` need not quote it.
+    #[test]
+    fn non_ascii_whitespace_is_part_of_a_word() {
+        for sep in ['\u{85}', '\u{a0}', '\u{2003}'] {
+            let text = format!("send-keys a{sep}b");
+            assert_eq!(
+                split_command_string(&text),
+                Ok(vec![vec!["send-keys".to_string(), format!("a{sep}b")]]),
+                "{sep:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod lua_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn test_parse_lua() {
+        let Ok(Command::Lua { src }) = parse(&argv(&["lua", "return 1"])) else {
+            panic!("lua");
+        };
+        assert_eq!(src, "return 1");
+        let Ok(Command::Lua { src }) = parse(&argv(&["lua", "return", "1"])) else {
+            panic!("lua words");
+        };
+        assert_eq!(src, "return 1");
+        assert!(parse(&argv(&["lua"])).is_err());
+    }
+
+    #[test]
+    fn test_lua_call_needs_number() {
+        let Ok(Command::LuaCall { id }) = parse(&argv(&["lua-call", "7"])) else {
+            panic!("lua-call");
+        };
+        assert_eq!(id, 7);
+        assert!(parse(&argv(&["lua-call", "x"])).is_err());
+        assert!(parse(&argv(&["lua-call"])).is_err());
+        assert!(parse(&argv(&["lua-call", "1", "2"])).is_err());
+    }
+
+    #[test]
+    fn test_lua_unknown_in_tmux_dialect() {
+        for verb in ["lua", "lua-call"] {
+            let err = crate::compat::tmux::resolve(verb).err().map(|e| e.0);
+            assert_eq!(err, Some(format!("unknown command: {verb}")));
+        }
+        assert!(crate::compat::tmux::resolve("drag-pane").is_err());
     }
 }

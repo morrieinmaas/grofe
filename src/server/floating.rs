@@ -95,6 +95,7 @@ mod tests {
             cols,
             rows,
             z: 1,
+            scratch: false,
         }
     }
 

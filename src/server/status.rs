@@ -22,8 +22,8 @@
 //! left-hand side is what stays.
 
 use nix::libc;
-use unicode_width::UnicodeWidthChar;
 
+use crate::cmd::format::char_width;
 use crate::cmd::{FormatVars, expand};
 use crate::server::pane::CellFlags;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
@@ -1489,34 +1489,12 @@ fn set_underline(attrs: &mut CellFlags, style: CellFlags) {
 /// Applies strftime `%` sequences (spec §4.10) over `text`, so a clock
 /// needs no subprocess. A no-`%` fast path skips the libc round trip.
 fn apply_strftime(text: &str, tm: &libc::tm) -> String {
-    if !text.contains('%') {
+    if !text.contains('%') || text.contains('\0') {
         return text.to_string();
     }
-    let Ok(cformat) = std::ffi::CString::new(text) else {
-        return text.to_string();
-    };
-    // 4096 bytes is far beyond any status-line-sized template (the
-    // longest built-in default, `status-right`, is a few dozen bytes);
-    // `strftime` returns 0 both for "result didn't fit" and for a
-    // legitimately empty result, so a generous fixed buffer avoids ever
-    // having to tell those two apart.
-    let mut buf = vec![0u8; 4096];
-    // SAFETY: `buf` outlives the call and its length is passed as `max`;
-    // `cformat` is a valid NUL-terminated C string; `tm` is a valid,
-    // fully-initialized `libc::tm` for the duration of the call.
-    let n = unsafe {
-        libc::strftime(
-            buf.as_mut_ptr() as *mut libc::c_char,
-            buf.len(),
-            cformat.as_ptr(),
-            tm,
-        )
-    };
-    String::from_utf8_lossy(&buf[..n]).into_owned()
-}
-
-fn char_width(c: char) -> usize {
-    UnicodeWidthChar::width(c).unwrap_or(0)
+    // 4096 bytes is far beyond any status-line-sized template, and an
+    // overflow reads as empty like tmux's.
+    crate::cmd::format::time::strftime(text, tm, 4096).unwrap_or_default()
 }
 
 #[cfg(test)]

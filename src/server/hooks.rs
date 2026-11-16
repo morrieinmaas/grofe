@@ -45,6 +45,7 @@
 //! (`Session.env`); here are its hidden ones and the names it marks
 //! removed.
 
+use crate::cmd::NoVars;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -57,7 +58,7 @@ use crate::cmd::{
 };
 use crate::config::Resolved;
 use crate::event::Event;
-use crate::protocol::{ClientCtx, Dialect, Failure};
+use crate::protocol::{ClientCtx, Dialect, Failure, RequestCtx};
 use crate::server::dispatch;
 use crate::server::{Job, State};
 pub use watch::{track, track_focus};
@@ -501,8 +502,8 @@ pub const EVENTS: &[EventSpec] = &[
         tmux: "window-resized",
         kind: HookKind::Window,
     },
-    // M4 (the stub edit adds them, raised by nobody yet): grofe's own, with
-    // no tmux hook. T4.2 raises `resume-changed`, T4.3 `restore-done`.
+    // grofe's own, with no tmux hook: `resume-changed` (`resume::set_expectation`
+    // and the agent verbs), `restore-done` (`restore`), `agent-changed` (`events`).
     EventSpec {
         name: "resume-changed",
         fires: "a pane's resume or expectation was set or cleared",
@@ -514,6 +515,12 @@ pub const EVENTS: &[EventSpec] = &[
         fires: "a restore from the snapshot finished",
         tmux: "",
         kind: HookKind::Session,
+    },
+    EventSpec {
+        name: "agent-changed",
+        fires: "a pane's agent state changed",
+        tmux: "",
+        kind: HookKind::WindowPane,
     },
 ];
 
@@ -938,10 +945,7 @@ fn tmux_commands(cmds: &[Vec<String>]) -> String {
         if let Some((verb, args)) = argv.split_first() {
             let verb = crate::compat::tmux::resolve(verb).map_or(verb.as_str(), |s| s.name);
             words.push(verb.to_string());
-            words.extend(
-                args.iter()
-                    .map(|a| crate::server::dispatch::options::quote(a)),
-            );
+            words.extend(args.iter().map(|a| crate::util::quote::tmux_arg(a)));
         }
         words.join(" ")
     };
@@ -1046,7 +1050,9 @@ fn notify(state: &mut State, f: Fired) {
     if state.hooks.quiet {
         return;
     }
-    let job: Job = Box::new(move |state: &mut State| enqueue(state, Origin::Global, &f));
+    let job: Job = Box::new(move |state: &mut State| {
+        enqueue(state, Origin::Global, &f, RequestCtx::default())
+    });
     if let Err(TrySendError::Full(job) | TrySendError::Closed(job)) = state.jobs.try_send(job) {
         state.hooks.overflow.push(job);
     }
@@ -1070,6 +1076,17 @@ pub fn session_created(state: &mut State, session: SessionId) {
 /// `resume-changed`: pane `pane`'s resume or expectation was set or
 /// cleared (T4.2). grofe's own hook, no tmux name; the `subscribe` stream
 /// carries it from T6.1.
+/// `agent-changed`: pane `pane`'s agent state changed (spec §10). grofe's own
+/// hook, no tmux name; the `subscribe` stream carries it too.
+pub fn agent_changed(state: &mut State, pane: PaneId) {
+    if !wanted(state, "agent-changed") {
+        return;
+    }
+    let mut f = Fired::new("agent-changed", Some(pane));
+    f.vars.hook_pane = Some(pane);
+    notify(state, f);
+}
+
 pub fn resume_changed(state: &mut State, pane: PaneId) {
     if !wanted(state, "resume-changed") {
         return;
@@ -1582,7 +1599,7 @@ fn fire_now(state: &mut State, ctx: &ClientCtx, f: &Fired) -> (String, Vec<Strin
             Origin::Request(request)
         }
     };
-    enqueue(state, origin, f);
+    enqueue(state, origin, f, ctx.request.clone());
     let mut out = String::new();
     let mut errors = Vec::new();
     if let Some(q) = state.hooks.queues.get_mut(&origin) {
@@ -1639,11 +1656,13 @@ struct Queued {
     fired: Fired,
     dialect: Dialect,
     cmds: VecDeque<Vec<String>>,
+    /// The request that fired it: its stdin and key reach the hook's commands.
+    request: RequestCtx,
 }
 
 /// Appends the hook bound to `f`'s event to `origin`'s queue, then runs
 /// that queue.
-fn enqueue(state: &mut State, origin: Origin, f: &Fired) {
+fn enqueue(state: &mut State, origin: Origin, f: &Fired, request: RequestCtx) {
     let Some(spec) = event(f.event) else {
         return;
     };
@@ -1658,6 +1677,7 @@ fn enqueue(state: &mut State, origin: Origin, f: &Fired) {
             fired,
             dialect: stored.dialect,
             cmds: stored.cmds.into_iter().collect(),
+            request: request.clone(),
         };
         state
             .hooks
@@ -1685,6 +1705,7 @@ fn hook_ctx(state: &State, q: &Queued) -> ClientCtx {
         env: Vec::new(),
         client: q.fired.client.filter(|c| state.clients.contains_key(c)),
         dialect: q.dialect,
+        request: q.request.clone(),
     }
 }
 
@@ -1793,6 +1814,7 @@ pub fn run_at_load(state: &mut State, cmds: Vec<Vec<String>>) {
         fired: Fired::new("load-commands", None),
         dialect: Dialect::Grofe,
         cmds: cmds.into_iter().collect(),
+        request: RequestCtx::default(),
     };
     state
         .hooks
@@ -1908,6 +1930,7 @@ fn context_pane(state: &State, pane: Option<PaneId>) -> Option<PaneId> {
             env: Vec::new(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         };
         model.resolve_pane(&Target::Current, &ctx).ok()
     })
@@ -1969,14 +1992,6 @@ impl HookFormats {
             "hook_window_name" => text(self.hook_window_name.clone()),
             _ => None,
         }
-    }
-}
-
-struct NoVars;
-
-impl FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
     }
 }
 
@@ -2266,7 +2281,7 @@ mod tests {
             .filter(|e| e.tmux.is_empty())
             .map(|e| e.name)
             .collect();
-        assert_eq!(own, ["resume-changed", "restore-done"]);
+        assert_eq!(own, ["resume-changed", "restore-done", "agent-changed"]);
         let mut names: Vec<&str> = EVENTS.iter().map(|e| e.name).collect();
         names.sort();
         names.dedup();
@@ -2386,5 +2401,48 @@ mod tests {
         );
         let vars = variables(&state, None);
         assert!(vars.iter().any(|v| v.name == "GROFE_TC5_H" && v.hidden));
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+    use crate::server::{test_ctx, test_state};
+
+    fn words(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|w| w.to_string()).collect()
+    }
+
+    /// A hook command runs in its request: a CLI request's stdin
+    /// reaches `load-buffer -` in its `after-*` hook, as it did when the
+    /// stdin lived on `State`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hook_command_sees_the_requests_stdin() {
+        let mut state = test_state();
+        let mut ctx = test_ctx();
+        dispatch::run(
+            &mut state,
+            &ctx,
+            &words(&["new-session", "-d", "-s", "m", "sleep 30"]),
+        )
+        .expect("new-session");
+        dispatch::run(
+            &mut state,
+            &ctx,
+            &words(&["set-hook", "-g", "window-created", "load-buffer -b hk -"]),
+        )
+        .expect("set-hook");
+        ctx.request.cli_io = Some(std::sync::Arc::new(crate::protocol::CliIo {
+            stdin: Some(b"piped".to_vec()),
+            ..Default::default()
+        }));
+        dispatch::run(&mut state, &ctx, &words(&["new-window", "-d", "-t", "m"]))
+            .expect("new-window");
+        let shown = dispatch::run(
+            &mut state,
+            &test_ctx(),
+            &words(&["show-buffer", "-b", "hk"]),
+        );
+        assert_eq!(shown, Ok("piped".to_string()));
     }
 }

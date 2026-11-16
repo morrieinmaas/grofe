@@ -1,8 +1,9 @@
 //! FR.3: moving panes with the mouse (spec 2026-11-05-frames.md "The
 //! mouse", "Drag and drop"), through SGR reports from an attached client.
 //! A framed tile's title drag and `drag-pane -M` (`C-MouseDrag1Pane`) move
-//! a pane: onto another's middle they swap, onto the outer quarter of a
-//! side the pane docks there, onto itself nothing changes. A drag on a gap
+//! a pane: onto another's middle they swap, onto the thin band along a
+//! side the pane docks there, onto itself nothing changes, off every tile
+//! a tiled pane snaps to the nearest. A drag on a gap
 //! or any other frame edge resizes. A Ctrl-drop of a floating pane
 //! unfloats it where it lands. Under tmux identity `drag-pane` is unknown
 //! and `C-MouseDrag1Pane` unbound.
@@ -23,7 +24,7 @@ use std::os::unix::fs::symlink;
 use std::process::Command;
 use std::time::Duration;
 
-use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, wait_until};
+use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, try_wait_until};
 use harness::Harness;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -116,11 +117,17 @@ fn sgr(button: u8, (x, y): (u16, u16), release: bool) -> String {
     format!("\x1b[<{button};{};{}{end}", x + 1, y + 1)
 }
 
+/// Waits out the click timeout, so the next press is a plain press. The
+/// timeout is the thing under test, so this is a real sleep.
+fn past_click_timeout() {
+    std::thread::sleep(Duration::from_millis(350));
+}
+
 /// A left drag from `from` through `path`, released at its last cell,
 /// with `mods` (0 or [`CTRL`]) held throughout.
 fn drag(a: &mut Harness, mods: u8, from: (u16, u16), path: &[(u16, u16)]) {
     // Past the click timeout, so the press is a plain press.
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(mods, from, false));
     let mut last = from;
     for &at in path {
@@ -144,7 +151,7 @@ fn middle(srv: &TestServer, pane: &str) -> (u16, u16) {
 
 /// The window's layout is still `want` once the server had time to act.
 fn stays(srv: &TestServer, want: &[String]) {
-    std::thread::sleep(Duration::from_millis(400));
+    common::quiet_period(Duration::from_millis(400));
     assert_eq!(layout(srv), want);
 }
 
@@ -159,7 +166,7 @@ fn dropping_a_title_on_a_panes_middle_swaps_them() {
     );
     let to = middle(&srv, "%1");
     drag(&mut a, 0, title(&srv, "%0"), &[(30, 8), (50, 9), to]);
-    let swapped = wait_until(
+    let swapped = try_wait_until(
         || rect(&srv, "%0") == right && rect(&srv, "%1") == left,
         WAIT,
     );
@@ -180,7 +187,7 @@ fn dropping_on_a_panes_left_quarter_docks_left() {
     let (l0, t0, _, h0) = rect(&srv, "%0");
     // %2, bottom right, onto %0's left quarter.
     drag(&mut a, 0, title(&srv, "%2"), &[(l0 + 1, t0 + h0 / 2)]);
-    let docked = wait_until(|| rect(&srv, "%2").0 < rect(&srv, "%0").0, WAIT);
+    let docked = try_wait_until(|| rect(&srv, "%2").0 < rect(&srv, "%0").0, WAIT);
     assert!(docked.is_ok(), "{:?}", layout(&srv));
     // %2 has the left half of %0's place; %1 took the whole right column.
     let (l2, t2, w2, h2) = rect(&srv, "%2");
@@ -190,7 +197,7 @@ fn dropping_on_a_panes_left_quarter_docks_left() {
     // The pty learnt its size.
     let size = format!("{h2} {w2}");
     ok(&srv, &["send-keys", "-t", "%2", "stty size", "Enter"]);
-    wait_until(|| srv.capture("%2").contains(&size), WAIT)
+    try_wait_until(|| srv.capture("%2").contains(&size), WAIT)
         .unwrap_or_else(|e| panic!("{e}: {}", srv.capture("%2")));
 }
 
@@ -235,7 +242,7 @@ fn a_dragged_pane_follows_the_pointer_until_the_release() {
     let old = (r0.0 - 1, r0.1 - 1);
     let grab = title(&srv, "%0");
     a.wait_until("%0's frame", WAIT, |s| cell_at(s, old) == Some('╭'));
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, grab, false));
     a.send(sgr(32, (grab.0 + 1, grab.1), false));
     let to = (30, 6);
@@ -262,37 +269,74 @@ fn a_dragged_pane_follows_the_pointer_until_the_release() {
     stays(&srv, &before);
 }
 
-/// Released over no tile (a gap), the pane stays floating where it was
-/// dropped, at its size, as the same pane.
+/// Released over no tile (a gap), a floating pane stays floating where it
+/// was dropped, at its size, as the same pane.
 #[test]
-fn releasing_a_pane_over_a_gap_leaves_it_floating_there() {
+fn releasing_a_floating_pane_over_a_gap_leaves_it_floating_there() {
     let srv = framed();
+    ok(&srv, &["split-window", "-v", "-t", "%1", "cat"]);
+    ok(
+        &srv,
+        &[
+            "float-pane",
+            "-t",
+            "%2",
+            "-x",
+            "20",
+            "-y",
+            "5",
+            "-X",
+            "45",
+            "-Y",
+            "4",
+        ],
+    );
     let mut a = attach(&srv);
-    let (l0, t0, w0, h0) = rect(&srv, "%0");
-    let pid = var(&srv, "%0", "#{pane_pid}");
+    let (l0, t0, w0, _) = rect(&srv, "%0");
+    let (_, _, w2, h2) = rect(&srv, "%2");
+    let pid = var(&srv, "%2", "#{pane_pid}");
     let gap = l0 + w0 + 1;
     let at = (gap, t0 + 5);
-    drag(&mut a, 0, title(&srv, "%0"), &[(50, 5), at]);
-    let floated = wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "1", WAIT);
-    assert!(floated.is_ok(), "{:?}", layout(&srv));
+    drag(&mut a, 0, title(&srv, "%2"), &[(50, 5), at]);
     let corner = lifted_corner(at);
-    assert_eq!(rect(&srv, "%0"), (corner.0 + 1, corner.1 + 1, w0, h0));
-    assert_eq!(var(&srv, "%0", "#{pane_pid}"), pid);
-    assert_eq!(var(&srv, "%0", "#{pane_active}"), "1");
-    // %1 has the tiling to itself.
-    assert_eq!(rect(&srv, "%1").0, l0, "{:?}", layout(&srv));
+    let there = try_wait_until(
+        || rect(&srv, "%2") == (corner.0 + 1, corner.1 + 1, w2, h2),
+        WAIT,
+    );
+    assert!(there.is_ok(), "{:?}", layout(&srv));
+    assert_eq!(var(&srv, "%2", "#{pane_floating_flag}"), "1");
+    assert_eq!(var(&srv, "%2", "#{pane_pid}"), pid);
+    assert_eq!(var(&srv, "%2", "#{pane_active}"), "1");
     // Moved by its title, it stays floating and follows.
-    let (fx, fy, _, _) = rect(&srv, "%0");
+    let (fx, fy, _, _) = rect(&srv, "%2");
     drag(
         &mut a,
         0,
         (fx + 3, fy - 1),
         &[(fx + 5, fy - 1), (fx + 8, fy + 1)],
     );
-    let moved = wait_until(|| rect(&srv, "%0").0 == fx + 5, WAIT);
-    assert!(moved.is_ok(), "{:?}", rect(&srv, "%0"));
-    assert_eq!(rect(&srv, "%0").1, fy + 2);
-    assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "1");
+    let moved = try_wait_until(|| rect(&srv, "%2").0 == fx + 5, WAIT);
+    assert!(moved.is_ok(), "{:?}", rect(&srv, "%2"));
+    assert_eq!(rect(&srv, "%2").1, fy + 2);
+    assert_eq!(var(&srv, "%2", "#{pane_floating_flag}"), "1");
+}
+
+/// A tiled pane released off every tile (here on the status line) snaps
+/// into the grid by the nearest tile and never floats: %0 docks below %1.
+#[test]
+fn releasing_a_tiled_pane_off_every_tile_snaps_it_into_the_grid() {
+    let srv = framed();
+    let mut a = attach(&srv);
+    let pid = var(&srv, "%0", "#{pane_pid}");
+    let (l1, _, w1, _) = rect(&srv, "%1");
+    drag(&mut a, 0, title(&srv, "%0"), &[(50, 5), (l1 + w1 / 2, 23)]);
+    let snapped = try_wait_until(|| rect(&srv, "%0").1 > rect(&srv, "%1").1, WAIT);
+    assert!(snapped.is_ok(), "{:?}", layout(&srv));
+    assert_eq!(rect(&srv, "%0").0, rect(&srv, "%1").0, "{:?}", layout(&srv));
+    assert_eq!(var(&srv, "%0", "#{pane_floating_flag}"), "0");
+    assert_eq!(var(&srv, "%0", "#{pane_pid}"), pid);
+    assert_eq!(var(&srv, "%0", "#{pane_active}"), "1");
+    assert_eq!(var(&srv, "%1", "#{window_panes}"), "2");
 }
 
 /// A right click or Escape while the button is down cancels the move: the
@@ -306,7 +350,7 @@ fn a_right_click_or_escape_cancels_a_move() {
     let old = (r0.0 - 1, r0.1 - 1);
     let mid = middle(&srv, "%1");
     for cancel in [sgr(2, mid, false), "\x1b".to_string()] {
-        std::thread::sleep(Duration::from_millis(350));
+        past_click_timeout();
         a.send(sgr(0, title(&srv, "%0"), false));
         a.send(sgr(32, (mid.0 - 1, mid.1), false));
         a.send(sgr(32, mid, false));
@@ -337,7 +381,7 @@ fn dragging_the_gap_between_two_tiles_resizes_both() {
     let gap = l0 + w0 + 1;
     let row = t0 + h0 / 2;
     drag(&mut a, 0, (gap, row), &[(gap + 2, row), (gap + 5, row)]);
-    let resized = wait_until(
+    let resized = try_wait_until(
         || rect(&srv, "%0").2 == w0 + 5 && rect(&srv, "%1").2 == w1 - 5,
         WAIT,
     );
@@ -345,7 +389,7 @@ fn dragging_the_gap_between_two_tiles_resizes_both() {
     // Another frame edge resizes too: %1's left edge, back by 3.
     let left_edge = rect(&srv, "%1").0 - 1;
     drag(&mut a, 0, (left_edge, row), &[(left_edge - 3, row)]);
-    let back = wait_until(|| rect(&srv, "%0").2 == w0 + 2, WAIT);
+    let back = try_wait_until(|| rect(&srv, "%0").2 == w0 + 2, WAIT);
     assert!(back.is_ok(), "{:?}", layout(&srv));
 }
 
@@ -362,7 +406,7 @@ fn a_ctrl_drag_anywhere_in_a_pane_moves_it() {
         middle(&srv, "%0"),
         &[(30, 10), middle(&srv, "%1")],
     );
-    let swapped = wait_until(
+    let swapped = try_wait_until(
         || rect(&srv, "%0") == right && rect(&srv, "%1") == left,
         WAIT,
     );
@@ -399,7 +443,7 @@ fn a_ctrl_drop_of_a_floating_pane_unfloats_it_there() {
         middle(&srv, "%2"),
         &[(30, 10), (l0 + 1, t0 + h0 / 2)],
     );
-    let tiled = wait_until(|| var(&srv, "%2", "#{pane_floating_flag}") == "0", WAIT);
+    let tiled = try_wait_until(|| var(&srv, "%2", "#{pane_floating_flag}") == "0", WAIT);
     assert!(tiled.is_ok(), "{:?}", layout(&srv));
     assert!(
         rect(&srv, "%2").0 < rect(&srv, "%0").0,
@@ -442,7 +486,7 @@ fn a_ctrl_drop_of_a_floating_pane_on_a_middle_splits_it() {
         middle(&srv, "%2"),
         &[(30, 10), middle(&srv, "%0")],
     );
-    let tiled = wait_until(|| var(&srv, "%2", "#{pane_floating_flag}") == "0", WAIT);
+    let tiled = try_wait_until(|| var(&srv, "%2", "#{pane_floating_flag}") == "0", WAIT);
     assert!(tiled.is_ok(), "{:?}", layout(&srv));
     // %0 is wider than tall, so it is split side by side and %2 takes the
     // right half; nothing floats now.
@@ -466,10 +510,12 @@ fn the_program_learns_its_size_once_on_release() {
     );
     ok(&srv, &["split-window", "-v", "-t", "%1", &script]);
     let lines = || fs::read_to_string(&log).unwrap_or_default().lines().count();
-    wait_until(|| lines() == 1, WAIT).expect("the trap is set");
+    // At least one: a resize as the new pane settles can append to `ready`
+    // between two polls. What counts is the change from `before` below.
+    try_wait_until(|| lines() >= 1, WAIT).expect("the trap is set");
     let mut a = attach(&srv);
     // Whatever the attach itself caused has landed.
-    std::thread::sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     let before = lines();
     let (l0, t0, w0, h0) = rect(&srv, "%0");
     let mut path: Vec<(u16, u16)> = (0..20)
@@ -477,9 +523,9 @@ fn the_program_learns_its_size_once_on_release() {
         .collect();
     path.push((l0 + 1, t0 + h0 / 2));
     drag(&mut a, 0, title(&srv, "%2"), &path);
-    wait_until(|| rect(&srv, "%2").0 < rect(&srv, "%0").0, WAIT)
+    try_wait_until(|| rect(&srv, "%2").0 < rect(&srv, "%0").0, WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", layout(&srv)));
-    std::thread::sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     assert_eq!(
         lines(),
         before + 1,
@@ -495,7 +541,7 @@ fn a_zoomed_window_starts_no_move() {
     ok(&srv, &["resize-pane", "-Z", "-t", "%0"]);
     let zoomed = rect(&srv, "%0");
     drag(&mut a, 0, title(&srv, "%0"), &[(60, 10), (70, 12)]);
-    std::thread::sleep(Duration::from_millis(400));
+    common::quiet_period(Duration::from_millis(400));
     assert_eq!(var(&srv, "%0", "#{window_zoomed_flag}"), "1");
     assert_eq!(rect(&srv, "%0"), zoomed);
 }
@@ -528,10 +574,10 @@ fn frame_and_gap_cells_are_borders_of_their_pane() {
         ((0, row), "%0"),
     ] {
         ok(&srv, &["set", "-g", "@hit", "none"]);
-        std::thread::sleep(Duration::from_millis(350));
+        past_click_timeout();
         a.send(sgr(0, cell, false));
         a.send(sgr(0, cell, true));
-        let got = wait_until(|| ok(&srv, &["show", "-gv", "@hit"]).trim() == want, WAIT);
+        let got = try_wait_until(|| ok(&srv, &["show", "-gv", "@hit"]).trim() == want, WAIT);
         assert!(
             got.is_ok(),
             "{cell:?}: {}",
@@ -679,7 +725,7 @@ fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
     let (srv, mut a) = preview_server();
     let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
     red_corners(&mut a, &[corner(r0)]);
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, title(&srv, "%0"), false));
     // Over %1's middle: a swap, so the preview is %1's own place.
     let mid = middle(&srv, "%1");
@@ -715,7 +761,7 @@ fn the_drop_preview_follows_the_pointer_and_goes_on_release() {
     // The release drops %0 there, and the preview goes: the only red
     // frame left is the active pane's, %0's own in its new place.
     a.send(sgr(0, low, true));
-    wait_until(|| corner(rect(&srv, "%0")) == half, WAIT)
+    try_wait_until(|| corner(rect(&srv, "%0")) == half, WAIT)
         .unwrap_or_else(|e| panic!("{e}: {:?}", layout(&srv)));
     red_corners(&mut a, &[half]);
     wait_red(&mut a, '╯', &[bottom(rect(&srv, "%0"))]);
@@ -728,7 +774,7 @@ fn the_drop_preview_goes_when_the_move_is_cancelled() {
     let (srv, mut a) = preview_server();
     let before = layout(&srv);
     let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, title(&srv, "%0"), false));
     let mid = middle(&srv, "%1");
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
@@ -751,7 +797,7 @@ fn a_drop_on_the_pane_itself_clears_the_preview() {
     let (srv, mut a) = preview_server();
     let before = layout(&srv);
     let (r0, r1) = (rect(&srv, "%0"), rect(&srv, "%1"));
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, title(&srv, "%0"), false));
     let mid = middle(&srv, "%1");
     a.send(sgr(32, (mid.0 - 1, mid.1), false));
@@ -763,7 +809,7 @@ fn a_drop_on_the_pane_itself_clears_the_preview() {
     stays(&srv, &before);
     // A redraw of the whole screen draws no preview either.
     ok(&srv, &["refresh-client"]);
-    std::thread::sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     red_corners(&mut a, &[corner(r0)]);
 }
 
@@ -780,7 +826,7 @@ fn tab_at(a: &mut Harness, row: u16, tab: &str) -> u16 {
 }
 
 fn click(a: &mut Harness, at: (u16, u16)) {
-    std::thread::sleep(Duration::from_millis(350));
+    past_click_timeout();
     a.send(sgr(0, at, false));
     a.send(sgr(0, at, true));
 }
@@ -819,22 +865,22 @@ fn the_frame_tab_zooms_floats_and_closes() {
     assert!(ends.contains(&cmd), "{cmd:?} in {ends:?}");
     // Zoom, then unzoom with the same control, now `u`.
     click(&mut a, (at, row));
-    let zoomed = wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "1", WAIT);
+    let zoomed = try_wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "1", WAIT);
     assert!(zoomed.is_ok(), "not zoomed: {}", a.text());
     let zrow = rect(&srv, "%0").1 - 1;
     let u = tab_at(&mut a, zrow, "u f x");
     click(&mut a, (u, zrow));
-    let unzoomed = wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "0", WAIT);
+    let unzoomed = try_wait_until(|| var(&srv, "%0", "#{window_zoomed_flag}") == "0", WAIT);
     assert!(unzoomed.is_ok(), "still zoomed: {}", a.text());
     // Float, then unfloat from the floating pane's own tab.
     let at = tab_at(&mut a, row, "z f x");
     click(&mut a, (at + 2, row));
-    let floated = wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "1", WAIT);
+    let floated = try_wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "1", WAIT);
     assert!(floated.is_ok(), "not floating: {}", a.text());
     let frow = rect(&srv, "%0").1 - 1;
     let ft = tab_at(&mut a, frow, "z t x");
     click(&mut a, (ft + 2, frow));
-    let tiled = wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "0", WAIT);
+    let tiled = try_wait_until(|| var(&srv, "%0", "#{pane_floating_flag}") == "0", WAIT);
     assert!(tiled.is_ok(), "still floating: {}", a.text());
     a.wait_until("both tiled again", WAIT, |s| {
         !s.contains("z t x") && s.matches("z f x").count() == 2
@@ -844,7 +890,7 @@ fn the_frame_tab_zooms_floats_and_closes() {
     let at = tab_at(&mut a, row, "z f x");
     let shown = a.text();
     click(&mut a, (at + 4, row));
-    let asked = wait_until(|| a.text().contains("Kill pane"), WAIT);
+    let asked = try_wait_until(|| a.text().contains("Kill pane"), WAIT);
     assert!(asked.is_ok(), "clicked {:?} on:\n{shown}", (at + 4, row));
     assert_eq!(var(&srv, "%0", "#{window_panes}"), "2");
 }

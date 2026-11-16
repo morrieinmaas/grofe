@@ -16,7 +16,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -52,7 +52,7 @@ fn display(srv: &TestServer, format: &str) -> String {
 }
 
 fn wait_display(srv: &TestServer, format: &str, want: &str) {
-    if let Err(e) = wait_until(|| display(srv, format) == want, WAIT) {
+    if let Err(e) = try_wait_until(|| display(srv, format) == want, WAIT) {
         panic!("{e}: {format} is {:?}, want {want:?}", display(srv, format));
     }
 }
@@ -75,7 +75,7 @@ fn select_first_line(srv: &TestServer) {
 }
 
 fn wait_text(srv: &TestServer, text: &str) {
-    if let Err(e) = wait_until(|| srv.capture("main").contains(text), WAIT) {
+    if let Err(e) = try_wait_until(|| srv.capture("main").contains(text), WAIT) {
         panic!("{e}: {text:?} never showed:\n{}", srv.capture("main"));
     }
 }
@@ -83,7 +83,7 @@ fn wait_text(srv: &TestServer, text: &str) {
 /// Waits for `path` to hold exactly `want`.
 fn wait_file(path: &Path, want: &str) {
     let read = || fs::read_to_string(path).unwrap_or_default();
-    if let Err(e) = wait_until(|| read() == want, WAIT) {
+    if let Err(e) = try_wait_until(|| read() == want, WAIT) {
         panic!("{e}: {} holds {:?}, want {want:?}", path.display(), read());
     }
 }
@@ -199,7 +199,7 @@ fn osc52_goes_to_the_clients_showing_the_pane() {
     let osc = copy_osc52("hello world\n");
     a.wait_for_output(&osc, 0);
     c.wait_for_output(&osc, 0);
-    sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(count(b.output(), b"\x1b]52;"), 0);
 }
 
@@ -354,7 +354,7 @@ fn a_panes_osc52_makes_a_buffer_only_under_on() {
     srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     store(&srv, "app-on");
     a.wait_for_output(format!("\x1b]52;c;{}\x07", b64("app-on")).as_bytes(), 0);
-    wait_until(|| buffers(&srv) == ["app-on"], WAIT).expect("a buffer under on");
+    try_wait_until(|| buffers(&srv) == ["app-on"], WAIT).expect("a buffer under on");
 
     for mode in ["external", "off"] {
         srv.cmd(&["set", "-g", "set-clipboard", mode]).unwrap();
@@ -363,7 +363,7 @@ fn a_panes_osc52_makes_a_buffer_only_under_on() {
     srv.cmd(&["set", "-g", "set-clipboard", "on"]).unwrap();
     store(&srv, "app-last");
     // Pane events are handled in order.
-    wait_until(|| buffers(&srv).len() == 2, WAIT).expect("the last store");
+    try_wait_until(|| buffers(&srv).len() == 2, WAIT).expect("the last store");
     assert_eq!(buffers(&srv), ["app-last", "app-on"]);
     let out = a.output().to_vec();
     for gone in ["app-external", "app-off"] {
@@ -460,7 +460,7 @@ fn the_selection_never_reaches_the_command_line() {
     );
     wait_file(&clip, &format!("{line}\n"));
     // The pipe is done once the file is whole; give a stray `touch` time.
-    sleep(Duration::from_millis(200));
+    common::quiet_period(Duration::from_millis(200));
     assert!(!pwned.exists(), "the selection ran as a command");
 }
 
@@ -601,7 +601,7 @@ fn a_panes_store_goes_to_the_clients_showing_it() {
     ])
     .unwrap();
     a.wait_for_output(format!("\x1b]52;s;{}\x07", b64("bad")).as_bytes(), 0);
-    sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(count(b.output(), b"\x1b]52;"), 0);
     assert_eq!(buffers(&srv), ["bad", "prim"]);
 }
@@ -681,7 +681,7 @@ fn load_buffer_w_sends_the_file_to_the_target_client() {
     ])
     .expect("load-buffer -w");
     b.wait_for_output(&copy_osc52("loaded\n"), 0);
-    sleep(Duration::from_millis(300));
+    common::quiet_period(Duration::from_millis(300));
     assert_eq!(count(a.output(), b"\x1b]52;"), 0);
     assert_eq!(buffers(&srv), ["loaded\\n"]);
 }

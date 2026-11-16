@@ -67,7 +67,7 @@ const CONNECT_RETRY: Duration = Duration::from_millis(5);
 
 /// Commands that start a server when none is running (spec §4.1). Every
 /// other command fails fast with `no server running on <socket>`.
-const AUTO_START: &[&str] = &["new-session", "new", "start-server", "start"];
+const AUTO_START: &[&str] = &["new-session", "start-server", "start"];
 
 fn main() -> ExitCode {
     install_panic_report();
@@ -118,6 +118,9 @@ fn main() -> ExitCode {
                 if let Some(command) = &cli.shell_command {
                     return shell_command(&globals, command);
                 }
+                if cli.control > 0 {
+                    return control_mode(&globals, cli.control, &cli.argv);
+                }
                 if cli.foreground
                     && let Some(code) = run_foreground(&globals)
                 {
@@ -155,16 +158,16 @@ fn main() -> ExitCode {
         rest
     };
     let rest = rest.as_slice();
-    let verb = &rest[0];
+    let verb = grofe::cmd::parse::canonical_name(&rest[0]);
 
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.
-    match verb.as_str() {
+    match verb {
         "__server" => {}
-        "attach-session" | "attach" => report_panics_for(&globals.socket(), "client"),
+        "attach-session" => report_panics_for(&globals.socket(), "client"),
         _ => report_panics_for(&globals.socket(), "cli"),
     }
-    match verb.as_str() {
+    match verb {
         "__server" => run_server(&globals, &rest[1..]),
         "start-server" | "start" => {
             let (socket, own_dir) = globals.resolve();
@@ -198,10 +201,8 @@ fn main() -> ExitCode {
                 }
                 let snapshot = paths::snapshot_path(&Env::from_process(), &socket);
                 if snapshot.exists() {
-                    // SAFETY: the CLI has started no thread yet, so nothing
-                    // reads the environment concurrently. The server it
-                    // starts inherits the variable.
-                    unsafe { std::env::set_var(server::restore::RESTORE_ENV, "1") };
+                    // The server it starts gets `--restore`.
+                    server::restore::request();
                 } else {
                     eprintln!(
                         "grofe: no snapshot to restore at {}; starting an empty server",
@@ -220,13 +221,17 @@ fn main() -> ExitCode {
                 Err(e) => fail(&e),
             }
         }
-        "attach-session" | "attach" => attach(&globals.socket(), rest),
+        "attach-session" => attach(&globals.socket(), rest),
         // File layers only: never starts or contacts a server (R8).
         "show-config" => grofe::config::show_config(&rest[1..]),
         // Reads a tmux.conf, no server anywhere (spec 5.5).
         "import-tmux" => grofe::import_tmux::run(&rest[1..]),
         // grofe's own verb: under the tmux name `layout` is an unknown command.
         "layout" if dialect() == Dialect::Grofe => layout_glue::run(&globals, &rest[1..]),
+        // The plugin manager: client side only, no server involved.
+        "pack" if dialect() == Dialect::Grofe => {
+            ExitCode::from(grofe::pack::cli::run(&rest[1..]).clamp(0, 255) as u8)
+        }
         // A stdio bridge to the server (T6.2).
         // grofe's own verb: under the tmux name `control` is an unknown command.
         "control" if dialect() == Dialect::Grofe && rest.len() == 1 => {
@@ -248,10 +253,30 @@ fn main() -> ExitCode {
                 }
             }
         }
-        "new-session" | "new" if existing_for_a(&globals.socket(), rest).is_some() => {
+        // grofe's own verb: agent status reports and hook setup.
+        "agent" if dialect() == Dialect::Grofe => {
+            let hook = rest.iter().any(|a| a == "--hook");
+            match rest.get(1).map(String::as_str) {
+                Some("setup") => grofe::agent_setup::run(&rest[2..]),
+                Some("report") if hook => grofe::agent_cli::run(&globals.socket(), rest),
+                // Outside a server a report is a no-op, never an error.
+                Some("report") => {
+                    let (socket, own_dir) = globals.resolve();
+                    match UnixStream::connect(&socket) {
+                        Ok(_) => one_shot(&socket, own_dir, rest),
+                        Err(_) => ExitCode::SUCCESS,
+                    }
+                }
+                _ => {
+                    let (socket, own_dir) = globals.resolve();
+                    one_shot(&socket, own_dir, rest)
+                }
+            }
+        }
+        "new-session" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
-        "new-session" | "new" if attaches(rest) => new_and_attach(&globals, rest, bare),
+        "new-session" if attaches(rest) => new_and_attach(&globals, rest, bare),
         _ => {
             let (socket, own_dir) = globals.resolve();
             one_shot(&socket, own_dir, rest)
@@ -518,7 +543,7 @@ fn run_foreground(globals: &Globals) -> Option<ExitCode> {
     })
 }
 
-/// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty]
+/// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty] [--restore]
 /// [--identity tmux] [--file <path>]`: the detached server process.
 /// `--identity tmux` says the CLI that started it ran as `tmux` (spec
 /// D12); `--file` is that CLI's `tmux -f`.
@@ -530,6 +555,10 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
     while let Some(arg) = it.next() {
         if arg == "--exit-when-empty" {
             exit_when_empty = true;
+            continue;
+        }
+        if arg == "--restore" {
+            server::restore::request();
             continue;
         }
         match (arg.as_str(), it.next()) {
@@ -680,7 +709,7 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     {
         // The id is the last line; `-P`'s output comes before it.
         // ponytail: tmux 3.7b shows `-P`'s output in view mode over the new
-        // pane (recorded); grofe has no view mode until M5 and drops it.
+        // pane (recorded); grofe has no view mode and drops it.
         Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
         Ok(Reply::Err { err, .. }) => return fail(&err),
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
@@ -718,12 +747,21 @@ fn session_gone(err: &str) -> bool {
         || err.starts_with("server closed the connection")
 }
 
+/// Whether a request error means the server went away before replying: a
+/// connection queued on an exiting server's listener ends as EOF on macOS
+/// and as a reset on Linux once the listener closes.
+fn server_left(err: &str) -> bool {
+    err.starts_with("sending request: ")
+        || err.starts_with("server closed the connection")
+        || (err.starts_with("reading reply: ") && err.contains("Connection reset"))
+}
+
 /// Sends `argv` as one control-mode request and exits with its status.
 fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     if let Err(e) = control_hello(socket) {
         return fail(&e);
     }
-    let stream = if AUTO_START.contains(&argv[0].as_str()) {
+    let stream = if AUTO_START.contains(&grofe::cmd::parse::canonical_name(&argv[0])) {
         // Implicit start: that server exits if it ends up with no sessions.
         connect_or_start(socket, own_dir, true)
     } else {
@@ -738,7 +776,18 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         }
         Err(e) => return fail(&e),
     };
-    match request(stream, socket, argv) {
+    // A server that was exiting as this connected (an empty or unattached
+    // one) closes the connection without answering. When no server is
+    // there any more, say so as for any other command; the request is
+    // never sent again, so it cannot run twice.
+    let reply = match request(stream, socket, argv) {
+        Err(e) if server_left(&e) => match connect(socket) {
+            Err(gone) if no_server(&gone) => return fail(&gone),
+            _ => Err(e),
+        },
+        reply => reply,
+    };
+    match reply {
         Ok(Reply::Ok { out, .. }) => {
             let mut stdout = io::stdout().lock();
             let _ = stdout.write_all(out.as_bytes());
@@ -821,6 +870,78 @@ fn read_request_line(input: &mut impl BufRead) -> io::Result<Option<Result<Strin
     Ok(Some(String::from_utf8(buf).map_err(|_| {
         "request line is not valid UTF-8".to_string()
     })))
+}
+
+/// `tmux -C` and `-CC` (docs/specs/2026-11-15-control-mode.md): the command
+/// is `attach-session` or `new-session`, and stdin and stdout carry the
+/// control-mode text protocol until the client leaves.
+fn control_mode(globals: &Globals, control: u8, argv: &[String]) -> ExitCode {
+    use grofe::control_mode::{Options, run};
+
+    let (target, flags, new_session) = match argv[0].as_str() {
+        "attach-session" => {
+            let value = |flag: &str| {
+                argv.iter()
+                    .position(|a| a == flag)
+                    .and_then(|i| argv.get(i + 1))
+                    .cloned()
+            };
+            (value("-t"), value("-f"), None)
+        }
+        "new-session" => (None, None, Some(argv.to_vec())),
+        other => {
+            return fail(&format!(
+                "tmux -C: {other} is not supported, only attach-session and new-session"
+            ));
+        }
+    };
+    let (socket, own_dir) = globals.resolve();
+    let started = if new_session.is_some() {
+        connect_or_start(&socket, own_dir, true)
+    } else {
+        connect(&socket)
+    };
+    if let Err(e) = started {
+        return fail(&e);
+    }
+    let opts = Options {
+        socket,
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        env: std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect(),
+        target,
+        new_session,
+        flags,
+        double: control > 1,
+    };
+    // `-CC` needs the terminal raw: no echo, no line editing.
+    let _raw = (control > 1).then(RawTty::new).flatten();
+    let code = run(&opts, io::BufReader::new(io::stdin()), io::stdout());
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
+}
+
+/// The terminal on stdin in raw mode, put back when dropped; none when
+/// stdin is not a terminal.
+struct RawTty(nix::sys::termios::Termios);
+
+impl RawTty {
+    fn new() -> Option<RawTty> {
+        use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
+        let stdin = io::stdin();
+        let saved = tcgetattr(&stdin).ok()?;
+        let mut raw = saved.clone();
+        cfmakeraw(&mut raw);
+        tcsetattr(&stdin, SetArg::TCSANOW, &raw).ok()?;
+        Some(RawTty(saved))
+    }
+}
+
+impl Drop for RawTty {
+    fn drop(&mut self) {
+        let _ =
+            nix::sys::termios::tcsetattr(io::stdin(), nix::sys::termios::SetArg::TCSANOW, &self.0);
+    }
 }
 
 /// `grofe control` (T6.2): a stdio bridge to the control socket. Each line on
@@ -1019,6 +1140,7 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
             .collect(),
         client: None,
         dialect: dialect(),
+        request: Default::default(),
     };
     let opts = client::AttachOptions {
         target: client::raw_target(&argv[1..]),
@@ -1056,6 +1178,7 @@ fn probe(stream: UnixStream, socket: &Path) -> Result<(), String> {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Grofe,
+        request: Default::default(),
     };
     let hello = encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())?;
     match request_with(stream, &hello, &["list-sessions".to_string()]) {
@@ -1195,6 +1318,9 @@ fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
         .stderr(Stdio::null());
     if exit_when_empty {
         cmd.arg("--exit-when-empty");
+    }
+    if server::restore::requested() {
+        cmd.arg("--restore");
     }
     // The identity is the starting CLI's (spec D12): only a CLI run as
     // `tmux` sends a tmux dialect.
@@ -1363,6 +1489,7 @@ fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
             .collect(),
         client: None,
         dialect: dialect(),
+        request: Default::default(),
     };
     encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
 }
@@ -1440,6 +1567,17 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_reset_reply_from_an_exiting_server_counts_as_it_leaving() {
+        assert!(server_left(
+            "reading reply: Connection reset by peer (os error 104)"
+        ));
+        assert!(server_left("server closed the connection without replying"));
+        assert!(server_left("sending request: Broken pipe (os error 32)"));
+        assert!(!server_left("reading reply: Interrupted system call"));
+        assert!(!server_left("bad reply from server: EOF"));
     }
 
     #[test]

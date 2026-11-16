@@ -5,6 +5,7 @@
 use crate::cmd::{ParseError, Resolve, SetEnvironment, SetHook, ShowEnvironment, ShowHooks};
 use crate::protocol::ClientCtx;
 use crate::server::{State, hooks};
+use crate::util::quote;
 
 fn too_few(verb: &str) -> String {
     ParseError::TooFewArguments(verb.to_string(), 1).to_string()
@@ -149,7 +150,7 @@ pub fn show_environment(
             format!(
                 "{}=\"{}\"; export {};\n",
                 v.name,
-                shell_escape(value),
+                quote::sh_double(value),
                 v.name
             )
         }
@@ -171,19 +172,6 @@ pub fn show_environment(
         .filter(|v| v.hidden == c.hidden)
         .map(line)
         .collect())
-}
-
-/// A value for inside double quotes in `sh`: `$`, `` ` ``, `"` and `\` get
-/// a backslash, as tmux's `cmd_show_environment_escape`.
-fn shell_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if matches!(ch, '$' | '`' | '"' | '\\') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 #[cfg(test)]

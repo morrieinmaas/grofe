@@ -85,6 +85,7 @@ fn nvim_edit() {
     h.wait_for("~");
     h.send("ihello-spike\x1b");
     h.wait_for("hello-spike");
+    // Past nvim's ttimeout, so `:` is not Meta-:.
     sleep(Duration::from_millis(300));
     h.send(":q!\r");
     h.wait_exit();
@@ -107,6 +108,7 @@ fn nvim_exit_restores_primary_screen() {
     );
     h.send("ihello-alt\x1b");
     h.wait_for("hello-alt");
+    // Past nvim's ttimeout, so `:` is not Meta-:.
     sleep(Duration::from_millis(300));
     h.send(":q!\r");
     h.wait_until(
@@ -200,7 +202,9 @@ fn resize_and_cursor() {
         );
     }
 
-    h.send("printf foo\r");
+    // The echo of the typed command must not contain the output, or the
+    // wait ends with the cursor still at column 0 of the next line.
+    h.send("printf 'fo%s' o\r");
     h.wait_for("foo");
     assert!(
         h.text().contains("foo"),

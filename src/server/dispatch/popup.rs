@@ -202,6 +202,7 @@ pub fn new_pane(state: &mut State, ctx: &ClientCtx, c: NewPane) -> Result<String
         cols: width,
         rows: height,
         z,
+        scratch: false,
     });
     if !c.detached {
         w.set_active(new);
@@ -285,6 +286,7 @@ pub fn float_pane(state: &mut State, ctx: &ClientCtx, c: FloatPane) -> Result<St
         cols,
         rows,
         z,
+        scratch: false,
     });
     model.relayout(window);
     Ok(String::new())
@@ -409,6 +411,7 @@ pub(crate) fn spawn_for(
         images: false,
         identity: state.model.identity,
         delay: std::time::Duration::ZERO,
+        colours: Default::default(),
     }
 }
 

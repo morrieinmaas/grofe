@@ -487,7 +487,7 @@ pub(crate) fn respawn(
     extra_env: Vec<(String, String)>,
 ) -> Result<(), String> {
     // As tmux's `window_pane_reset_mode_all`: a respawned pane leaves its
-    // modes, and its copy is freed (M5).
+    // modes, and its copy is freed.
     state.copy.remove(pane);
     let model = &state.model;
     let p = model
@@ -508,6 +508,7 @@ pub(crate) fn respawn(
     own.extend(extra_env);
     let mut env = super::pane_env(state, session, pane, own);
     env.push(("SHELL".to_string(), shell.clone()));
+    let colours = clients::default_colours(model, (session, p.window));
     let spec = PaneSpawn {
         id: pane,
         session,
@@ -526,6 +527,7 @@ pub(crate) fn respawn(
         images: graphics::images_enabled(&state.model),
         identity: state.model.identity,
         delay: std::time::Duration::ZERO,
+        colours,
     };
     let cwd = spec.cwd.clone();
     // The scrollback stays, as tmux's `screen_reinit` leaves it.
@@ -536,11 +538,6 @@ pub(crate) fn respawn(
         &state.model.panes[&pane].handle,
     )
     .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
-    clients::seed_defaults(
-        &state.model,
-        (session, state.model.panes[&pane].window),
-        &handle,
-    );
     let mut before = Default::default();
     if let Some(p) = state.model.panes.get_mut(&pane) {
         // Dropping the old handle closes its master, which hangs up a live
@@ -549,6 +546,7 @@ pub(crate) fn respawn(
         // actor ignores.
         p.handle = handle;
         p.dead = None;
+        p.dead_time = None;
         p.cwd = cwd;
         p.argv = argv.clone();
         before = (p.resume.take(), p.expect.clone());
@@ -563,7 +561,7 @@ pub(crate) fn respawn(
 /// literals as UTF-8, `-H` as raw bytes, all queued in one write.
 fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, String> {
     let pane = state.model.resolve_pane(&c.target, ctx)?;
-    // M5 (TM.1): `-N`, `-X` and keys for a pane in copy mode, as tmux
+    // `-N`, `-X` and keys for a pane in copy mode, as tmux
     // 3.7b's `cmd_send_keys_exec`.
     let in_mode = state.copy.is_active(pane);
     let mut repeat = 1;
@@ -635,25 +633,24 @@ fn send_keys(state: &mut State, ctx: &ClientCtx, c: SendKeys) -> Result<String, 
         // dies. tmux queues the keys and spins instead.
         // ponytail: grofe stops at a depth tmux has no limit for.
         // Once the limit is hit, every level stops typing.
-        thread_local!(static TYPING: std::cell::Cell<(u32, bool)> = const { std::cell::Cell::new((0, false)) });
-        let (depth, _) = TYPING.get();
+        let (depth, _) = state.typing;
         if depth >= MAX_TYPING_DEPTH {
-            TYPING.set((depth, true));
+            state.typing = (depth, true);
             return Err("send-keys: -K nested too deeply".to_string());
         }
-        TYPING.set((depth + 1, false));
+        state.typing = (depth + 1, false);
         'typing: for _ in 0..repeat.min(copy::MAX_REPEAT) {
             for item in &c.items {
                 for key in typed_keys(item) {
                     clients::type_key(state, client, key);
-                    if TYPING.get().1 {
+                    if state.typing.1 {
                         break 'typing;
                     }
                 }
             }
         }
-        let tripped = TYPING.get().1 && depth > 0;
-        TYPING.set((depth, tripped));
+        let tripped = state.typing.1 && depth > 0;
+        state.typing = (depth, tripped);
         return Ok(String::new());
     }
     if c.items.is_empty() {

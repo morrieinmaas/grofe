@@ -148,6 +148,15 @@ pub struct Floating {
     pub cols: u16,
     pub rows: u16,
     pub z: u32,
+    /// A scratchpad: hiding it keeps it in [`Model::scratch`].
+    pub scratch: bool,
+}
+
+/// A hidden scratchpad: its pane, out of the window model, and where it
+/// was, for showing it again.
+pub struct Stashed {
+    pub pane: Pane,
+    pub place: Floating,
 }
 
 /// Stands in a window's layout once its last tiled pane has gone while
@@ -397,6 +406,8 @@ pub struct Pane {
     /// `Some(status)` once the child exited and the master drained;
     /// `status` is `None` when a signal killed it.
     pub dead: Option<Option<i32>>,
+    /// When the pane died (`#{pane_dead_time}`); set with `dead`.
+    pub dead_time: Option<std::time::SystemTime>,
     /// The size last given to the pty.
     pub cols: u16,
     pub rows: u16,
@@ -418,6 +429,11 @@ pub struct Model {
     /// -l`). Switching a client records it; removing a session drops
     /// entries naming it.
     pub client_last_session: BTreeMap<ClientId, SessionId>,
+    /// The `(foreground, background)` the most recently attached terminal
+    /// reported (OSC 10 and 11). A pane's program asking for its colours
+    /// gets these where `window-style` sets none, so it sees whether the
+    /// terminal is light or dark.
+    pub terminal_colours: Option<([u8; 3], [u8; 3])>,
     /// Who the server says it is (spec D12), fixed at start by
     /// `compat::server_started` (TC.1); grofe until then.
     pub identity: crate::compat::Identity,
@@ -444,6 +460,10 @@ pub struct Model {
     /// Each window's layout before its last `select-layout` (tmux's
     /// `old_layout`), as a layout string, for `select-layout -o`.
     pub old_layouts: BTreeMap<WindowId, String>,
+    /// Hidden scratchpads, newest first, at most `scratchpad-history`. They
+    /// are in no window and not in `panes`, so no list or render sees them.
+    // ponytail: hidden scratchpads are not saved by snapshots or restored.
+    pub scratch: Vec<Stashed>,
     next_session: u32,
     next_window: u32,
     next_pane: u32,
@@ -475,6 +495,11 @@ impl Model {
     pub fn alloc_session_id(&mut self) -> SessionId {
         self.next_session += 1;
         SessionId(self.next_session - 1)
+    }
+
+    /// The id the next session gets (tmux's `next_session_id`).
+    pub fn next_session_id(&self) -> SessionId {
+        SessionId(self.next_session)
     }
 
     pub fn alloc_window_id(&mut self) -> WindowId {
@@ -623,6 +648,16 @@ impl Model {
         }
     }
 
+    /// The text of a dead pane: its `remain-on-exit-format` expanded.
+    pub fn dead_pane_text(&self, pane: PaneId) -> String {
+        let chain = options::chain(self, pane);
+        let format = self
+            .options
+            .lookup("remain-on-exit-format", &chain)
+            .unwrap_or_default();
+        crate::cmd::expand(format, &options::FormatCtx::new(self, pane))
+    }
+
     pub fn session_by_name(&self, name: &str) -> Option<SessionId> {
         self.sessions
             .values()
@@ -714,6 +749,7 @@ impl Model {
         if self.remain_on_exit(pane, status) {
             if let Some(p) = self.panes.get_mut(&pane) {
                 p.dead = Some(status);
+                p.dead_time = Some(std::time::SystemTime::now());
             }
         } else {
             self.remove_pane(pane);
@@ -753,6 +789,113 @@ impl Model {
         let removed = self.take_panes(&[pane], None);
         self.relayout(window_id);
         removed
+    }
+
+    /// Hides the scratchpad `pane`: it leaves its window (which goes with
+    /// it if it was the last pane) and the pane map, and heads the history.
+    /// Entries past `scratchpad-history` are dropped, their processes hung
+    /// up; those returned were still live.
+    pub fn stash_pane(&mut self, pane: PaneId) -> Result<Removed, String> {
+        let window_id = self
+            .panes
+            .get(&pane)
+            .map(|p| p.window)
+            .ok_or_else(|| format!("no such pane: {pane}"))?;
+        let place = self
+            .windows
+            .get(&window_id)
+            .and_then(|w| w.floating(pane))
+            .copied()
+            .filter(|f| f.scratch)
+            .ok_or("pane is not a scratchpad")?;
+        let Some(window) = self.windows.get_mut(&window_id) else {
+            return Err("pane is not a scratchpad".to_string());
+        };
+        let order = window.pane_ids();
+        window.floating.retain(|f| f.pane != pane);
+        window.lose_pane(&order, pane);
+        let last = order.len() <= 1;
+        let Some(taken) = self.panes.remove(&pane) else {
+            return Ok(Vec::new());
+        };
+        // A dead pane (`remain-on-exit`) has no process to show again.
+        let mut removed = if taken.dead.is_none() {
+            self.push_stash(taken, place)
+        } else {
+            Vec::new()
+        };
+        if last {
+            removed.extend(self.remove_window(window_id));
+        }
+        Ok(removed)
+    }
+
+    /// Puts `pane` at the head of the history and drops what exceeds
+    /// `scratchpad-history` (10 when unset or unreadable).
+    pub(crate) fn push_stash(&mut self, pane: Pane, place: Floating) -> Removed {
+        let limit = self
+            .options
+            .lookup("scratchpad-history", &[])
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(10);
+        self.scratch.insert(0, Stashed { pane, place });
+        let mut removed = Vec::new();
+        while self.scratch.len() > limit {
+            let Some(old) = self.scratch.pop() else {
+                break;
+            };
+            if old.pane.dead.is_none() {
+                let place = self.place_of(&old.pane);
+                removed.push((old.pane.id, old.pane.uid.clone(), place));
+            }
+        }
+        removed
+    }
+
+    /// Shows the hidden scratchpad `pane` in `window`: on top at its last
+    /// size, held inside the window, and active.
+    pub fn unstash_pane(&mut self, pane: PaneId, window: WindowId) -> Result<(), String> {
+        let Some(at) = self.scratch.iter().position(|s| s.pane.id == pane) else {
+            return Err(format!("no such scratchpad: {pane}"));
+        };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return Err(format!("can't find window: {window}"));
+        };
+        let Stashed { mut pane, place } = self.scratch.remove(at);
+        let mut place =
+            crate::server::floating::placed(&place, (place.x, place.y), (w.cols, w.rows));
+        place.z = w.floating.iter().map(|f| f.z).max().unwrap_or(0) + 1;
+        w.floating.push(place);
+        w.zoomed = false;
+        let id = pane.id;
+        pane.window = window;
+        if (pane.cols, pane.rows) != (place.cols, place.rows) {
+            pane.cols = place.cols;
+            pane.rows = place.rows;
+            if let Err(e) = pane.handle.resize(place.cols, place.rows) {
+                eprintln!("grofe server: resizing {id}: {e}");
+            }
+        }
+        self.panes.insert(id, pane);
+        if let Some(w) = self.windows.get_mut(&window) {
+            w.set_active(id);
+        }
+        Ok(())
+    }
+
+    /// A hidden scratchpad's process exited: it leaves the history, unless
+    /// `generation` is not its process's (a respawn's event).
+    // ponytail: no `pane-exited` is emitted for a hidden pane that exits.
+    pub fn drop_stashed(&mut self, pane: PaneId, generation: u64) -> bool {
+        let Some(at) = self
+            .scratch
+            .iter()
+            .position(|s| s.pane.id == pane && s.pane.handle.generation() == generation)
+        else {
+            return false;
+        };
+        self.scratch.remove(at);
+        true
     }
 
     /// Removes a window and its panes, from every session it is linked
@@ -996,6 +1139,16 @@ impl Model {
                 let windows = &self.sessions[&sid].windows;
                 Ok(step(windows, current, *n))
             }
+            // tmux's `!`/`{last}`: the window the session was on before this
+            // one; `can't find window: !` when there is none.
+            (s, WindowRef::LastUsed) => {
+                let sid = self.session_ref(s, ctx)?;
+                self.sessions[&sid]
+                    .last_windows
+                    .last()
+                    .copied()
+                    .ok_or_else(|| "can't find window: !".to_string())
+            }
             (s, WindowRef::First | WindowRef::Last) => {
                 let sid = self.session_ref(s, ctx)?;
                 let windows = &self.sessions[&sid].windows;
@@ -1054,6 +1207,12 @@ impl Model {
                 let window = &self.windows[&w];
                 Ok(step(&window.pane_ids(), window.active, n))
             }
+            PanePart::LastUsed => {
+                let w = self.window_ref(&r.session, &r.window, ctx)?;
+                self.windows[&w]
+                    .last_pane()
+                    .ok_or_else(|| "can't find pane: !".to_string())
+            }
             PanePart::Index(index) => {
                 let w = self.window_ref(&r.session, &r.window, ctx)?;
                 index
@@ -1069,6 +1228,9 @@ impl Model {
     /// tmux's bare word as a window (cmd-find.c): `=word` is `word`, read
     /// the same way here since window names never match by prefix.
     fn bare_window(&self, word: &str, ctx: &ClientCtx) -> Result<WindowId, String> {
+        if let Some(w) = crate::cmd::target::tmux_window_token(word) {
+            return self.window_ref(&SessionRef::Current, &w, ctx);
+        }
         let name = match word.strip_prefix('=') {
             Some(name) if !name.is_empty() => name,
             _ => word,
@@ -1081,6 +1243,10 @@ impl Model {
     /// one for an index or a name, else the session the word names.
     fn word_winlink(&self, word: &str, ctx: &ClientCtx) -> Option<(SessionId, WindowId)> {
         let current = self.current_session(ctx).ok()?;
+        if let Some(w) = crate::cmd::target::tmux_window_token(word) {
+            let w = self.window_ref(&SessionRef::Current, &w, ctx).ok()?;
+            return Some((current, w));
+        }
         let in_current = word
             .parse::<u32>()
             .ok()
@@ -1125,6 +1291,16 @@ impl Model {
     /// leading `=` is part of the word here: tmux strips it only from a
     /// session or window part.
     fn bare_pane(&self, word: &str, ctx: &ClientCtx) -> Result<PaneId, String> {
+        if let Some(pane) = crate::cmd::target::tmux_pane_token(word) {
+            return self.pane_ref(
+                &PaneRef {
+                    session: SessionRef::Current,
+                    window: WindowRef::Current,
+                    pane,
+                },
+                ctx,
+            );
+        }
         if let Ok(index) = word.parse::<u32>() {
             let pane = PaneRef {
                 session: SessionRef::Current,
@@ -1317,7 +1493,9 @@ mod tests {
             images: false,
             identity: Default::default(),
             delay: std::time::Duration::ZERO,
+            colours: Default::default(),
         };
+        // A transient macOS ENXIO is retried by `pane::open_pty`.
         let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
         model.panes.insert(
             id,
@@ -1333,6 +1511,7 @@ mod tests {
                 expect: None,
                 restored: false,
                 dead: None,
+                dead_time: None,
                 cols: 80,
                 rows: 24,
                 input_off: false,
@@ -1368,6 +1547,7 @@ mod tests {
             env: Vec::new(),
             client: None,
             dialect: crate::protocol::Dialect::Grofe,
+            request: Default::default(),
         }
     }
 
@@ -1750,5 +1930,319 @@ mod tests {
         assert!(!w.framed());
         assert!(w.frame_rects().is_empty());
         assert_eq!(w.tiled_rects()[0].1.x, 0);
+    }
+
+    /// A session `name` with one window of `cols`x`rows` holding one tiled
+    /// pane; returns the ids.
+    fn scratch_window(
+        model: &mut Model,
+        name: &str,
+        (cols, rows): (u16, u16),
+    ) -> (SessionId, WindowId, PaneId) {
+        let w = model.alloc_window_id();
+        let p = spawn_pane(model, w);
+        let s = add_session(model, name, w);
+        model.insert_window(Window {
+            id: w,
+            session: s,
+            index: 1,
+            name: name.to_string(),
+            layout: LayoutTree::new(p),
+            active: p,
+            zoomed: false,
+            cols,
+            rows,
+            bell_flag: false,
+            activity_flag: false,
+            silence_flag: false,
+            activity: std::time::SystemTime::now(),
+            last_panes: Vec::new(),
+            active_points: Default::default(),
+            floating: Vec::new(),
+            pane_status: Default::default(),
+            frames: false,
+            pane_gap: 0,
+            drop_preview: None,
+            links: Vec::new(),
+        });
+        (s, w, p)
+    }
+
+    /// A visible scratchpad of `window`, `cols`x`rows` at (`x`, `y`).
+    fn add_scratch(
+        model: &mut Model,
+        window: WindowId,
+        (x, y, cols, rows): (i32, i32, u16, u16),
+    ) -> PaneId {
+        let pane = spawn_pane(model, window);
+        let Some(w) = model.windows.get_mut(&window) else {
+            panic!("no window");
+        };
+        let z = w.floating.iter().map(|f| f.z).max().unwrap_or(0) + 1;
+        w.floating.push(Floating {
+            pane,
+            x,
+            y,
+            cols,
+            rows,
+            z,
+            scratch: true,
+        });
+        pane
+    }
+
+    fn history(model: &mut Model, n: &str) {
+        model
+            .options
+            .set(Owner::Global, "scratchpad-history", n, false)
+            .expect("option");
+    }
+
+    fn hidden(model: &Model) -> Vec<PaneId> {
+        model.scratch.iter().map(|s| s.pane.id).collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stash_hides_a_scratchpad_from_the_window() {
+        let mut m = Model::new(true);
+        let (_, w, p1) = scratch_window(&mut m, "a", (80, 24));
+        let s = add_scratch(&mut m, w, (5, 5, 20, 10));
+        assert_eq!(m.stash_pane(s), Ok(Vec::new()));
+        assert_eq!(hidden(&m), vec![s]);
+        assert_eq!(m.windows[&w].pane_ids(), vec![p1]);
+        assert!(!m.panes.contains_key(&s));
+        assert_eq!(
+            m.stash_pane(p1),
+            Err("pane is not a scratchpad".to_string())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stash_evicts_oldest_over_limit() {
+        let mut m = Model::new(true);
+        history(&mut m, "2");
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let ids: Vec<PaneId> = (0..3)
+            .map(|_| add_scratch(&mut m, w, (5, 5, 20, 10)))
+            .collect();
+        let mut removed = Vec::new();
+        for id in &ids {
+            removed.extend(m.stash_pane(*id).expect("stash"));
+        }
+        assert_eq!(hidden(&m), vec![ids[2], ids[1]]);
+        assert!(!m.panes.contains_key(&ids[0]));
+        let gone: Vec<PaneId> = removed.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(gone, vec![ids[0]]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rehide_promotes_to_the_front_and_show_removes() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let a = add_scratch(&mut m, w, (5, 5, 20, 10));
+        let b = add_scratch(&mut m, w, (5, 5, 20, 10));
+        m.stash_pane(a).expect("stash");
+        m.stash_pane(b).expect("stash");
+        assert_eq!(hidden(&m), vec![b, a]);
+        m.unstash_pane(a, w).expect("show");
+        assert_eq!(hidden(&m), vec![b], "showing removes it from the history");
+        m.stash_pane(a).expect("stash");
+        assert_eq!(hidden(&m), vec![a, b], "hiding again puts it at the front");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lowering_the_limit_applies_at_the_next_hide() {
+        let mut m = Model::new(true);
+        history(&mut m, "3");
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let ids: Vec<PaneId> = (0..4)
+            .map(|_| add_scratch(&mut m, w, (5, 5, 20, 10)))
+            .collect();
+        for id in &ids[..3] {
+            m.stash_pane(*id).expect("stash");
+        }
+        history(&mut m, "1");
+        assert_eq!(hidden(&m).len(), 3, "nothing is dropped until a hide");
+        let removed = m.stash_pane(ids[3]).expect("stash");
+        assert_eq!(hidden(&m), vec![ids[3]]);
+        let gone: Vec<PaneId> = removed.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(
+            gone,
+            vec![ids[0], ids[1], ids[2]],
+            "oldest first, only the oldest"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stash_limit_zero_closes() {
+        let mut m = Model::new(true);
+        history(&mut m, "0");
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let s = add_scratch(&mut m, w, (5, 5, 20, 10));
+        let removed = m.stash_pane(s).expect("stash");
+        assert!(m.scratch.is_empty());
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].0, s);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stash_last_pane_removes_window() {
+        let mut m = Model::new(true);
+        let (s, w, p1) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        // The tiled pane goes; the window stays for its floating pane.
+        m.remove_pane(p1);
+        assert!(m.windows.contains_key(&w));
+        let removed = m.stash_pane(sp).expect("stash");
+        assert!(removed.is_empty());
+        assert!(!m.windows.contains_key(&w));
+        assert!(!m.sessions.contains_key(&s));
+        assert_eq!(hidden(&m), vec![sp]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unstash_clamps_into_smaller_window() {
+        let mut m = Model::new(true);
+        let (_, a, _) = scratch_window(&mut m, "a", (80, 24));
+        let (_, b, _) = scratch_window(&mut m, "b", (40, 12));
+        let sp = add_scratch(&mut m, a, (30, 10, 60, 20));
+        m.stash_pane(sp).expect("stash");
+        assert_eq!(m.unstash_pane(sp, b), Ok(()));
+        assert_eq!(m.panes[&sp].window, b);
+        assert!(m.scratch.is_empty());
+        let w = &m.windows[&b];
+        assert_eq!(w.active, sp);
+        let f = w.floating(sp).copied().expect("floating");
+        let want = crate::server::floating::placed(
+            &Floating {
+                pane: sp,
+                x: 30,
+                y: 10,
+                cols: 60,
+                rows: 20,
+                z: 1,
+                scratch: true,
+            },
+            (30, 10),
+            (40, 12),
+        );
+        assert_eq!((f.x, f.y, f.cols, f.rows), (want.x, want.y, 60, 20));
+        assert!(f.scratch);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unstash_unknown_is_error() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        assert_eq!(
+            m.unstash_pane(PaneId(9), w),
+            Err("no such scratchpad: %9".to_string())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_window_hides_visible_scratchpads() {
+        let mut m = Model::new(true);
+        let (_, w1, p1) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w1, (5, 5, 20, 10));
+        let (_, _w2, _) = scratch_window(&mut m, "b", (80, 24));
+        let removed = m.remove_window(w1);
+        let gone: Vec<PaneId> = removed.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(gone, vec![p1]);
+        assert_eq!(hidden(&m), vec![sp]);
+        assert!(!m.windows.contains_key(&w1));
+        assert!(!m.panes.contains_key(&sp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stash_dead_pane_is_not_kept() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        if let Some(p) = m.panes.get_mut(&sp) {
+            p.dead = Some(Some(0));
+        }
+        assert_eq!(m.stash_pane(sp), Ok(Vec::new()));
+        assert!(m.scratch.is_empty());
+        assert!(!m.panes.contains_key(&sp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unstash_goes_on_top_and_active() {
+        let mut m = Model::new(true);
+        let (_, a, _) = scratch_window(&mut m, "a", (80, 24));
+        let (_, b, p_b) = scratch_window(&mut m, "b", (80, 24));
+        let other = add_scratch(&mut m, b, (1, 1, 10, 5));
+        let sp = add_scratch(&mut m, a, (5, 5, 20, 10));
+        m.stash_pane(sp).expect("stash");
+        m.unstash_pane(sp, b).expect("unstash");
+        let w = &m.windows[&b];
+        assert!(w.floating(sp).map(|f| f.z) > w.floating(other).map(|f| f.z));
+        assert_eq!(w.active, sp);
+        assert!(w.last_panes.contains(&p_b) || w.last_panes.contains(&other));
+        assert!(!m.windows[&a].pane_ids().contains(&sp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unstash_into_missing_window_keeps_the_stash() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        m.stash_pane(sp).expect("stash");
+        assert_eq!(
+            m.unstash_pane(sp, WindowId(99)),
+            Err("can't find window: @99".to_string())
+        );
+        assert_eq!(hidden(&m), vec![sp]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_window_hides_topmost_scratchpad_first() {
+        let mut m = Model::new(true);
+        let (_, w1, _) = scratch_window(&mut m, "a", (80, 24));
+        let low = add_scratch(&mut m, w1, (5, 5, 20, 10));
+        let high = add_scratch(&mut m, w1, (6, 6, 20, 10));
+        let (_, _w2, _) = scratch_window(&mut m, "b", (80, 24));
+        m.remove_window(w1);
+        assert_eq!(hidden(&m), vec![high, low]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_session_hides_scratchpads() {
+        let mut m = Model::new(true);
+        let (s, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        let _ = scratch_window(&mut m, "b", (80, 24));
+        let removed = m.remove_session(s);
+        assert!(removed.iter().all(|(id, _, _)| *id != sp));
+        assert_eq!(hidden(&m), vec![sp]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_window_over_limit_returns_evicted_scratchpad() {
+        let mut m = Model::new(true);
+        history(&mut m, "1");
+        let (_, w1, p1) = scratch_window(&mut m, "a", (80, 24));
+        let low = add_scratch(&mut m, w1, (5, 5, 20, 10));
+        let high = add_scratch(&mut m, w1, (6, 6, 20, 10));
+        let (_, _w2, _) = scratch_window(&mut m, "b", (80, 24));
+        let removed = m.remove_window(w1);
+        let mut gone: Vec<PaneId> = removed.iter().map(|(id, _, _)| *id).collect();
+        gone.sort();
+        assert_eq!(gone, vec![p1, low]);
+        assert_eq!(hidden(&m), vec![high]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_stashed_on_exit() {
+        let mut m = Model::new(true);
+        let (_, w, _) = scratch_window(&mut m, "a", (80, 24));
+        let sp = add_scratch(&mut m, w, (5, 5, 20, 10));
+        m.stash_pane(sp).expect("stash");
+        let generation = m.scratch[0].pane.handle.generation();
+        assert!(!m.drop_stashed(sp, generation + 1));
+        assert_eq!(hidden(&m), vec![sp]);
+        assert!(m.drop_stashed(sp, generation));
+        assert!(m.scratch.is_empty());
     }
 }

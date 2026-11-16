@@ -4,24 +4,26 @@
 //! [`session`], window commands (and the default `list-panes`) to
 //! [`window`], pane commands to [`pane`], and option and format commands
 //! (`set-option`, `show-options`, `display-message`, `-F` on the list
-//! commands) to [`options`]. M3's commands route the same way: key
-//! bindings and config (`bind-key`, `unbind-key`, `list-keys`,
+//! commands) to [`options`]. Key bindings and config (`bind-key`, `unbind-key`, `list-keys`,
 //! `source-file`, `reload`) to [`options`], `command-prompt` and
-//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. M3.6's
-//! verbs route to one file per owning task: [`structure`] (TC.8),
-//! [`client`] (TC.9), [`popup`] (TC.6), [`menu`] (TC.7), [`bindings`]
-//! (TC.10) and [`hooks`] (TC.5); M5's buffer verbs to [`buffers`] (TM.4).
+//! `run-shell` to `server::prompt`, `select-layout` to [`window`]. The
+//! structure, client, popup, menu, binding and hook verbs route to one file
+//! each: [`structure`], [`client`], [`popup`], [`menu`], [`bindings`] and
+//! [`hooks`]; the buffer verbs to [`buffers`].
 //! After every command it runs the pending
 //! event hooks (`server::hooks`) and checks the lifecycle cascade: once the
 //! last session is gone the server exits.
 //!
 //! Parsing goes through `compat` (the request's dialect decides between
 //! the native parser and the tmux front end), after grofe aliases are
-//! expanded ([`menu::expand_aliases`]). No M3.6 task edits this file.
+//! expanded ([`menu::expand_aliases`]).
 //!
 //! Shared helpers for handlers that spawn panes live here too:
 //! [`spawn_pane`] and [`resolve_cwd`].
 
+pub(crate) mod agent;
+mod agent_cmd;
+pub(crate) mod agent_new;
 pub mod bindings;
 pub mod buffers;
 pub mod client;
@@ -29,16 +31,19 @@ pub mod copy;
 pub mod hooks;
 pub mod lock;
 pub mod menu;
+pub(crate) mod notify;
 pub mod options;
 pub mod pane;
 pub mod persist;
 pub mod plugins;
 pub mod popup;
+pub mod scratch;
 pub mod session;
 pub mod sorting;
 pub mod structure;
 pub mod window;
 
+use crate::cmd::NoVars;
 use std::path::{Path, PathBuf};
 
 use tokio::sync::oneshot;
@@ -46,9 +51,10 @@ use ulid::Ulid;
 
 use crate::cmd::{self, Command};
 use crate::protocol::{ATTACH_CHECK, ClientCtx};
+use crate::server::clients::CommandLog;
 use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
-use crate::server::{State, clients, graphics, prompt};
+use crate::server::{State, clients, graphics, grid, keymenu, picker, prompt, sidebar, tray};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
 
@@ -77,21 +83,23 @@ pub fn parse(state: &State, ctx: &ClientCtx, argv: &[String]) -> Result<Parsed, 
 /// or its error message: [`parse`], then [`run_parsed`].
 pub fn run(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
     let parsed = parse(state, ctx, argv);
-    run_parsed(state, ctx, parsed)
+    run_parsed(state, ctx, parsed, &mut CommandLog::new())
 }
 
 /// Runs a parsed request. argv may have held several commands, split at
 /// `;` arguments as tmux's CLI splits them ([`cmd::parse_sequence`]): they
 /// run in order and the first error stops the rest; what the commands
-/// before it printed goes out with the error (`State::failed_out`).
+/// before it printed goes out with the error (`State::failed_out`). `log`
+/// is the request's log plan, logged as its commands fire.
 pub fn run_parsed(
     state: &mut State,
     ctx: &ClientCtx,
     parsed: Result<Parsed, String>,
+    log: &mut CommandLog,
 ) -> Result<String, String> {
     match parsed? {
         Parsed::AttachCheck(args) => clients::attach_check(state, ctx, &args),
-        Parsed::Commands(cmds) => run_commands(state, ctx, cmds),
+        Parsed::Commands(cmds) => run_commands_logged(state, ctx, cmds, log),
     }
 }
 
@@ -150,6 +158,17 @@ pub(crate) fn run_commands(
     ctx: &ClientCtx,
     cmds: Vec<Command>,
 ) -> Result<String, String> {
+    run_commands_logged(state, ctx, cmds, &mut CommandLog::new())
+}
+
+/// [`run_commands`] for a request's own commands: those that fire at the
+/// top of its queue are logged from `log`.
+fn run_commands_logged(
+    state: &mut State,
+    ctx: &ClientCtx,
+    cmds: Vec<Command>,
+    log: &mut CommandLog,
+) -> Result<String, String> {
     // Names follow their panes (automatic-rename) before a command reads
     // or targets them. A new name is drawn even if the command only reads.
     if window::automatic_rename(&mut state.model) {
@@ -163,7 +182,7 @@ pub(crate) fn run_commands(
         let answered = state.deferred_reply.is_none();
         let shell = matches!(cmd, Command::RunShell(_));
         if server::hooks::depth(state) == 1 && !server::hooks::in_hook(state) {
-            clients::log_fired(state);
+            clients::log_fired(state, log);
         }
         match server::hooks::run_command(state, ctx, cmd, route) {
             Ok(text) => out.push_str(&text),
@@ -204,8 +223,8 @@ pub(crate) fn run_commands(
                     ctx: ctx.clone(),
                     cmds: rest,
                     keep_going: false,
-                    depth: options::source_depth(),
-                    verbose: options::source_verbose(),
+                    depth: state.source_depth,
+                    verbose: state.source_verbose,
                 });
             }
             break;
@@ -251,6 +270,7 @@ pub fn read_only(parsed: &Result<Parsed, String>) -> bool {
                 | Command::ShowBuffer(_)
                 | Command::SaveBuffer(_)
                 | Command::ListBuffers(_)
+                | Command::Agent(cmd::AgentCmd::List { .. })
                 | Command::DisplayMessage(cmd::DisplayMessage { print: true, .. })
         )
     })
@@ -323,6 +343,15 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         | Command::ListPanes(_) => options::run(state, ctx, cmd),
 
         Command::KillServer(_) => {
+            // Who stopped the server, since nothing else in the log says.
+            eprintln!(
+                "grofe server: kill-server at {} from {} in {} ({:?})",
+                crate::server::snapshot::rfc3339(std::time::SystemTime::now()),
+                ctx.pane
+                    .map_or("outside any pane".to_string(), |p| format!("pane {p}")),
+                ctx.cwd.display(),
+                ctx.dialect,
+            );
             let live = state.model.live_panes();
             state.events.panes_killed(live);
             state.exit = true;
@@ -332,7 +361,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         // since it needs the connection's event queue.
         Command::Subscribe(_) => Err("subscribe needs a control connection".to_string()),
 
-        // M2: T2.5a (attach, detach, list-clients) and T2.5b (the rest).
+        // Clients, sessions and window stepping.
         Command::AttachSession(c) => clients::attach_session(state, ctx, c),
         Command::DetachClient(c) => clients::detach_client(state, ctx, c),
         Command::ListClients(c) => clients::list_clients(state, ctx, c),
@@ -344,8 +373,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::SwitchClient(c) => session::switch_client(state, ctx, c),
         Command::SendPrefix(c) => pane::send_prefix(state, ctx, c),
 
-        // M3: bindings and config (T3.5), the prompt and run-shell (T3.4),
-        // layout presets (T3.7).
+        // Bindings and config, the prompt and run-shell, layout presets.
         Command::BindKey(c) => options::bind_key(state, ctx, c),
         Command::UnbindKey(c) => options::unbind_key(state, ctx, c),
         Command::ListKeys(c) => options::list_keys(state, ctx, c),
@@ -368,7 +396,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::RunShell(c) => prompt::run_shell(state, ctx, c),
         Command::SelectLayout(c) => window::select_layout(state, ctx, c),
 
-        // M3.6: stubs until each owning task lands (the stub edit).
+        // Structure, client and listing verbs.
         Command::JoinPane(c) => structure::join_pane(state, ctx, c),
         Command::ClockMode(c) => crate::server::clock::clock_mode(state, ctx, c),
         Command::PipePane(c) => pane::pipe_pane(state, ctx, c),
@@ -400,7 +428,17 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::FloatPane(c) => popup::float_pane(state, ctx, c),
         Command::UnfloatPane(c) => popup::unfloat_pane(state, ctx, c),
         Command::DragPane(_) => server::mouse::drag_pane(state),
+        Command::Lua { src } => server::lua_host::run_chunk(state, ctx, &src),
+        Command::LuaCall { id } => {
+            server::lua_host::call(state, id, crate::lua::api::Payload::None);
+            Ok(String::new())
+        }
         Command::PlacePane(c) => popup::place_pane(state, ctx, c),
+        Command::NewScratchpad(c) => scratch::new(state, ctx, c),
+        Command::ToggleScratchpad(c) => scratch::toggle(state, ctx, c),
+        Command::ShowScratchpad(c) => scratch::show(state, ctx, c),
+        Command::ListScratchpads => scratch::list(state, ctx),
+        Command::ChooseScratchpad => scratch::choose(state, ctx),
         Command::DisplayMenu(c) => menu::display_menu(state, ctx, c),
         Command::DisplayPanes(c) => menu::display_panes(state, ctx, c),
         Command::ConfirmBefore(c) => menu::confirm_before(state, ctx, c),
@@ -414,7 +452,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             server::sources::register(state, c.name.as_deref(), &c.command, None, None);
             Ok(String::new())
         }
-        // M5: buffers (TM.4).
+        // Buffers.
         Command::SetBuffer(c) => buffers::set_buffer(state, ctx, c),
         Command::ShowBuffer(c) => buffers::show_buffer(state, ctx, c),
         Command::LoadBuffer(c) => buffers::load_buffer(state, ctx, c),
@@ -424,8 +462,33 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::PasteBuffer(c) => buffers::paste_buffer(state, ctx, c),
         Command::ChooseBuffer(c) => buffers::choose_buffer(state, ctx, c),
         Command::CustomizeMode(c) => client::customize_mode(state, ctx, c),
-        // M5: copy mode (TM.1).
+        // Copy mode.
         Command::CopyMode(c) => copy::copy_mode(state, ctx, c),
+        Command::Agent(c) => agent_cmd::run(state, ctx, c),
+        Command::ChooseAgent => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            picker::open(state, client).map(|()| String::new())
+        }
+        Command::AgentSidebar(op) => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            sidebar::set(state, client, op)?;
+            clients::resize_for_sidebar(state, client);
+            Ok(String::new())
+        }
+        Command::AgentGrid => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            grid::open(state, client).map(|()| String::new())
+        }
+        Command::ChooseNotification => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            tray::open(state, client).map(|()| String::new())
+        }
+        Command::Notify(c) => notify::run(state, ctx, c),
+        Command::KeyMenu(k) => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            let table = k.table.as_deref().unwrap_or("prefix");
+            keymenu::open(state, client, table).map(|()| String::new())
+        }
     }
 }
 
@@ -470,14 +533,6 @@ pub(crate) fn pane_env(
     all
 }
 
-struct NoVars;
-
-impl cmd::FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
-    }
-}
-
 /// Spawns a pane for `window` (which may not be in the model yet) with
 /// `env` (its session's), inserts it into `state.model.panes`, and returns
 /// its id. The caller puts it in the window's layout. `cell_px` is
@@ -520,6 +575,7 @@ pub(crate) fn spawn_pane_delayed(
         .or_else(|| state.model.default_command(session).map(|c| vec![c]));
     let shell = pane_shell(state.model.default_shell(session).as_deref());
     env.push(("SHELL".to_string(), shell.clone()));
+    let colours = clients::default_colours(&state.model, (session, window));
     let spec = PaneSpawn {
         id,
         session,
@@ -538,10 +594,10 @@ pub(crate) fn spawn_pane_delayed(
         images: graphics::images_enabled(&state.model),
         identity: state.model.identity,
         delay,
+        colours,
     };
     let handle = PaneHandle::spawn(spec, state.pane_events.clone(), state.wake.clone())
         .map_err(|e| format!("can't start pane in {}: {e}", cwd.display()))?;
-    clients::seed_defaults(&state.model, (session, window), &handle);
     state.model.panes.insert(
         id,
         Pane {
@@ -556,6 +612,7 @@ pub(crate) fn spawn_pane_delayed(
             shell,
             cwd,
             dead: None,
+            dead_time: None,
             cols,
             rows,
             input_off: false,
@@ -597,6 +654,36 @@ mod tests {
             &[],
         ] {
             assert!(!read_only(&argv(words)), "{words:?}");
+        }
+    }
+
+    #[test]
+    fn sidebar_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let r = run(&mut state, &ctx, &argv(&["agent-sidebar", "toggle"]));
+        assert_eq!(r.err().as_deref(), Some("no client"));
+    }
+
+    #[test]
+    fn grid_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let r = run(&mut state, &ctx, &argv(&["agent-grid"]));
+        assert_eq!(r.err().as_deref(), Some("no client"));
+    }
+
+    #[test]
+    fn choose_agent_needs_client() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        for words in [
+            &["choose-agent"][..],
+            &["key-menu"],
+            &["key-menu", "-T", "root"],
+        ] {
+            let r = run(&mut state, &ctx, &argv(words));
+            assert_eq!(r.err().as_deref(), Some("no client"), "{words:?}");
         }
     }
 }

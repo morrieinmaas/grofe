@@ -433,9 +433,15 @@ fn smoke(cli: &Cli) -> Result<(), String> {
     let (_, job, _) = cli.run(&[arg("run-shell"), arg("command -v tmux")]);
     let _ = cli.run(&[arg("kill-server")]);
     tripwire(cli)?;
-    if job.trim() != symlink {
+    // Since the D12 ruling of 2026-11-07 the server puts its own `tmux` link
+    // first on its jobs' PATH, so the job's `tmux` is that link, not the
+    // suite's: what must hold is that it is the same grofe.
+    let same_grofe = fs::canonicalize(job.trim())
+        .ok()
+        .is_some_and(|t| fs::canonicalize(&cli.program).is_ok_and(|g| g == t));
+    if !same_grofe {
         return Err(format!(
-            "a run-shell job's tmux is {:?}, not the grofe symlink",
+            "a run-shell job's tmux is {:?}, not a link to the grofe under test",
             job.trim()
         ));
     }

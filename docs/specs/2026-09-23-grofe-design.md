@@ -4,8 +4,8 @@
 **Status:** draft, revised after three review passes (architecture, execution, requirements);
 revised 2026-09-27 for the owner's tmux compatibility decision (D1, D12);
 revised 2026-09-28 with the task-level M4 to M7 plan (§4.11, §6, §7, §9)
-**Origin:** the `grofe-plan.md` design note (formerly `rtmux-plan.md`); canopy
-(`morrieinmaas/canopy`) is the requirements document.
+**Origin:** the `grofe-plan.md` design note (formerly `rtmux-plan.md`); the session manager
+(a private repository) is the requirements document.
 
 ---
 
@@ -43,7 +43,7 @@ If performance becomes the headline, the project has lost the plot.
   covers what the owner's scripts and tools send (§4.5), but it does not read
   `tmux.conf` as its config. The owner's daily config is ported once to
   grofe-native TOML (plan M3.6), drafted by `grofe import-tmux` (M3.5, §5.5).
-  The remaining tmux plugins run unchanged through canopy's plugin loader
+  The remaining tmux plugins run unchanged through the session manager's plugin loader
   (plan M3.7, §5.1); TPM itself does not run.
 - Not Zellij. No WASM plugin runtime, no modal UI by default, tmux semantics.
 - Not cross-platform beyond Unix. macOS and Linux only.
@@ -54,20 +54,20 @@ If performance becomes the headline, the project has lost the plot.
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | **tmux-compatible for the owner's workflow, not a general tmux reimplementation.** grofe answers to the name `tmux` (D12) and supports every CLI verb, flag, target form, format variable and modifier, and key-binding feature that the owner's scripts and tools send, as listed in §4.5 and pinned by a compat suite whose goldens are recorded from real tmux 3.7b (plan M3.6). That inventory closes the scope, not tmux's manual: anything outside it needs a dogfooding reason. The owner's daily config and canopy are ported once to grofe-native TOML, bindings and small scripts (plan M3.6), drafted by `grofe import-tmux` (M3.5, §5.5); the TPM plugins run unchanged through canopy's plugin loader (plan M3.7, owner ruling 2026-09-29). Compatibility is a **translation front end** (D12, §4.5): a thin, table-driven layer in `src/compat/` that maps tmux argv and tmux format strings onto grofe commands and features, not tmux semantics spread through grofe's own grammar. grofe's native CLI and config grammar may diverge from tmux wherever grofe does better. **Non-goal:** executing `tmux.conf` as the config, or running TPM itself; a plugin's own tmux files are read only as §5.1 says. No `-CC` wire format in v1. | The owner's goal is to put `tmux` on PATH pointing at grofe and notice no difference in daily work. Muscle memory lives in key bindings and scripts, not in the config language, so those must behave identically. tmux's config language and plugin semantics are exactly what grofe escapes, so they move once instead of running forever: typed TOML config, provenance and native persistence stay the core. A general reimplementation has no end; a closed, recorded list does. Keeping the list in one front-end table, rather than in the native parser, means a pure grofe user never meets tmux's quirks and grofe's own grammar stays small. `-CC` (iTerm2 integration) is a possible M8, not a v1 promise. |
+| D1 | **tmux-compatible for the owner's workflow, not a general tmux reimplementation.** grofe answers to the name `tmux` (D12) and supports every CLI verb, flag, target form, format variable and modifier, and key-binding feature that the owner's scripts and tools send, as listed in §4.5 and pinned by a compat suite whose goldens are recorded from real tmux 3.7b (plan M3.6). That inventory closes the scope, not tmux's manual: anything outside it needs a dogfooding reason. The owner's daily config and the session manager are ported once to grofe-native TOML, bindings and small scripts (plan M3.6), drafted by `grofe import-tmux` (M3.5, §5.5); the TPM plugins run unchanged through the session manager's plugin loader (plan M3.7, owner ruling 2026-09-29). Compatibility is a **translation front end** (D12, §4.5): a thin, table-driven layer in `src/compat/` that maps tmux argv and tmux format strings onto grofe commands and features, not tmux semantics spread through grofe's own grammar. grofe's native CLI and config grammar may diverge from tmux wherever grofe does better. **Non-goal:** executing `tmux.conf` as the config, or running TPM itself; a plugin's own tmux files are read only as §5.1 says. No `-CC` wire format in v1. | The owner's goal is to put `tmux` on PATH pointing at grofe and notice no difference in daily work. Muscle memory lives in key bindings and scripts, not in the config language, so those must behave identically. tmux's config language and plugin semantics are exactly what grofe escapes, so they move once instead of running forever: typed TOML config, provenance and native persistence stay the core. A general reimplementation has no end; a closed, recorded list does. Keeping the list in one front-end table, rather than in the native parser, means a pure grofe user never meets tmux's quirks and grofe's own grammar stays small. `-CC` (iTerm2 integration) is a possible M8, not a v1 promise. |
 | D2 | **One binary, `grofe`.** It is the server, the attach client, and the CLI, and it also answers to `tmux` (D12). Only session-creating commands auto-start a server (§4.1); every other command fails fast when none is running. | One thing to install and version. Agent hooks call `set` constantly, often from IDEs outside grofe, and must never spawn a stray server. |
 | D3 | **The server renders; the client is thin.** The attach client puts the tty in raw mode, probes the outer terminal's capabilities once, forwards input bytes and resize events, and writes whatever bytes the server sends. All state and all composition live in the server. | Client crashes are survivable by construction. Same split as tmux. |
-| D4 | **Headless control mode is the first interface.** Every operation is a command; the CLI, key bindings, control mode and (later) plugins all go through one command dispatcher. | Tests and canopy's bats suite can drive grofe before any UI exists. A scriptable surface is what makes the plugin API designable later. |
+| D4 | **Headless control mode is the first interface.** Every operation is a command; the CLI, key bindings, control mode and (later) plugins all go through one command dispatcher. | Tests and the session manager's bats suite can drive grofe before any UI exists. A scriptable surface is what makes the plugin API designable later. |
 | D5 | **Single-owner state.** One tokio task (the server actor) owns the model. Pane I/O tasks, client connections and timers send it messages. The only shared state is each pane's terminal behind a mutex, with bounded lock holds (§4.8). | Removes a class of concurrency bugs; easy for parallel implementers to reason about. |
 | D6 | **Window size follows the latest active client**, where "latest" means last input, debounced ~500 ms so two attached clients do not make the window flap. Larger clients are letterboxed (window drawn at its size, the rest filled with a dim pattern). Smaller clients are cropped, with a viewport that follows the active pane's cursor. The emulator reflows the primary screen on resize; alt-screen apps just get SIGWINCH. | Every multiplexer picks a side. tmux users already know this behavior. |
-| D7 | **Advertise an honest `TERM`: `tmux-256color`.** Default `tmux-256color` plus `COLORTERM=truecolor`, falling back per host to `screen-256color` when the `tmux-256color` terminfo entry is missing, and to `xterm-256color` when both are (that last resort advertises more than `screen-256color` and exists only for such hosts). T0.4 checked whether every extra capability `tmux-256color`'s entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survived the M0 spike's render path; it did not, so M0 to M3 shipped `screen-256color`. T3.6 re-ran the check through grofe's real render path (pane, server, attach client, reconstructed outer terminal) on macOS and Linux after T2.2 and T3.3 landed, and every capability passed (`tests/acceptance/t3_6.rs`, docs/spike-notes.md "T3.6 re-run"), so the default is now `tmux-256color` under both names: under the `tmux` name `TERM` is what the owner sees in tmux today. The honesty rule stands: a capability that fails later is fixed, not advertised anyway, and the re-run passing is a gate for alias day (plan M3.6). | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. The owner runs `tmux-256color` with italics and undercurl in Neovim; a smaller `TERM` would be a visible difference under the alias. |
-| D8 | **No subprocess on the redraw path, ever.** The status line renders formats over options; rendering never forks or waits. Dynamic content arrives in options, set either by something external or by a **status source**: a command the server runs at most once per `status-interval` (or the source's own `interval`), off the redraw path, with one run in flight and a timeout after which it is killed; the last non-empty line of its output (CR or LF ends a line), as tmux 3.7b keeps it, is stored in an option. `#(cmd)` in a format is shorthand for an inline source keyed by the command: the format reads the cached value, empty until the first run returns, as in tmux. `run-shell` exists for key bindings and hooks. | Forks in the status line are the one real performance problem in tmux setups. canopy measured it: folding its status into one aggregator and removing 20 forks took a render from ~97 ms to ~67 ms (canopy 6ef854a). Banning commands outright would lose the owner's pet, network, battery and canopy-status segments, which the alias must keep. A cached source bounds the cost by the number of sources and their intervals, never by redraws, clients or windows, and a slow or hung command can only make its own segment stale. |
+| D7 | **Advertise an honest `TERM`: `tmux-256color`.** Default `tmux-256color` plus `COLORTERM=truecolor`, falling back per host to `screen-256color` when the `tmux-256color` terminfo entry is missing, and to `xterm-256color` when both are (that last resort advertises more than `screen-256color` and exists only for such hosts). T0.4 checked whether every extra capability `tmux-256color`'s entry adds over `screen-256color`'s (italics, strikethrough, hidden text, the `Smulx` extended underline styles, OSC 52 clipboard, focus reporting, cursor colour, title relay) survived the M0 spike's render path; it did not, so M0 to M3 shipped `screen-256color`. T3.6 re-ran the check through grofe's real render path (pane, server, attach client, reconstructed outer terminal) on macOS and Linux after T2.2 and T3.3 landed, and every capability passed (`tests/acceptance/t3_6.rs`, docs/archive/spike-notes.md "T3.6 re-run"), so the default is now `tmux-256color` under both names: under the `tmux` name `TERM` is what the owner sees in tmux today. The honesty rule stands: a capability that fails later is fixed, not advertised anyway, and the re-run passing is a gate for alias day (plan M3.6). | Whatever is advertised, apps will use. No custom terminfo entry: it breaks over ssh. The owner runs `tmux-256color` with italics and undercurl in Neovim; a smaller `TERM` would be a visible difference under the alias. |
+| D8 | **No subprocess on the redraw path, ever.** The status line renders formats over options; rendering never forks or waits. Dynamic content arrives in options, set either by something external or by a **status source**: a command the server runs at most once per `status-interval` (or the source's own `interval`), off the redraw path, with one run in flight and a timeout after which it is killed; the last non-empty line of its output (CR or LF ends a line), as tmux 3.7b keeps it, is stored in an option. `#(cmd)` in a format is shorthand for an inline source keyed by the command: the format reads the cached value, empty until the first run returns, as in tmux. `run-shell` exists for key bindings and hooks. | Forks in the status line are the one real performance problem in tmux setups. the session manager measured it: folding its status into one aggregator and removing 20 forks took a render from ~97 ms to ~67 ms (the session manager 6ef854a). Banning commands outright would lose the owner's pet, network, battery and private-status segments, which the alias must keep. A cached source bounds the cost by the number of sources and their intervals, never by redraws, clients or windows, and a slow or hung command can only make its own segment stale. |
 | D9 | **Build the plugin API last** (M6). Before that, the control protocol and events exist for tests and dogfooding, may change, and grow only when a test or feature needs them. | Needed events beat guessed events. |
-| D10 | **Generic primitives in core, agent semantics in a plugin.** Core provides pane identity, a resume command, pane options, events, persistence, and config introspection. The five agent states, adapters and rollups live in a first-party `agents` plugin (M7). **[Dropped with M7, owner ruling 2026-10-06]:** no first-party agents plugin is built; agent semantics stay in tmux plugins run unchanged through canopy's loader and in canopy's own adapters and strategies. | Keeps core general. The plugin API's first users are now the tmux plugins and the in-tree event-log plugin (plan M6). |
+| D10 | **Generic primitives in core, agent semantics in a plugin.** Core provides pane identity, a resume command, pane options, events, persistence, and config introspection. The five agent states, adapters and rollups live in a first-party `agents` plugin (M7). **[Dropped with M7, owner ruling 2026-10-06]:** no first-party agents plugin is built; agent semantics stay in tmux plugins run unchanged through the session manager's loader and in the session manager's own adapters and strategies. | Keeps core general. The plugin API's first users are now the tmux plugins and the in-tree event-log plugin (plan M6). |
 | D11 | **Ghostty and WezTerm are the first-class outer terminals.** grofe is tested and tuned against both: kitty keyboard, synchronized output, OSC 52 and kitty graphics placeholders (§4.9). Other terminals work with legacy key encoding and whatever features the capability probe (§4.4) finds; missing features degrade, never break. WezTerm speaks kitty keys only with `enable_kitty_keyboard = true` in the user's WezTerm config, and grofe's docs must say so. | Two modern terminals cover the owner's machines and most of the target audience. Naming them keeps the manual checks and the probe fixtures concrete. |
-| D12 | **grofe answers to `tmux`.** When `argv[0]`'s basename is `tmux` (a symlink or wrapper on PATH; a shell alias does not reach scripts), that CLI call behaves as tmux's CLI: `-V` prints `tmux <compat level>` (the tmux release the compat suite is recorded against, 3.7b today), and the aliases and prefix matching of §4.5's invocation row apply. **Identity is a server property:** fixed when the server starts, from the `argv[0]` of the CLI that started it, and overridable with the `compat-identity` server option (`auto`, the default, then `tmux` or `grofe`). A server with tmux identity gives panes `TERM_PROGRAM=tmux` and `TERM_PROGRAM_VERSION` set to the compat level, answers `#{version}` with the compat level (`#{grofe_version}` always gives grofe's own), and appends every verb, flag or format variable it does not know to `compat-miss.log` in its state directory, which the dogfood log reviews. Under both identities panes get `TMUX` in tmux's format (`<socket path>,<server pid>,<session id number>`) and `TMUX_PANE` (`%N`) alongside `GROFE` and `GROFE_PANE`. Error texts and exit statuses are tmux 3.7b's for tmux-dialect requests only; grofe-dialect requests keep grofe's own texts (T1.2's). Under tmux identity the built-in option defaults where grofe's differ (§5.3) become tmux 3.7b's (`base-index` and `pane-base-index` 0, `mouse` off, `escape-time` 10, `history-limit` 2000, `renumber-windows` off, and the rest of that list), and the default prefix table is tmux's stock one in place of grofe's defaults, so a script or a pair of hands sees what tmux would; a value the config sets still wins. Sockets stay in grofe's directory (§4.1), so a real tmux on the same machine never shares one. **The front end** (`src/compat/tmux/`, §4.5) handles exactly two sources of tmux dialect: a request whose hello carries `dialect: "tmux"` (set by a CLI invoked as `tmux`, §4.6), and text typed at the `:` command prompt of a server with tmux identity. Every other request is grofe dialect, including every `grofe` CLI call and control client; config files are always grofe-native; stored command strings keep the dialect they were stored with (§4.5). tmux's own `-C`/`-CC` control mode is not shipped in v1. A pure grofe user never meets the front end. | Scripts and tools (canopy-agent, vim-tmux-navigator, `fzf --tmux`, gh-dash, snacks.image) find the multiplexer through `tmux` on PATH and `$TMUX`/`$TMUX_PANE`, and use the socket in `$TMUX` with `-S`. Identity belongs to the server, not to each call, so a pane's environment never depends on which name a script happened to use; login autostart starts the server under the `tmux` name (§7.1). Setting `TMUX` under both identities means a tool behaves the same either way. Under both identities (owner ruling, 2026-11-07) the server puts a `tmux` link to its own binary first on the `PATH` of its panes, jobs and status sources, and of its plugins under tmux identity (`<state dir>/bin/<instance>/tmux`), leaving `show-environment` as it is, so a script or config `run-shell` that calls `tmux` reaches this server even before alias day. The cost: a real tmux run inside a grofe pane reads `$TMUX` and would talk to grofe's socket, so the fallback is run as `env -u TMUX <absolute path to tmux>` (§8, README). Defaults follow the identity, never a single call's `argv[0]`, so a server keeps one set for its whole life; tmux's defaults and stock keys under the `tmux` name mean switching changes nothing a tmux user relies on, and the ported config sets the owner's values either way. canopy's `%if` gate on tmux's version is moot, since its config is ported (D1). Under grofe identity `TERM_PROGRAM` stays the outer terminal's (§4.2). |
+| D12 | **grofe answers to `tmux`.** When `argv[0]`'s basename is `tmux` (a symlink or wrapper on PATH; a shell alias does not reach scripts), that CLI call behaves as tmux's CLI: `-V` prints `tmux <compat level>` (the tmux release the compat suite is recorded against, 3.7b today), and the aliases and prefix matching of §4.5's invocation row apply. **Identity is a server property:** fixed when the server starts, from the `argv[0]` of the CLI that started it, and overridable with the `compat-identity` server option (`auto`, the default, then `tmux` or `grofe`). A server with tmux identity gives panes `TERM_PROGRAM=tmux` and `TERM_PROGRAM_VERSION` set to the compat level, answers `#{version}` with the compat level (`#{grofe_version}` always gives grofe's own), and appends every verb, flag or format variable it does not know to `compat-miss.log` in its state directory, which the dogfood log reviews. Under both identities panes get `TMUX` in tmux's format (`<socket path>,<server pid>,<session id number>`) and `TMUX_PANE` (`%N`) alongside `GROFE` and `GROFE_PANE`. Error texts and exit statuses are tmux 3.7b's for tmux-dialect requests only; grofe-dialect requests keep grofe's own texts (T1.2's). Under tmux identity the built-in option defaults where grofe's differ (§5.3) become tmux 3.7b's (`base-index` and `pane-base-index` 0, `mouse` off, `escape-time` 10, `history-limit` 2000, `renumber-windows` off, and the rest of that list), and the default prefix table is tmux's stock one in place of grofe's defaults, so a script or a pair of hands sees what tmux would; a value the config sets still wins. Sockets stay in grofe's directory (§4.1), so a real tmux on the same machine never shares one. **The front end** (`src/compat/tmux/`, §4.5) handles exactly two sources of tmux dialect: a request whose hello carries `dialect: "tmux"` (set by a CLI invoked as `tmux`, §4.6), and text typed at the `:` command prompt of a server with tmux identity. Every other request is grofe dialect, including every `grofe` CLI call and control client; config files are always grofe-native; stored command strings keep the dialect they were stored with (§4.5). tmux's own `-C`/`-CC` control mode is a client-side bridge (`docs/specs/2026-11-15-control-mode.md`). A pure grofe user never meets the front end. | Scripts and tools (private-agent, vim-tmux-navigator, `fzf --tmux`, gh-dash, snacks.image) find the multiplexer through `tmux` on PATH and `$TMUX`/`$TMUX_PANE`, and use the socket in `$TMUX` with `-S`. Identity belongs to the server, not to each call, so a pane's environment never depends on which name a script happened to use; login autostart starts the server under the `tmux` name (§7.1). Setting `TMUX` under both identities means a tool behaves the same either way. Under both identities (owner ruling, 2026-11-07) the server puts a `tmux` link to its own binary first on the `PATH` of its panes, jobs and status sources, and of its plugins under tmux identity (`<state dir>/bin/<instance>/tmux`), leaving `show-environment` as it is, so a script or config `run-shell` that calls `tmux` reaches this server even before alias day. The cost: a real tmux run inside a grofe pane reads `$TMUX` and would talk to grofe's socket, so the fallback is run as `env -u TMUX <absolute path to tmux>` (§8, README). Defaults follow the identity, never a single call's `argv[0]`, so a server keeps one set for its whole life; tmux's defaults and stock keys under the `tmux` name mean switching changes nothing a tmux user relies on, and the ported config sets the owner's values either way. the session manager's `%if` gate on tmux's version is moot, since its config is ported (D1). Under grofe identity `TERM_PROGRAM` stays the outer terminal's (§4.2). |
 
-**Publishability rule (inherited from athome and canopy):** no identities,
+**Publishability rule (inherited from the owner's dotfiles and the session manager):** no identities,
 hostnames, or machine specifics in shipped files.
 
 ---
@@ -78,7 +78,7 @@ hostnames, or machine specifics in shipped files.
    and a lighter plugin story than WASM. Zellij is still worth reading; the files
    are listed in §8.
 2. **Is Rust the constraint?** No, but it is the right tool. A config compiler
-   targeting tmux's command stream (canopy's direction) fixes config semantics but
+   targeting tmux's command stream (the session manager's direction) fixes config semantics but
    cannot deliver native pane identity or persistence without continuum's
    save-file format. Rust gives a single static binary and the emulation libraries
    that make the project credible.
@@ -122,7 +122,7 @@ refuses connection (`ECONNREFUSED`, meaning stale) it removes it and re-execs
 itself as `grofe __server -S <sock>`, detached (`setsid`, stdio to a log under
 `$XDG_STATE_HOME/grofe/`). The daemon closes every inherited fd above 2, not
 only 0/1/2: a leaked pipe keeps the caller's reader waiting for an EOF that
-never comes, which made canopy's test runs hang instead of fail (canopy
+never comes, which made the session manager's test runs hang instead of fail (the session manager
 8070a22, 2907e89). The server builds its runtime only after that, binds,
 and signals readiness over an inherited pipe; the CLI then releases the lock and
 connects. Two concurrent CLIs therefore start exactly one server. State paths
@@ -193,7 +193,7 @@ adds a sibling (three `split -h` give three columns). Supports zoom and resize b
 cells or percent. Borders are one cell wide, shared between neighbours, active
 pane border highlighted. Layout presets `select-layout main-vertical`,
 `even-horizontal` and `even-vertical`: dogfooding already asks for
-them (canopy's cockpit binding uses `main-vertical`). Other presets wait for a
+them (the session manager's cockpit binding uses `main-vertical`). Other presets wait for a
 reason. tmux layout strings (the checksummed form `#{window_layout}` prints)
 are read by `select-layout` and written by `#{window_layout}` byte for byte as
 tmux does: the owner's scripts pass them.
@@ -265,7 +265,7 @@ session name, then unique prefix; empty or omitted means the client's current
 bare word with no `:` is read as tmux's `cmd-find.c` reads it, by the kind of
 target the verb wants: as a pane, a number is a pane index in the current
 window, then a window of the current session, then a session; as a window, a
-window, then a session; as a session, a session only (TC.13: canopy's
+window, then a session; as a session, a session only (TC.13: the session manager's
 `select-pane -t 1`).
 A leading `=` means exact, natively and through the tmux front end alike,
 as in tmux: `=name:window` and `=name:window.pane` name exactly session
@@ -355,7 +355,7 @@ lands in the milestone shown.
 | Windows and panes | `new-window -n <name> [cmd]`; `select-window -t s:i`; `join-pane -d -h -v -s -t`; `swap-pane -U -D -s -t`; `swap-window -s -t`; `link-window -a -b -d -k -s -t` and `unlink-window -k -t` (a window in several sessions, B1e); `move-window -a -b -d -k -r`; `break-pane -d -n`; `resize-pane -x -y`; `resize-window -x -y -A -a`; `respawn-pane -k -t <pane> [cmd]`; `setw -t @N automatic-rename on`; `select-layout` with layout strings (§4.3) and `-E` (spread evenly); `select-pane -m -M` (the marked pane: the `~` and `{marked}` targets, `-s` defaulting to it, `#{pane_marked}`, `#{pane_marked_set}`, the `M` window flag, a reversed border); `clock-mode` (`clock-mode-colour`, `clock-mode-style`); `last-pane`; `rotate-window -U -D`; `move-window -t`; `next-window -a`, `previous-window -a` (to a window with an alert); `find-window -Z` | pass-through to native verbs; layout strings through a codec onto grofe layouts | M3.6 |
 | Listing and inspection | `list-sessions`, `list-windows` (`-a`, `-t`), `list-panes` (`-a`, `-t`), each with `-F` and `-f <filter>`; `display-message -p [-t] <fmt>`, and without `-p` as a status-line message for `display-time`; `show-options` with `-g`, `-v`, `-q` in any combination (`-gqv`) and `-t <session>`; `capture-pane -e -p -J -S -E` | pass-through; default output formats and `show` output rendered exactly | M3.6 (`-F`: M1; `capture-pane -e`: M2) |
 | Options by tmux name | `set` and `show` accept tmux option names through one name table shared with `import-tmux` (`status-left` is `status.left`); `-a` append, `-F` expand, `-u` unset, `-q` quiet, `-o` only if unset; `set -p -t $TMUX_PANE @opt v`. Names in the table that grofe has no use for (`terminal-features`, `extended-keys-format`, `default-terminal`, which the probe and D7 decide) are accepted, stored and shown as "no effect" by `show-config --explain`; a name outside the table is an error, as in M1. Array options (`status-format[N]`, `command-alias[N]`) and append with `-ga`/`-as` extend the option store. The owner's options that could be in doubt: `main-pane-width 50%` has an effect (`main-vertical` uses it); `allow-rename off` is grofe's behaviour already (OSC titles never rename, above), so `on` has no effect; `aggressive-resize` has no effect, since D6 already sizes each window to its latest active client; `status-keys emacs` matches grofe's prompt keys, and `vi` has no effect | name renames; scope flag merges; arrays onto grofe list options | M3.6 |
-| Command sequences | `\;` chains on the CLI and in bindings (canopy-agent's `set ... \; set ...` on every hook, the cockpit binding's five-command sequence) | pass-through | M3 (T3.5); goldens M3.6 |
+| Command sequences | `\;` chains on the CLI and in bindings (private-agent's `set ... \; set ...` on every hook, the cockpit binding's five-command sequence) | pass-through | M3 (T3.5); goldens M3.6 |
 | Bindings | `if-shell`, both the `-F` format form and the shell form (run off the actor; `-b` does not wait); `confirm-before -p`; `command-prompt -I -p` for renames; the `command-alias` option; `bind -N` notes as descriptions; custom key tables (`-T <name>`, entered with `switch-client -T`); `-r` repeat; bindable mouse keys (`MouseDown1Pane`, `MouseDown1Status`, `MouseDown3Pane`, `MouseDrag1Border`, `MouseDragEnd1Pane`, `WheelUpPane`, `WheelDownPane`, `DoubleClick1Pane`, `TripleClick1Pane`) acting on the pane or status range under the pointer, and a `display-menu` run from a mouse key opens at the pointer. **grofe's built-in mouse model** (T3.2, TC.10: focus, wheel, border drag, selection) replaces tmux's stock mouse bindings, so their argv forms (`-t =`, `send -M`, `resize-pane -M`, `display-menu -x M -y M`, `-x W -y S`) are not supported (M5 maps `copy-mode -M -e -H` onto native copy mode, TM.0 decision 3); TP.9 lists each stock mouse binding against its built-in replacement | `if-shell` to grofe's conditional; `command-alias` to grofe aliases; mouse argv forms fail as semantic | M3.6 |
 | tmux default bindings | The stock prefix bindings the owner's server has live: `;` `last-pane`, `C-o`/`M-o` `rotate-window`, `q` `display-panes`, `.` `move-window` prompt, `f` `find-window` prompt, `C-z` `suspend-client`, `D` `choose-client -Z`, `~` `show-messages`, `E` `select-layout -E`, `M-n`/`M-p` `next-window -a`/`previous-window -a`, `/` `command-prompt -k` then `list-keys -1N`, `'` `command-prompt -T window-target`, plus `d w z [ ] x & , $ ! { } : = i n p` from earlier milestones and this table. `m` (`select-pane -m`, marking) is out of scope, below | none: grofe's native default key table | M3.6 (`[`, `]`, `=`: M5) |
 | Overlays | `display-popup` with `-E -w -h -x -y -d -b <border> -T <title> -c <client> [cmd]`, what the installed fzf's `--tmux` sends (`list-commands new-pane` as its probe, `new-pane -P -F -t -c -x -y -X -Y` for a floating pane, `wait-for` and `wait-for -S`), and a nested `tmux attach-session -t <other>` inside it (§4.6); `display-menu -T -x -y` (a number, a format naming `popup_*`, or the letters `C P R M W S`) whose items may open further menus; `display-panes` (pick a pane by its number); `command-prompt -k` (read one key) and `-T <type>` (accepted, no completion); `list-keys -1N`; `choose-tree -Z -w` | pass-through; border style and title cosmetic | M3.6 |
@@ -371,7 +371,7 @@ lands in the milestone shown.
 |---|---|
 | `{mouse}` and `{last}` target tokens, `!`, `+`/`-` offsets, fnmatch target patterns | Not in the owner's scripts. Mouse bindings act on the pane under the pointer without a token; `=name` covers exact matching |
 | `%if`, `%hidden` and `NAME=value` lines in a sourced tmux file; parsing `list-keys` output in tmux's format | Config is ported once (D1); a plugin's own tmux file is read (§5.1), but none the owner runs uses them. Only sensible and TPM parse `list-keys`: TPM does not run on grofe, and sensible runs unchanged against the tmux dialect's `list-keys` (plan TP.4) |
-| tmux's `-C` and `-CC` control mode | Not shipped in v1; nothing the owner runs uses it; possible M8. grofe's own control mode (§4.6) is always grofe dialect |
+| tmux's `-C` and `-CC` control mode, beyond the first slice | Shipped as a client-side bridge in WS14 (`docs/specs/2026-11-15-control-mode.md`); its section 7 lists what is left. grofe's own control mode (§4.6) is always grofe dialect |
 | Mouse argv forms: bare `=` target, `send -M`, `resize-pane -M` | Only tmux's stock mouse bindings use them; grofe's built-in mouse model replaces those bindings (bindings row) |
 | `pipe-pane`, `lock-server`, `customize-mode`, `server-access` | Nothing the owner runs sends them |
 | Sockets under tmux's own directory, or scripts that build `/tmp/tmux-$UID/...` by hand | grofe keeps its socket directory (§4.1, D12); the owner's scripts use `$TMUX` or `#{socket_path}` |
@@ -501,8 +501,8 @@ hook's own commands.
   syscalls: `tcgetpgrp`, then `/proc` on Linux or `libproc` on macOS). The
   sample includes the foreground process's full argv, exposed as
   `pane_current_argv`. Nothing downstream trusts the process name: a Claude
-  Code pane reported its comm as `2.1.245` (canopy c15f63e), and hand-started
-  agent panes are identified from argv (canopy 5aaac53). The cwd,
+  Code pane reported its comm as `2.1.245` (the session manager c15f63e), and hand-started
+  agent panes are identified from argv (the session manager 5aaac53). The cwd,
   `#{pane_current_path}`, comes only from the foreground process, as tmux
   3.7b's does (`osdep_get_cwd`): it is read when a format asks for it, and
   the sample is the fallback. What a pane reports with OSC 7 is never its
@@ -604,9 +604,9 @@ Formats over options only (D8); the tmux-compatible breadth is listed in
 - `window-status-format` and `window-status-current-format` render the window
   list.
 - `#{}` expands inside `#[...]` style directives, so themes are data:
-  `#[fg=#{@theme_blue}]` (canopy 1aa91b4).
+  `#[fg=#{@theme_blue}]` (the session manager 1aa91b4).
 - strftime sequences (`%H:%M`) expand, so a clock needs no subprocess.
-- Battery, network, pet and canopy-status come from status sources (D8). A source is
+- Battery, network, pet and private-status come from status sources (D8). A source is
   declared in config (`[status.sources.<name>]` with `cmd`, `interval` and
   `timeout`, its value in `@<name>`) or inline as `#(cmd)` in a format (its
   value in `@src-<hash of cmd>`). A declared source shows in `show-config
@@ -616,13 +616,13 @@ Formats over options only (D8); the tmux-compatible breadth is listed in
   Sources run with the server
   environment (§4.2), each spawn under the pane spawn lock (§4.8), and a
   changed value triggers a repaint.
-- Multi-row status (`status 2` with `status-format[N]`; canopy uses two rows at
+- Multi-row status (`status 2` with `status-format[N]`; the session manager uses two rows at
   the top) and `status-position top`.
 
 ### 4.11 Copy mode and buffers
 
 The owner's `copy-mode-vi` table is the scope: 95 bindings, tmux 3.7b's 88
-stock rows plus 7 that canopy's navigator and tmux-yank add (they also
+stock rows plus 7 that the session manager's navigator and tmux-yank add (they also
 replace 3 stock rows). A binding outside it needs a dogfooding reason. The
 scope doc (`docs/copy-mode.md`, from TM.0) lists each binding with the test
 that pins it against a golden recorded from tmux 3.7b.
@@ -673,11 +673,14 @@ Load order, later wins:
 4. `~/.config/grofe/user.toml`, the user's final word
 5. runtime `set-option` commands
 
-Tools such as canopy write only `conf.d/NN-*.toml`; `config.toml` and
+Tools such as the session manager write only `conf.d/NN-*.toml`; `config.toml` and
 `user.toml` belong to the user and no tool writes them. `user.toml` loads after
 every generated fragment, so the user's own settings always win over a tool's.
-There is no scripting layer: the Lua `init.lua` layer was dropped with the
-Lua runtime (owner ruling 2026-09-29). Plugins (§7.4) are not a layer
+Scripting is not a layer either. The owner ruling of 2026-11-14 reverses the
+2026-09-29 drop of Lua: `<config>/init.luau` (or `init.lua`) runs after the
+TOML layers and after every installed pack, and changes settings only by
+running commands, which land in layer 5
+(docs/specs/2026-11-14-lua-plugins.md). Plugins (§7.4) are not a layer
 either. A plugin is declared in layers 1 to 4 like any setting, and changes
 settings only by running commands, which land in layer 5.
 
@@ -703,7 +706,7 @@ deferred until after dogfooding.
 file whose requirement the running grofe does not meet is skipped with a
 warning, not a fatal error, so a fragment generated for a newer grofe cannot
 kill an older one. Strict unknown keys without this escape hatch are how
-canopy's `extended-keys-format` line broke every tmux 3.4 install (canopy
+the session manager's `extended-keys-format` line broke every tmux 3.4 install (the session manager
 b303aae). Unknown keys in a file without a `requires` header stay errors.
 
 ```toml
@@ -750,14 +753,21 @@ time. Validation rejects a key bound twice in one table and a `name` used twice.
 `restore-on-start = true` (§6), `mode-keys = "vi"` (M5), new panes and windows
 inherit the active pane's cwd, and the status line never forks on redraw (D8).
 
-Two deliberate differences from canopy: canopy sets `escape-time 0`, grofe keeps
-25 ms so a lone ESC survives ssh; canopy sets `history-limit 100000`, grofe
+A status-line message is a pill centred between the status line's left and
+right parts, coloured and marked by its level (info, warning, error), and the
+command prompt is a pill too (`message.pill = true`, grofe's own option, D12:
+`false`, tmux's full-width bar, under tmux identity). `prompt-position`
+(`status`, the default under both identities, or `centre`) opens the prompt as
+a rounded box a third down the window instead.
+
+Two deliberate differences from the session manager: the session manager sets `escape-time 0`, grofe keeps
+25 ms so a lone ESC survives ssh; the session manager sets `history-limit 100000`, grofe
 keeps 50000 as a default the user can raise.
 
 ### 5.4 Provenance and introspection
 
 Every resolved setting records the layer and file that set it (plus the line
-where the TOML parser gives it cheaply). This replaces canopy's `sleep 600`
+where the TOML parser gives it cheaply). This replaces the session manager's `sleep 600`
 throwaway-server workaround with a command:
 
 ```
@@ -767,22 +777,22 @@ status.right = "#{host_short}"
 ```
 
 `grofe show-config --file <path>` resolves a config **without a running server**,
-for tests and for tools like canopy. It resolves the chain this machine actually
+for tests and for tools like private. It resolves the chain this machine actually
 loads (`config.toml`, `conf.d`, `user.toml`), not only the named file, and it
-must never hang: canopy's equivalent probe deadlocked for 9m20s in CI (canopy
+must never hang: the session manager's equivalent probe deadlocked for 9m20s in CI (the session manager
 2907e89). The full override chain in `--explain` output is deferred until after
 dogfooding.
 
 **Errors.** Every config error carries its file and line. `reload` validates
 every layer first, then applies all of it or none of it, and reports all errors
 at once rather than stopping at the first. Exit statuses are honest: in tmux a
-globbed `source-file` and a `run-shell` reset the status, so canopy's checks
-passed on broken config (canopy 1aa91b4, 94435f6).
+globbed `source-file` and a `run-shell` reset the status, so the session manager's checks
+passed on broken config (the session manager 1aa91b4, 94435f6).
 
 **Key provenance** covers every binding, including runtime `bind-key` and
 plugin binds, and `list-keys` marks bindings that did not come from the config
-table, so a doctor can flag them. tmux-resurrect silently took over canopy's
-`prefix C-s` this way (canopy 94435f6).
+table, so a doctor can flag them. tmux-resurrect silently took over the session manager's
+`prefix C-s` this way (the session manager 94435f6).
 
 ### 5.5 Importing a tmux.conf
 
@@ -843,7 +853,7 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
   style) are set with `--persist`. State-like options (`@agent_state`) never
   are: after a restore an agent plugin should show a "restored" state until
   its adapter reports, because a stale `working` is a lie. The mark is sticky per
-  option: a later `set` without `--persist` keeps it (canopy's report path sets
+  option: a later `set` without `--persist` keeps it (the session manager's report path sets
   values without the flag), and only `set --no-persist` or unsetting the
   option clears it.
 - **Restore.** `grofe start-server --restore`, or `restore-on-start = true` in
@@ -863,8 +873,8 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
   started with.
 - **Resume.** `pane-set-resume -t <pane> -- <argv...>`, and `-u` clears it. The
   agents plugin was to call it for an adapter whenever the adapter reports a
-  new session id (§7); with M7 dropped (owner ruling 2026-10-06), canopy's
-  adapters or a tmux plugin call it instead, which covers canopy's tier 1 and
+  new session id (§7); with M7 dropped (owner ruling 2026-10-06), the session manager's
+  adapters or a tmux plugin call it instead, which covers the session manager's tier 1 and
   tier 2 agents without a save-time rewrite hook. A `before-save` hook is added only if dogfooding finds
   a case this cannot handle. Neovim is the second resume client
   (`pane-set-resume nvim -S <session>`), so the mechanism is not agent-shaped. A
@@ -872,7 +882,7 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
   `respawn-pane <cmd>`. `#{pane_resume}` shows it.
   - `argv[0]` is resolved to an absolute path, never against the server's
     `PATH`, so a server started at boot with a minimal `PATH` can still run it
-    (canopy ef20852). A caller with pane context (a CLI inside a pane) is
+    (the session manager ef20852). A caller with pane context (a CLI inside a pane) is
     resolved against its own `PATH`, which every hello carries (§4.6). A caller
     without one, such as a supervised plugin, whose environment is the server's,
     is resolved against the target pane: its foreground process's own `PATH`
@@ -889,7 +899,7 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
 - **Stagger.** Restoring many panes spreads their spawns with a deterministic
   per-pane delay, the FNV-1a hash of the `uid` modulo `restore-stagger-ms`
   (default 1000; 0 means exactly off). Only panes with a `resume` are staggered,
-  and the delay is applied by the server, never embedded in the argv (canopy
+  and the delay is applied by the server, never embedded in the argv (the session manager
   19fab4e, d0c7bea).
 - **`grofe reboot-check`** reads the snapshot on disk and compares it with the
   live model; it never reports in-memory intent. A pane expects a resume when it
@@ -903,24 +913,27 @@ writes grofe TOML to stdout or to `<path>`. It never edits the tmux.conf.
   server runs), 1 some will not, 2 persistence is misconfigured: no
   `restore-on-start` and no autostart unit (a systemd user unit or launchd agent
   whose command runs `start-server --restore`), or a state directory that is not
-  writable (canopy 1bc0255, ab37bf0).
+  writable (the session manager 1bc0255, ab37bf0).
 - **Out of scope:** scrollback persistence and saving environments. Login
-  autostart belongs to canopy on grofe (§7.1).
+  autostart belongs to the session manager on grofe (§7.1).
 
 ---
 
-## 7. Plugins (M6), agents (dropped), canopy on grofe
+## 7. Plugins (M6), agents (dropped), the session manager on grofe
 
 **Plugins run out of process.** A plugin is any program, in any language,
 that the server starts from a `[plugins.<name>]` table (§7.4) and
 supervises. It speaks control mode (§4.6) over the socket `$GROFE` names,
 or over stdio through `grofe control`, which bridges JSON lines in and out
 so a plugin needs no socket code. It acts with ordinary commands and learns
-what happened through `subscribe` (§7.2). There is no in-process scripting:
-the Lua runtime was dropped (owner ruling 2026-09-29), and with it
-`init.lua`, Lua key bindings and format functions. A key binding runs a
-command or `run-shell`, and dynamic status content comes from options and
-status sources (D8). The event catalog (§7.2) and the protocol (§7.3) are
+what happened through `subscribe` (§7.2). In-process scripting is Luau
+(owner ruling 2026-11-14, reversing the 2026-09-29 drop): `init.luau`, key
+bindings to Luau functions, event and timer callbacks, each run on the
+actor inside a 50 ms budget so no script can freeze the server
+(docs/specs/2026-11-14-lua-plugins.md). There are still no format
+functions: dynamic status content comes from options and status sources
+(D8), which a Luau timer can set. `grofe pack` installs Luau and tmux
+plugins from git with a lockfile. The event catalog (§7.2) and the protocol (§7.3) are
 frozen as v1 in M6 and change only by addition after that.
 
 **An event enters the catalog only with a named consumer:** a tmux hook name
@@ -928,9 +941,9 @@ row (§4.5) that a plugin the owner runs binds, the in-tree event-log plugin
 (plan T6.6), or a test. The catalog below was derived on 2026-10-27 (plan
 T6.0) from TC.5's event list (`EVENTS` in `src/server/hooks.rs`), the
 existing `subscribe` stream (`src/event.rs`, `src/server/events.rs`), the
-hooks the owner's plugins bind, and `docs/dogfood.md`. Of those plugins,
+hooks the owner's plugins bind, and `docs/archive/dogfood.md`. Of those plugins,
 opensessions binds twelve of TC.5's tmux hook names (every one but the three
-alert hooks), and canopy's copy of tmux-claude-session-manager binds
+alert hooks), and the session manager's copy of tmux-claude-session-manager binds
 `alert-bell`; the rest bind none. Neither the dogfood log nor the
 `compat-miss.log` reviews named an event or hook grofe lacks; one that does
 later enters by §7.3's additive rule. The owner approved this rewrite
@@ -940,15 +953,15 @@ later enters by §7.3's additive rule. The owner approved this rewrite
 *[dropped]* below (the agents plugin, resumes from it, the adapter contract)
 are kept as a record and are not built. Agent awareness (state rollups,
 attention, resume, adopt) is left to existing tmux plugins run unchanged
-through canopy's loader, such as tmux-claude-session-manager and
-opensessions, and to canopy's own adapters and strategies. A grofe gap such a
+through the session manager's loader, such as tmux-claude-session-manager and
+opensessions, and to the session manager's own adapters and strategies. A grofe gap such a
 plugin finds shows up in `compat-miss.log` and is fixed as a compat bug.
 
 - *[dropped]* **agents plugin:** a supervised plugin that ships in the grofe binary
   (`grofe __agents`). The five normalized states (`idle`, `working`, `blocked`,
   `completed`, `exited`) live in the pane option `<prefix>state`. The prefix is
-  `@agent_` by default, and canopy's fragment sets `@canopy_agent_`, so canopy's
-  report path (`tmux set -p @canopy_agent_state ...`, answered by grofe, D12)
+  `@agent_` by default, and the session manager's fragment sets `@private_agent_`, so the session manager's
+  report path (`tmux set -p @private_agent_state ...`, answered by grofe, D12)
   stays the whole write path for adapters. The plugin validates states and
   writes rollups as window and session options, on transition only, holding the
   most urgent state in this order: `blocked`, `completed` while unseen,
@@ -960,23 +973,23 @@ plugin finds shows up in `compat-miss.log` and is fixed as a compat bug.
   report.
 - *[dropped]* **Resumes come from the plugin.** It calls `pane-set-resume` for the adapter
   whenever a pane's reported session id changes, not only when its state does:
-  `/clear` gives a new id without one (canopy c15f63e). For panes that never
+  `/clear` gives a new id without one (the session manager c15f63e). For panes that never
   report, it reads the id off `pane_current_argv` through the adapter's
-  templates, skipping interpreters, options and `VAR=value` (canopy 5aaac53);
+  templates, skipping interpreters, options and `VAR=value` (the session manager 5aaac53);
   it never trusts the command name. A pane running an agent with no id gets an
   expectation (§6), which `reboot-check` reports. It sets `<prefix>source` and
   `<prefix>session` with `--persist`, never `<prefix>state`. The `exited` state
   stays visible: a restored agent pane respawns to a shell (§6) and keeps its
   options.
-- *[dropped]* **Adapter contract [was planned for M7].** canopy's `docs/adapters/contract.md` is
+- *[dropped]* **Adapter contract [was planned for M7].** the session manager's adapters contract document is
   the authority; grofe reads the same manifest files, found in the `[agents]
-  adapter-dirs` list (canopy's fragment names its config directory, then its
+  adapter-dirs` list (the session manager's fragment names its config directory, then its
   store; the first wins). All six keys are required, each validated on every
   read:
 
   | Key | Meaning |
   |---|---|
-  | `id` | equals the directory name; charset `[A-Za-z0-9._:-]`, validated on entry and again on use (canopy 94435f6) |
+  | `id` | equals the directory name; charset `[A-Za-z0-9._:-]`, validated on entry and again on use (the session manager 94435f6) |
   | `command` | the agent's program name, non-empty, matched against the pane's argv, never its comm |
   | `resume_template` | argv that resumes a conversation; contains `{id}` |
   | `launch_template` | argv that starts a new conversation at a chosen id; must contain `{id}` when `can_pin_at_launch` is `yes`; may be empty (and is not checked) when `no` |
@@ -985,46 +998,46 @@ plugin finds shows up in `compat-miss.log` and is fixed as a compat bug.
 
   grofe turns a template into an argv by substituting a validated id and
   splitting on spaces; a template with shell quoting or metacharacters is
-  rejected. Adapters are tiered 1/2/3 as in canopy, and a tier 3 agent gets no
-  adapter. The four are canopy's `claude-code`, `opencode`, `pi` and `codex`.
+  rejected. Adapters are tiered 1/2/3 as in the session manager, and a tier 3 agent gets no
+  adapter. The four are the session manager's `claude-code`, `opencode`, `pi` and `codex`.
   Hooks always exit 0 and stay cheap: a Claude Code `PreToolUse` hook that
   exits 2 blocks the tool.
 
-### 7.1 canopy on grofe
+### 7.1 the session manager on grofe
 
-canopy's scripts keep calling `tmux`, answered by grofe (D12), so they need no
-port, with one exception: `canopy validate` starts a throwaway tmux server with
+the session manager's scripts keep calling `tmux`, answered by grofe (D12), so they need no
+port, with one exception: `the session manager validate` starts a throwaway tmux server with
 `-f /dev/null ... source-file <tmux.conf>`, which is out of scope (§4.5) and is
-replaced by `show-config --file` in the port (plan TP.1). canopy's config moves
+replaced by `show-config --file` in the port (plan TP.1). the session manager's config moves
 once to a grofe backend in plan M3.6, before alias day; the owner's remaining
-TPM plugins run unchanged through canopy's loader from M3.7. The agents
+TPM plugins run unchanged through the session manager's loader from M3.7. The agents
 plugin and adapter contract were M7's, which is dropped (owner ruling
-2026-10-06), so the rows below marked *[dropped]* stay with canopy and its
+2026-10-06), so the rows below marked *[dropped]* stay with the session manager and its
 plugins rather than grofe.
 
-| canopy piece | On grofe |
+| the session manager piece | On grofe |
 |---|---|
-| conf.d layers | canopy writes only `~/.config/grofe/conf.d/NN-canopy-*.toml`. The restore-point promise becomes trivial: canopy removes its own files |
+| conf.d layers | the session manager writes only `~/.config/grofe/conf.d/NN-private-*.toml`. The restore-point promise becomes trivial: the session manager removes its own files |
 | user.conf last | `~/.config/grofe/user.toml`, the final file layer (§5.1); `config.toml` is also the user's |
-| caps | grofe has no `%if`; canopy generates capability-gated conf.d fragments itself and marks them with `requires` (§5.2) |
+| caps | grofe has no `%if`; the session manager generates capability-gated conf.d fragments itself and marks them with `requires` (§5.2) |
 | themes | generated conf.d TOML using `status.style` and `pane-border` options; needs `#{}` inside `#[...]` (§4.10) |
-| status aggregator | clock native via strftime (§4.10); canopy-status, pet, network and battery as named status sources (D8, M3.6), two rows at the top |
+| status aggregator | clock native via strftime (§4.10); private-status, pet, network and battery as named status sources (D8, M3.6), two rows at the top |
 | keys.tsv | generated TOML bindings with `name`, `desc`, `group`, `repeat`, `send-prefix`, `;` sequences and `select-layout main-vertical` |
 | validate (throwaway tmux server) | `grofe show-config --file`, no server (§5.4) |
-| doctor, load-bearing settings | `show-config --explain` checks. The load-bearing checks become: `restore-on-start` or an autostart unit present, state dir writable, snapshot fresh. canopy's tmux ones (continuum hooks in `status-right`) no longer exist |
-| resurrect, continuum, save strategy | run unchanged as plugins through canopy's loader from alias day (owner ruling 2026-09-30); M4 imports resurrect's newest save into grofe's state, then retires both |
-| `reboot-check` | core (M4) gives each pane's verdict from the snapshot on disk; an expectation set with `pane-set-resume --expect` adds the reason ("no session id reported"); `canopy reboot-check` on grofe prints `grofe reboot-check` and exits with its status |
-| `adopt` | *[dropped]* `grofe agents adopt` (M7), which `canopy adopt` calls on grofe. No respawn: adopt only calls `pane-set-resume` on the live pane, so the unsent-input guard is unnecessary for adopt itself. Keeps dry-run by default and idempotence, never invents an id, and treats a pane already carrying its resume as adopted |
-| rollups, attention, render path | *[dropped]* agents plugin options, rendered by canopy's `40-agents` fragment with formats only, no `#()` (canopy §6.3) |
+| doctor, load-bearing settings | `show-config --explain` checks. The load-bearing checks become: `restore-on-start` or an autostart unit present, state dir writable, snapshot fresh. the session manager's tmux ones (continuum hooks in `status-right`) no longer exist |
+| resurrect, continuum, save strategy | run unchanged as plugins through the session manager's loader from alias day (owner ruling 2026-09-30); M4 imports resurrect's newest save into grofe's state, then retires both |
+| `reboot-check` | core (M4) gives each pane's verdict from the snapshot on disk; an expectation set with `pane-set-resume --expect` adds the reason ("no session id reported"); `the session manager reboot-check` on grofe prints `grofe reboot-check` and exits with its status |
+| `adopt` | *[dropped]* `grofe agents adopt` (M7), which `the session manager adopt` calls on grofe. No respawn: adopt only calls `pane-set-resume` on the live pane, so the unsent-input guard is unnecessary for adopt itself. Keeps dry-run by default and idempotence, never invents an id, and treats a pane already carrying its resume as adopted |
+| rollups, attention, render path | *[dropped]* agents plugin options, rendered by the session manager's `40-agents` fragment with formats only, no `#()` (the session manager §6.3) |
 | inline images (`allow-passthrough on`) | an agent's kitty graphics in placeholder mode pass through natively (§4.9), with no passthrough option; direct placement, animation and sixel pass with `graphics on` (G3), and without it those programs fall back to whatever they draw without graphics |
 | palette, which-key, key search | `display-popup -E` + fzf and `display-menu` (M3.6), backed by `list-keys` descriptions |
-| login autostart | canopy ships the launchd/systemd unit running `tmux start-server --restore` through the `tmux` symlink, so the server starts with tmux identity (D12); the unit gives panes a real `PATH`, or relies on `argv[0]` resolution (§6); `reboot-check` finds the unit (§6) |
+| login autostart | the session manager ships the launchd/systemd unit running `tmux start-server --restore` through the `tmux` symlink, so the server starts with tmux identity (D12); the unit gives panes a real `PATH`, or relies on `argv[0]` resolution (§6); `reboot-check` finds the unit (§6) |
 
-**Consciously dropped from canopy:** vendoring resurrect and continuum, and the
-relative-path strategy hack (canopy 495df6b); the `@resurrect-processes` regex
-(canopy d0c7bea); the stagger wrapper inside the command string; "status-right
+**Consciously dropped from the session manager:** vendoring resurrect and continuum, and the
+relative-path strategy hack (the session manager 495df6b); the `@resurrect-processes` regex
+(the session manager d0c7bea); the stagger wrapper inside the command string; "status-right
 must load before continuum"; continuum's other-server arithmetic; `%if`
-duplicate-append guards on reload (canopy 6ef854a); throwaway-server validation
+duplicate-append guards on reload (the session manager 6ef854a); throwaway-server validation
 with `sleep 600` and `env -i`; the M-s/M-r key relocation; the five-minute save
 interval (grofe snapshots on change). **Kept on purpose:** reading the session
 id off a process argv for hand-started panes.
@@ -1054,7 +1067,7 @@ payloads small and stable under §7.3.
 | `session-closed` | `session`, `name` | a session was removed (killed, or its last pane went) | `hooks::run_pending`, draining `closed_sessions` from `server/model.rs` | opensessions' `session-closed` hook |
 | `client-session-changed` | `client`, `session` | a client attached, or `switch-client` or `attach-session` ran for it, even to the session it already showed | `hooks::client_session_changed`, called from `server/clients.rs` | opensessions' `client-session-changed` hook |
 | `client-resized` | `client`, `session`, `cols`, `rows` | a client attached, or its terminal reported a size, even an unchanged one | `hooks::client_resized`, called from `server/clients.rs` | opensessions' `client-resized` hook |
-| `alert-bell` | `window`, `session`, `pane` (the window's active pane) | a bell in a monitored window, when `bell-action` applies | `hooks::window_alert`, called from `server/alerts.rs` | canopy's copy of tmux-claude-session-manager, whose `alert-bell` hook forwards the bell (`tests/compat/tp_10.rs`) |
+| `alert-bell` | `window`, `session`, `pane` (the window's active pane) | a bell in a monitored window, when `bell-action` applies | `hooks::window_alert`, called from `server/alerts.rs` | the session manager's copy of tmux-claude-session-manager, whose `alert-bell` hook forwards the bell (`tests/compat/tp_10.rs`) |
 | `alert-activity` | `window`, `session`, `pane` | output in a monitored window, when `activity-action` applies | `hooks::window_alert` | its tmux hook name row (§4.5); `tests/alerts.rs` |
 | `alert-silence` | `window`, `session`, `pane` | no output in a monitored window for `monitor-silence` seconds | `hooks::window_alert` | its tmux hook name row (§4.5); `tests/alerts.rs` |
 | `option-changed` | `scope` (`global`, `$N`, `@N` or `%N`), `name`, `value` (nullable: null once unset) | an option's value changed; setting the current value emits nothing (§4.2) | `server/dispatch/options.rs`, and `server/sources.rs` for status sources (existing) | T1.6's `tests/events.rs` |
@@ -1187,7 +1200,7 @@ restart = "always"
   names the log file and `GROFE_PLUGIN`. Unknown keys and wrong types are
   errors naming the file, as everywhere in the schema (§5.2).
 - **Layering.** A plugin's table merges key by key across layers 1 to 4
-  (§5.1), so `user.toml` can set `enabled = false` on a plugin a canopy
+  (§5.1), so `user.toml` can set `enabled = false` on a plugin a the session manager
   fragment declares; `cmd` must be present once merged. `show-config
   --explain` gives each key's provenance (§5.4).
 - **Environment.** The server's global environment (`set-environment -g`,
@@ -1267,7 +1280,7 @@ spike's render path lost some of the capabilities `tmux-256color` adds over
 relay, OSC 52 clipboard, cursor colour and focus events were not forwarded),
 so grofe shipped `screen-256color` until T3.6 re-ran every extra capability
 through the real render path on macOS and Linux and all of them passed. See
-docs/spike-notes.md's "TERM decision" and "T3.6 re-run" sections for the
+docs/archive/spike-notes.md's "TERM decision" and "T3.6 re-run" sections for the
 evidence; the passing re-run is what alias day requires (D7).
 
 An inner `CSI > q` (XTVERSION) gets no reply from the library, so grofe
@@ -1302,32 +1315,32 @@ claims daily-driver status is done.
   mode and asserts on output, `capture-pane` and events.
 - **CLI smoke (bats):** drives the built `grofe` binary with no Rust harness,
   a temp `HOME` and no `GROFE*` variables in the environment, proving
-  canopy-style shell scripts can use grofe. canopy had 93 green tests while its
+  private-style shell scripts can use grofe. the session manager had 93 green tests while its
   installed config loaded nothing, because the tests never ran what was installed.
 - **Render snapshots:** the round-trip trick from §4.4.
 - **Acceptance:** an attached client in a pty, driven by `expectrl`, runs the §8
   suite and asserts on the reconstructed screen. CI installs neovim, fzf, htop and
   tmux on Linux and macOS. Tests discover tool paths, never hardcode them
-  (canopy acc19eb), and run against the system's tools as well as the dev
-  toolchain: a mise-provided tmux hid canopy's tmux 3.4 floor bug (canopy
+  (the session manager acc19eb), and run against the system's tools as well as the dev
+  toolchain: a mise-provided tmux hid the session manager's tmux 3.4 floor bug (the session manager
   b303aae).
-- **Persistence (M4):** canopy's fake-agent fixture (appends a launch/resume
+- **Persistence (M4):** the session manager's fake-agent fixture (appends a launch/resume
   transcript and loops instead of exec'ing `sleep`) and its reboot scenarios
-  (canopy ef20852, `test/smoke/scenarios.sh`). Each scenario is proven able to
+  (the session manager ef20852, `test/smoke/scenarios.sh`). Each scenario is proven able to
   fail by mutating the saved snapshot and watching it go red. The reboot itself
   is tested in a container: restarting it kills every process and empties the
   runtime directory while the state directory survives, and the server then
-  starts as a login unit would start it (plan T4.6; with canopy and a real
+  starts as a login unit would start it (plan T4.6; with the session manager and a real
   systemd user unit, T7.8).
 - **End to end (containers):** `scripts/e2e.sh` runs the acceptance suite, the
-  compat suite, the reboot scenario and canopy on grofe in podman containers
+  compat suite, the reboot scenario and the session manager on grofe in podman containers
   (Debian, Arch, and a systemd image for login units), and the release gate
   runs them all (plan "E2E and release"). Nothing runs against the owner's live
-  tmux, grofe or canopy: host-run suites check those directories are
+  tmux, grofe or the session manager: host-run suites check those directories are
   byte-identical before and after.
 - **tmux compatibility (M3.6):** a hermetic suite with a temp `HOME` and a
   `PATH` whose `tmux` is a symlink to the built grofe runs the owner's real
-  scripts and tools (canopy `bin/*`, `tsess`, `cockpit`, `fzf --tmux`,
+  scripts and tools (the session manager `bin/*`, `tsess`, `cockpit`, `fzf --tmux`,
   vim-tmux-navigator's calls from a headless Neovim, a smug-style start) and
   replays a recorded corpus of the argv they send through the front end,
   whose table rows each carry their own golden (§4.5). Where tmux is
@@ -1342,9 +1355,9 @@ claims daily-driver status is done.
   path>`, for recording and for the nested-tmux acceptance item. The suite is proven able to fail by mutating a
   golden, and never touches the user's own sockets.
 - **Determinism:** inputs that depend on pids (stagger, jitter, generated
-  names) are seeded deterministically in tests (canopy 11a3adf).
+  names) are seeded deterministically in tests (the session manager 11a3adf).
 - **CI**, on `ubuntu-latest` and `macos-latest`, split by cost into separate jobs
-  so one red job cannot hide another (canopy 94435f6, acc19eb): `unit` (fmt,
+  so one red job cannot hide another (the session manager 94435f6, acc19eb): `unit` (fmt,
   clippy, lib and doc tests) on every push; `acceptance` (integration tests,
   bats, and later containers) on pull requests, `main` and manual dispatch.
   GitHub Actions is disabled for now: `scripts/ci-local.sh` runs the same
@@ -1376,7 +1389,7 @@ claims daily-driver status is done.
 - Windows support.
 - Reading or executing `tmux.conf` as the config, and running TPM itself (D1:
   the owner's config is ported once, plan M3.6, drafted by `grofe import-tmux`,
-  §5.5; the plugins run unchanged through canopy's loader, plan M3.7); tmux's `-CC` wire format (M8 maybe); tmux compatibility beyond the
+  §5.5; the plugins run unchanged through the session manager's loader, plan M3.7); tmux's `-CC` wire format (M8 maybe); tmux compatibility beyond the
   owner's inventory (§4.5).
 - WASM plugins.
 - Network session sharing.

@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{TestServer, wait_until};
+use common::{TestServer, try_wait_until};
 use grofe::server::layout::{GeometryCell, LayoutGeometry};
 use grofe::server::snapshot::{
     OptionSnap, PaneSnap, SNAPSHOT_VERSION, SessionSnap, Snapshot, WindowSnap,
@@ -197,7 +197,7 @@ fn write_snapshot(srv: &TestServer, snap: &Snapshot) {
 /// Stops the server and waits until its socket stops answering.
 fn kill(srv: &TestServer) {
     ok(srv, &["kill-server"]);
-    wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
+    try_wait_until(|| !srv.is_running(), WAIT).expect("the server goes");
 }
 
 fn write_config(srv: &TestServer, text: &str) -> PathBuf {
@@ -309,9 +309,16 @@ fn restored_panes_run_a_shell_in_their_cwd() {
     write_snapshot(&srv, &sample(&home(&srv)));
     ok(&srv, &["start-server", "--restore"]);
     ok(&srv, &["send-keys", "-t", "work:1.1", "pwd", "Enter"]);
+    // The keys can land before the shell's first prompt, which then
+    // prefixes the output line, and a long temp path wraps the 40-column
+    // pane: join wrapped rows and match the line's end.
     let want = home(&srv).join("a").display().to_string();
-    srv.wait_for(|| srv.capture("work:1.1").lines().any(|l| l == want), WAIT)
-        .unwrap_or_else(|_| panic!("pwd in the pane: {}", srv.capture("work:1.1")));
+    let joined = || ok(&srv, &["capture-pane", "-p", "-J", "-t", "work:1.1"]);
+    srv.wait_for(
+        || joined().lines().any(|l| l.trim_end().ends_with(&want)),
+        WAIT,
+    )
+    .unwrap_or_else(|_| panic!("pwd in the pane: {}", joined()));
 }
 
 /// Into a server that has a session, `--restore` errors and changes
@@ -334,6 +341,20 @@ fn restore_into_a_server_with_a_session_errors() {
         ok(&srv, &["list-sessions", "-F", "#{session_name}"]),
         before
     );
+}
+
+/// The restore request travels as `--restore`, not an environment variable:
+/// a `GROFE_RESTORE=1` in the CLI's environment restores nothing.
+#[test]
+fn the_restore_request_is_not_read_from_the_environment() {
+    let srv = TestServer::start();
+    kill(&srv);
+    write_snapshot(&srv, &sample(&home(&srv)));
+    let mut cmd = srv.command();
+    cmd.arg("start-server").env("GROFE_RESTORE", "1");
+    let out = common::run_bounded(cmd, Duration::from_secs(30));
+    assert!(out.status.success(), "{}", out.stderr);
+    assert_eq!(ok(&srv, &["list-sessions", "-F", "#{session_name}"]), "");
 }
 
 /// `start-server --restore` with no snapshot says so and still starts an
@@ -372,7 +393,7 @@ fn new_session_a_attaches_the_restored_session() {
     cmd.args(["new-session", "-A", "-s", "main"])
         .env("TERM", "xterm-256color");
     let _client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-sessions", "-F", "#{session_name} #{session_attached}"])
                 .is_ok_and(|out| out.lines().any(|l| l == "main 1"))
@@ -404,7 +425,7 @@ fn bare_grofe_attaches_the_restored_sessions_without_adding_one() {
     let mut cmd = srv.command();
     cmd.env("TERM", "xterm-256color");
     let _client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-clients", "-F", "#{client_session}"])
                 .is_ok_and(|out| !out.trim().is_empty())
@@ -418,6 +439,35 @@ fn bare_grofe_attaches_the_restored_sessions_without_adding_one() {
     );
 }
 
+/// The session used last before the server stopped is the most recently
+/// active one after the restore, so bare `grofe` returns to it rather than
+/// to whichever session the restore happened to make last.
+#[test]
+fn the_session_used_last_is_the_most_recent_after_a_restore() {
+    let srv = TestServer::builder().restore_on_start(true).start();
+    ok(&srv, &["new-session", "-d", "-s", "a"]);
+    ok(&srv, &["new-session", "-d", "-s", "b"]);
+    let mut cmd = srv.command();
+    cmd.args(["attach-session", "-t", "a"])
+        .env("TERM", "xterm-256color");
+    let client = Harness::spawn(cmd, 80, 24);
+    try_wait_until(
+        || {
+            srv.cmd(&["list-clients", "-F", "#{client_session}"])
+                .is_ok_and(|out| out.trim() == "a")
+        },
+        WAIT,
+    )
+    .expect("a attached");
+    drop(client);
+    kill(&srv);
+    let srv = srv.restart();
+    assert_eq!(
+        ok(&srv, &["display-message", "-p", "#{session_name}"]),
+        "a\n"
+    );
+}
+
 /// Bare `grofe` against a running server reattaches its most recent
 /// session instead of adding one. Bare `tmux` keeps tmux's `new-session`.
 #[test]
@@ -428,7 +478,7 @@ fn bare_grofe_on_a_running_server_attaches_its_latest_session() {
     let mut cmd = srv.command();
     cmd.env("TERM", "xterm-256color");
     let _client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-clients", "-F", "#{client_session}"])
                 .is_ok_and(|out| out.trim() == "second")
@@ -462,7 +512,7 @@ fn bare_tmux_on_a_running_server_makes_a_new_session() {
     }
     cmd.env("TERM", "xterm-256color");
     let _client = Harness::spawn(cmd, 80, 24);
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["list-sessions", "-F", "#{session_name}"])
                 .is_ok_and(|out| out.lines().count() == 2)
@@ -570,7 +620,7 @@ fn the_first_attach_fills_the_update_environment() {
         80,
         24,
     );
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["show-environment", "-t", "main", "SSH_AUTH_SOCK"])
                 .is_ok_and(|out| out == "SSH_AUTH_SOCK=/tmp/x\n")
@@ -627,7 +677,7 @@ fn a_restore_raises_restore_done() {
     kill(&srv);
     write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
-    wait_until(
+    try_wait_until(
         || {
             srv.cmd(&["show-options", "-gqv", "@restored"])
                 .is_ok_and(|v| v == "yes\n")
@@ -657,7 +707,7 @@ fn a_restored_state_is_saved_again_with_its_persist_marks() {
         let text = fs::read_to_string(srv.snapshot_path()).unwrap_or_default();
         text.contains("renamed") && text.contains("sess-b") && text.contains("@theme")
     };
-    wait_until(saved, WAIT).expect("the writer saved the restored state with its marks");
+    try_wait_until(saved, WAIT).expect("the writer saved the restored state with its marks");
     kill(&srv);
     ok(&srv, &["start-server", "--restore"]);
     assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&home(&srv)));
@@ -741,6 +791,7 @@ fn build(srv: &TestServer) {
         .unwrap_or_else(|_| panic!("cd in {pane}"));
     }
     // T4.1 writes within a second of a change and samples cwds.
+    // Real time: the snapshot writer runs on its own timer.
     std::thread::sleep(Duration::from_secs(3));
 }
 
@@ -831,7 +882,7 @@ fn the_restore_request_reaches_nothing_the_server_runs() {
     );
     for file in ["pipe-env", "run-env", "pane-env"] {
         let path = srv.home.join(file);
-        wait_until(
+        try_wait_until(
             || fs::read_to_string(&path).is_ok_and(|t| t.contains("HOME=")),
             WAIT,
         )

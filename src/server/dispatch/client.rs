@@ -67,7 +67,12 @@ pub fn show_messages(
     }
     Ok(clients::messages(state)
         .rev()
-        .map(|(time, text)| format!("{}: {text}\n", clients::pretty_time(*time)))
+        .map(|(time, text)| {
+            let secs = time
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+            format!("{}: {text}\n", crate::cmd::format::time::pretty_time(secs))
+        })
         .collect())
 }
 
@@ -151,13 +156,13 @@ pub fn wait_for(state: &mut State, _ctx: &ClientCtx, c: WaitFor) -> Result<Strin
         return Err(ParseError::TooFewArguments("wait-for".to_string(), 1).to_string());
     };
     if c.signal {
-        clients::signal_channel(state, &channel);
+        signal_channel(state, &channel);
     } else if c.lock {
-        clients::lock_channel(state, &channel, dispatch::defer_reply);
+        lock_channel(state, &channel, dispatch::defer_reply);
     } else if c.unlock {
-        clients::unlock_channel(state, &channel)?;
+        unlock_channel(state, &channel)?;
     } else {
-        clients::wait_channel(state, &channel, dispatch::defer_reply);
+        wait_channel(state, &channel, dispatch::defer_reply);
     }
     Ok(String::new())
 }
@@ -273,9 +278,10 @@ fn resume(
     // one comes back here rather than holding on its own.
     hooks::enter(state);
     while let Some(frame) = frames.pop_front() {
-        let ran = dispatch::options::with_source_depth(frame.depth, frame.verbose, || {
-            dispatch::run_commands(state, &frame.ctx, frame.cmds)
-        });
+        let ran =
+            dispatch::options::with_source_depth(state, frame.depth, frame.verbose, |state| {
+                dispatch::run_commands(state, &frame.ctx, frame.cmds)
+            });
         match ran {
             Ok(text) => more.push_str(&text),
             Err(e) if frame.keep_going => {
@@ -385,6 +391,116 @@ fn resume(
         if let Some(answer) = answer {
             let _ = tx.send(answer);
         }
+    });
+}
+
+/// One `wait-for` channel (TC.9, M36-R1): signalled with nobody waiting,
+/// it stays woken until the next wait, as in tmux.
+#[derive(Default)]
+pub(crate) struct WaitChannel {
+    woken: bool,
+    waiters: Vec<oneshot::Sender<Result<String, Failure>>>,
+    /// `wait-for -L` holds the channel.
+    locked: bool,
+    /// The `-L` callers behind the holder, oldest first.
+    lockers: Vec<oneshot::Sender<Result<String, Failure>>>,
+}
+
+/// `wait-for -S`: every waiter on `channel` is released; with none, the
+/// channel stays woken for the next wait.
+pub(crate) fn signal_channel(state: &mut State, channel: &str) {
+    prune_waits(state);
+    let waits = &mut state.registry.waits;
+    let wc = waits.entry(channel.to_string()).or_default();
+    if wc.waiters.is_empty() {
+        wc.woken = true;
+        return;
+    }
+    for tx in wc.waiters.drain(..) {
+        let _ = tx.send(Ok(String::new()));
+    }
+    if !wc.locked {
+        waits.remove(channel);
+    }
+}
+
+/// `wait-for -L`: takes `channel`'s lock, or waits behind whoever holds it
+/// until `wait-for -U` hands it over.
+pub(crate) fn lock_channel(
+    state: &mut State,
+    channel: &str,
+    reply: impl FnOnce(&mut State) -> oneshot::Sender<Result<String, Failure>>,
+) {
+    prune_waits(state);
+    if !state
+        .registry
+        .waits
+        .get(channel)
+        .is_some_and(|wc| wc.locked)
+    {
+        state
+            .registry
+            .waits
+            .entry(channel.to_string())
+            .or_default()
+            .locked = true;
+        return;
+    }
+    let tx = reply(state);
+    if let Some(wc) = state.registry.waits.get_mut(channel) {
+        wc.lockers.push(tx);
+    }
+}
+
+/// `wait-for -U`: the lock passes to the first `-L` waiting for it, else
+/// the channel is free. An unlocked channel is an error.
+pub(crate) fn unlock_channel(state: &mut State, channel: &str) -> Result<(), String> {
+    let waits = &mut state.registry.waits;
+    let Some(wc) = waits.get_mut(channel).filter(|wc| wc.locked) else {
+        return Err(format!("channel {channel} not locked"));
+    };
+    // A locker that hung up is skipped.
+    while !wc.lockers.is_empty() {
+        if wc.lockers.remove(0).send(Ok(String::new())).is_ok() {
+            return Ok(());
+        }
+    }
+    wc.locked = false;
+    if !wc.woken && wc.waiters.is_empty() {
+        waits.remove(channel);
+    }
+    Ok(())
+}
+
+/// `wait-for`: returns at once when `channel` was woken; otherwise
+/// `reply` answers once it is signalled.
+pub(crate) fn wait_channel(
+    state: &mut State,
+    channel: &str,
+    reply: impl FnOnce(&mut State) -> oneshot::Sender<Result<String, Failure>>,
+) {
+    if let Some(wc) = state.registry.waits.get(channel)
+        && wc.woken
+    {
+        // As tmux's `cmd_wait_for_remove`: a locked channel stays, woken.
+        if !wc.locked {
+            state.registry.waits.remove(channel);
+        }
+        return;
+    }
+    prune_waits(state);
+    let tx = reply(state);
+    let wc = state.registry.waits.entry(channel.to_string()).or_default();
+    wc.waiters.push(tx);
+}
+
+/// Drops the waits of callers that hung up, and the channels they leave
+/// empty and unwoken.
+fn prune_waits(state: &mut State) {
+    state.registry.waits.retain(|_, wc| {
+        wc.waiters.retain(|tx| !tx.is_closed());
+        wc.lockers.retain(|tx| !tx.is_closed());
+        wc.woken || wc.locked || !wc.waiters.is_empty()
     });
 }
 

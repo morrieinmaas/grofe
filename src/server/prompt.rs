@@ -15,6 +15,8 @@
 //! waits on it (D8); the CLI's reply comes through
 //! [`dispatch::defer_reply`] once the command exits (R23).
 
+use crate::cmd::NoVars;
+use crate::server::spawn;
 use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -34,7 +36,8 @@ use crate::server::dispatch::{
 };
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
 use crate::server::pane::{self, CellFlags, CursorState, SnapCell};
-use crate::server::render::{Overlay, OverlayCtx, Screen};
+use crate::server::popup;
+use crate::server::render::{self, Overlay, OverlayCtx, Screen};
 use crate::server::shell_jobs::ShellJobs;
 use crate::server::status::{self, Style};
 use crate::server::{State, hooks};
@@ -822,7 +825,7 @@ impl Prompt {
 
 /// The columns of `text` once its `#[...]` styles are taken out and `##` is
 /// one `#` (tmux's `format_width`).
-fn visible_width(text: &str) -> usize {
+pub(crate) fn visible_width(text: &str) -> usize {
     let mut width = 0;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -1014,7 +1017,7 @@ impl InputHook for PromptHook {
         prompt.separators = separators;
         prompt.clip = clip;
         let history = &history[prompt.kind];
-        // `-N` (M5): as tmux 3.7b's `status_prompt_key`, any key but a
+        // `-N`: as tmux 3.7b's `status_prompt_key`, any key but a
         // digit answers the prompt and then goes on as a key (copy mode's
         // counts: `5` then `j`).
         if let (Read::Line, true, Input::Key(key)) = (prompt.read, prompt.numeric, input) {
@@ -1024,10 +1027,13 @@ impl InputHook for PromptHook {
                 let prompt = state.prompts.close(client)?;
                 let command = prompt.command(&prompt.line());
                 match cmd::split_command_string(&command) {
-                    Ok(cmds) if !cmds.is_empty() => {
-                        state.command_key = prompt.key.clone();
-                        clients::run_binding(state, client, &cmds, prompt.dialect)
-                    }
+                    Ok(cmds) if !cmds.is_empty() => clients::run_binding(
+                        state,
+                        client,
+                        &cmds,
+                        prompt.dialect,
+                        prompt.key.clone(),
+                    ),
                     Ok(_) => {}
                     Err(e) => clients::show_message(state, client, &e.to_string()),
                 }
@@ -1130,8 +1136,7 @@ impl InputHook for PromptHook {
                 };
                 match command.map(|c| cmd::split_command_string(&c)) {
                     Some(Ok(cmds)) if !cmds.is_empty() => {
-                        state.command_key = prompt.key.clone();
-                        Routed::Command(cmds, prompt.dialect)
+                        Routed::Keyed(cmds, prompt.dialect, prompt.key.clone())
                     }
                     Some(Err(e)) => {
                         clients::show_message(state, client, &e.to_string());
@@ -1635,6 +1640,27 @@ impl Overlay for PromptOverlay {
             .unwrap_or(0)
             .min(lines.saturating_sub(1));
         let row = row.saturating_add(line).min(screen.rows - 1);
+        if matches!(
+            model.options.lookup("prompt-position", &chain),
+            Some("centre" | "center")
+        ) && screen.cols >= 8
+            && screen.rows >= 3
+        {
+            let border = model
+                .options
+                .lookup("pane-active-border-style", &chain)
+                .unwrap_or_default();
+            let ends = model
+                .options
+                .lookup("pane-frame-tab-ends", &chain)
+                .unwrap_or("()");
+            draw_box(prompt, &status::base_style(border, vars), ends, screen);
+            return;
+        }
+        if let Some(ends) = clients::pill_ends(model, &chain) {
+            draw_pill(prompt, row, ends, screen);
+            return;
+        }
         let label_vars = clients::MessageVars {
             inner: vars,
             message: &prompt.label,
@@ -1675,6 +1701,75 @@ impl Overlay for PromptOverlay {
             ..CursorState::default()
         });
     }
+}
+
+/// How many columns the prompt's pill or box takes at most.
+const PROMPT_WIDTH: usize = 60;
+
+/// The prompt as a pill on status row `row` (`message-pill`): its label
+/// and text in an info message's colours, between the pill's `ends`.
+fn draw_pill(prompt: &Prompt, row: u16, ends: &str, screen: &mut Screen) {
+    let level = render::Level::Info;
+    let (x, w) = render::pill_area(screen, row, PROMPT_WIDTH);
+    if w < 4 {
+        return;
+    }
+    let style = level.body();
+    let label = format!(" {}", prompt.label);
+    let drawn = status::draw(&label, style, (w - 2) as u16);
+    let start = visible_width(&label).min(w - 2);
+    let (cells, col) = prompt.row_over(line_cells(&drawn.line, w - 2), start, &style);
+    let at = usize::from(row) * usize::from(screen.cols) + x + 1;
+    screen.cells[at..at + cells.len()].clone_from_slice(&cells);
+    render::pill_ends(screen, row, (x, w), level, ends);
+    screen.cursor = Some(CursorState {
+        row,
+        col: u16::try_from(x + 1 + col).unwrap_or(u16::MAX),
+        visible: true,
+        ..CursorState::default()
+    });
+}
+
+/// The prompt as a rounded box a third down the screen (`prompt-position
+/// centre`), `border` its frame's style with the label between `ends` in
+/// its top edge, as a pane frame's title; the text goes on the row inside.
+fn draw_box(prompt: &Prompt, border: &Style, ends: &str, screen: &mut Screen) {
+    let cols = usize::from(screen.cols);
+    let w = PROMPT_WIDTH.min(cols);
+    let x = (cols - w) / 2;
+    let y = (screen.rows / 3).min(screen.rows - 3);
+    let (l, r) = render::tab_ends(ends);
+    let frame = popup::Frame {
+        at: (x as i32, i32::from(y)),
+        size: (w as u16, 3),
+        lines: Some(popup::Lines::Rounded),
+        title: Some(format!(" {l} {} {r} ", prompt.label)),
+        border_style: None,
+        style: None,
+        close_on_exit: false,
+        close_on_zero: false,
+        any_key: false,
+    };
+    popup::draw_box(screen, &frame, popup::Lines::Rounded, border);
+    let inner = Style::default();
+    let row = y + 1;
+    for edge in [x + 1, x + w - 2] {
+        popup::set(
+            screen,
+            (edge as i32, i32::from(row)),
+            popup::cell(' ', &inner),
+        );
+    }
+    let blank = vec![popup::cell(' ', &inner); w - 4];
+    let (cells, col) = prompt.row_over(blank, 0, &inner);
+    let at = usize::from(row) * cols + x + 2;
+    screen.cells[at..at + cells.len()].clone_from_slice(&cells);
+    screen.cursor = Some(CursorState {
+        row,
+        col: u16::try_from(x + 2 + col).unwrap_or(u16::MAX),
+        visible: true,
+        ..CursorState::default()
+    });
 }
 
 /// Client `id` went away: its prompt closes, and a CLI waiting on it gets
@@ -1752,7 +1847,7 @@ pub fn command_prompt(
     }
     // An incremental prompt never holds its caller, and starts by running
     // its template with a bare `=`.
-    open(state, id, prompt, !c.background && !incremental);
+    open(state, ctx, id, prompt, !c.background && !incremental);
     if incremental {
         run_incremental(state, id, '=', "");
     }
@@ -1839,10 +1934,16 @@ pub fn ask(
         then: Then(Some(then)),
         ..Prompt::new(label.to_string(), initial, String::new())
     };
-    let mut prompt = prompt;
-    prompt.key = state.event_key.clone();
     state.prompts.open.insert(id, prompt);
     clients::mark_dirty(state, id);
+}
+
+/// Records `key`, the key whose binding opened client `id`'s prompt, so
+/// its commands are logged as run by it (`show-messages`).
+pub fn opened_by(state: &mut State, id: ClientId, key: Option<String>) {
+    if let Some(prompt) = state.prompts.open.get_mut(&id) {
+        prompt.key = key;
+    }
 }
 
 /// An incremental prompt's callback (tmux's `cmd_command_prompt_callback`
@@ -1853,9 +1954,9 @@ fn run_incremental(state: &mut State, client: ClientId, prefix: char, line: &str
     };
     let command = replace_template(&prompt.template, &format!("{prefix}{line}"));
     let dialect = prompt.dialect;
-    state.command_key = prompt.key.clone();
+    let key = prompt.key.clone();
     match cmd::split_command_string(&command) {
-        Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect),
+        Ok(cmds) if !cmds.is_empty() => clients::run_binding(state, client, &cmds, dialect, key),
         Ok(_) => {}
         Err(e) => clients::show_message(state, client, &e.to_string()),
     }
@@ -1901,7 +2002,7 @@ pub fn confirm(
         default_yes: c.default_yes,
         ..Prompt::new(label, "", command)
     };
-    open(state, id, prompt, !c.background);
+    open(state, ctx, id, prompt, !c.background);
     Ok(String::new())
 }
 
@@ -1940,9 +2041,9 @@ fn expand_for(state: &State, id: ClientId, text: &str) -> String {
 /// to close: a CLI request's reply, and a binding's later commands and its
 /// client's input, as tmux 3.7b's command queue waits (recorded,
 /// `tm_6/waits`).
-fn open(state: &mut State, id: ClientId, prompt: Prompt, wait: bool) {
+fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, prompt: Prompt, wait: bool) {
     let mut prompt = prompt;
-    prompt.key = state.event_key.clone();
+    prompt.key = ctx.request.event_key.clone();
     state.prompts.open.insert(id, prompt);
     if wait {
         let reply = dispatch::defer_reply(state);
@@ -2193,14 +2294,6 @@ pub(crate) fn expand_command(state: &State, ctx: &ClientCtx, text: &str) -> Stri
     }
 }
 
-struct NoVars;
-
-impl cmd::FormatVars for NoVars {
-    fn get(&self, _: &str) -> Option<String> {
-        None
-    }
-}
-
 /// Runs `script` to completion: its stdout (ending in a newline) when
 /// `capture` is set, or the error tmux words for a nonzero exit or a
 /// signal. stderr is discarded, as in tmux; without `capture` so is
@@ -2233,29 +2326,21 @@ pub(crate) async fn shell_with(
     } else {
         Stdio::null()
     };
-    let child = {
-        let _lock = pane::spawn_lock();
-        tokio::process::Command::new("/bin/sh")
-            // As tmux's `job_run`: `argv[0]` is `sh`, not the path.
-            .arg0("sh")
-            .arg("-c")
-            // `-E`: tmux's job writes stderr to the pipe stdout goes to.
-            .arg(if merge_stderr && capture {
-                format!("exec 2>&1\n{script}")
-            } else {
-                script.to_string()
-            })
+    // `-E`: tmux's job writes stderr to the pipe stdout goes to.
+    let text = if merge_stderr && capture {
+        format!("exec 2>&1\n{script}")
+    } else {
+        script.to_string()
+    };
+    let child = spawn::spawn(
+        spawn::sh(&text, Some(env))
             .current_dir(cwd)
-            .env_clear()
-            .envs(env)
             // As a pane: a `grofe` run inside talks to this server.
             .env("GROFE", socket)
             .env_remove("GROFE_PANE")
             .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(Stdio::null())
-            .spawn()
-    };
+            .stdout(stdout),
+    );
     let child = child.map_err(|e| format!("failed to run command: {e}"))?;
     let tracked = jobs.track(&child);
     let out = child.wait_with_output().await;
@@ -2722,7 +2807,7 @@ mod tests {
 
     fn command(words: &[&str]) -> Option<Routed> {
         let argv = words.iter().map(|w| w.to_string()).collect();
-        Some(Routed::Command(vec![argv], Dialect::Grofe))
+        Some(Routed::Keyed(vec![argv], Dialect::Grofe, None))
     }
 
     /// Recorded on tmux 3.7b: `-1` answers with the character typed, a

@@ -11,6 +11,7 @@
 //! back. Commands run through the single [`dispatch`] seam.
 
 pub mod adopt;
+pub mod agents;
 pub mod alerts;
 pub mod borders;
 pub mod buffers;
@@ -24,16 +25,25 @@ pub mod drop;
 pub mod events;
 pub mod floating;
 pub mod graphics;
+pub(crate) mod grid;
 pub mod hooks;
 pub mod imgstore;
 pub mod input;
+pub(crate) mod keymenu;
 pub mod layout;
 pub mod links;
+pub(crate) mod listdraw;
+pub(crate) mod listview;
+pub mod lua_async;
+pub mod lua_host;
 pub mod menu;
 pub mod model;
 pub mod mouse;
+pub(crate) mod notify;
+pub mod pack_load;
 pub mod pane;
 pub mod passthrough;
+pub(crate) mod picker;
 pub mod plugins;
 pub mod popup;
 pub mod prompt;
@@ -42,10 +52,14 @@ pub mod restore;
 pub mod resume;
 pub mod screenimg;
 pub mod shell_jobs;
+pub(crate) mod sidebar;
 pub mod sixel;
 pub mod snapshot;
 pub mod sources;
+pub mod spawn;
 pub mod status;
+pub(crate) mod toast;
+pub(crate) mod tray;
 pub mod tree;
 pub mod x11;
 
@@ -82,27 +96,16 @@ use pane::{PaneEvent, PaneEventKind};
 /// these lines to prove one server per socket.
 pub const START_MARKER: &str = "grofe server starting";
 
-/// What a CLI request brings besides its argv (TM.7).
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CliIo {
-    /// Its stdin, decoded; `None` when it sent none.
-    pub stdin: Option<Vec<u8>>,
-    pub umask: Option<u32>,
-    /// The requesting process (the socket peer), when the OS says.
-    pub pid: Option<i32>,
-}
-
-impl CliIo {
-    fn of(req: &Request, pid: Option<i32>) -> CliIo {
-        use base64::Engine as _;
-        CliIo {
-            stdin: req
-                .stdin
-                .as_deref()
-                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
-            umask: req.umask,
-            pid,
-        }
+/// What a CLI request brings besides its argv (TM.7), for its context.
+fn cli_io_of(req: &Request, pid: Option<i32>) -> protocol::CliIo {
+    use base64::Engine as _;
+    protocol::CliIo {
+        stdin: req
+            .stdin
+            .as_deref()
+            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
+        umask: req.umask,
+        pid,
     }
 }
 
@@ -156,7 +159,7 @@ pub enum ServerMsg {
 /// config until it exists, and the test harness sets both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartOptions {
-    /// `GROFE_RESTORE_ON_START=0` turns it off. Read now, used from M4, so
+    /// `GROFE_RESTORE_ON_START=0` turns it off. Read by the restore, so
     /// a test server can never restore the user's real sessions.
     pub restore_on_start: bool,
     /// `GROFE_REMAIN_ON_EXIT=1` turns it on: the initial global value of
@@ -202,7 +205,7 @@ pub struct State {
     pub inner_term: &'static str,
     /// Handed to `PaneHandle::spawn`: pane events reach the actor through it.
     pub pane_events: mpsc::Sender<PaneEvent>,
-    /// Handed to `PaneHandle::spawn`: pane output wakes the renderer (M2).
+    /// Handed to `PaneHandle::spawn`: pane output wakes the renderer.
     pub wake: Arc<Notify>,
     /// Subscribers and the events commands recorded for them.
     pub events: events::Events,
@@ -223,6 +226,9 @@ pub struct State {
     pub sources: sources::Sources,
     /// Supervised plugins (T6.3).
     pub plugins: plugins::Plugins,
+    /// The Luau runtime; taken out for the length of a call, so `None`
+    /// inside one means a nested entry.
+    pub lua: Option<lua_host::LuaHost>,
     /// Event hooks and the server environment (TC.5).
     pub hooks: hooks::Hooks,
     /// Open popups (TC.6).
@@ -231,6 +237,13 @@ pub struct State {
     pub menus: menu::Menus,
     /// Open choosers (TC.9).
     pub trees: tree::Trees,
+    pub pickers: picker::Pickers,
+    pub sidebars: sidebar::Sidebars,
+    pub grids: grid::Grids,
+    pub notify: notify::Notifier,
+    pub notify_runner: notify::desktop::Runner,
+    pub trays: tray::Trays,
+    pub keymenus: keymenu::Menus,
     /// The paste buffers (TM.4).
     pub buffers: buffers::Buffers,
     /// The panes in copy mode (TM.1).
@@ -239,6 +252,17 @@ pub struct State {
     pub clocks: clock::Clocks,
     /// Each window's silence wait (`alerts`).
     pub alerts: alerts::Alerts,
+    /// The agent records, by pane (`agents`).
+    pub agents: agents::Agents,
+    /// The kinds agents are recognised by: the built-ins merged with `[agents.kinds]`.
+    pub agent_kinds: Vec<agents::kinds::Kind>,
+    /// `[agents] enabled`; off, reports and scans change nothing.
+    pub agents_enabled: bool,
+    /// `[agents.sidebar]`, `[agents.grid]`, `[agents.picker]` and `[agents.new]`.
+    pub agents_sidebar: crate::config::ConfigSidebar,
+    pub agents_grid: crate::config::ConfigGrid,
+    pub agents_picker: crate::config::ConfigPicker,
+    pub agents_new: crate::config::ConfigNew,
     /// Sends a [`Job`] to the actor, bounded by [`JOB_QUEUE`] (see there
     /// for who may wait); any task may hold a clone. The actor keeps this
     /// one, so the channel never closes while it runs.
@@ -254,20 +278,23 @@ pub struct State {
     /// What a request printed before the command that failed it: the
     /// reply carries it next to the error, as tmux prints both (FE.2).
     pub(crate) failed_out: String,
-    /// The running CLI request's stdin and umask, for `load-buffer -` and
-    /// the files `save-buffer` creates (TM.7); `None` outside one.
-    pub(crate) cli_io: Option<CliIo>,
-    /// The log lines of the request now running, logged as its commands
-    /// fire (`clients::log_fired`).
-    pub(crate) command_log: std::collections::VecDeque<(usize, Option<String>)>,
-    /// The key whose binding is running its commands (`show-messages`).
-    pub(crate) event_key: Option<String>,
-    /// The key the next [`clients::run_binding`] logs its commands under:
-    /// set by a prompt, confirm or menu a binding opened.
-    pub(crate) command_key: Option<String>,
     /// Set by a command (`kill-server`, the last session closing): the
     /// actor removes the socket, sends the reply, and stops.
     pub exit: bool,
+    /// The resume binding sampling timer, while one runs (`resume::watch`).
+    /// The snapshot writer, started by the first [`snapshot::track`].
+    /// How many tmux files `source-file` has open, one inside another, and
+    /// whether `-v` is on for the one running (`with_source_depth`).
+    pub(crate) source_depth: u32,
+    pub(crate) source_verbose: bool,
+    /// `send-keys -K` nesting: how deep it runs inside the bindings of the
+    /// keys it typed, and whether that hit its limit.
+    pub(crate) typing: (u32, bool),
+    pub(crate) snapshot_writer: Option<snapshot::Writer>,
+    pub(crate) resume_timer: Option<tokio::task::AbortHandle>,
+    /// Restored panes whose process runs their saved resume, by pane and
+    /// spawn generation (`restore`).
+    pub(crate) from_resume: Vec<(crate::types::PaneId, u64)>,
     /// Started implicitly by a session-creating command (`__server
     /// --exit-when-empty`): exits once it has no sessions and no client
     /// connections, even if it never had a session. `start-server` leaves
@@ -348,14 +375,21 @@ pub fn register_input_hook(state: &mut State, hook: Arc<dyn InputHook + Send + S
     state.registry.input_hooks.push(hook);
 }
 
-/// The server's own overlays and input hooks, every M3 (T3.0) and M3.6
-/// (stub edit) one, in priority order, highest first. The rule: input
+/// The server's own overlays and input hooks, every one, in priority order, highest first. The rule: input
 /// hooks run in registration order and the first to answer `Some` wins;
 /// overlays draw in reverse order, so the highest-priority one ends on top.
 /// So an open prompt sees keys first and draws over everything; a menu
 /// (TC.7) comes next, then a popup (TC.6), so a prompt or menu a popup's
 /// command opens takes the keys and draws on top of it; then a chooser
 /// (TC.9) over its pane; then the mouse, and copy mode (TM.1).
+/// Copies the `[agents.*]` surface tables into the state.
+pub(crate) fn configure_surfaces(state: &mut State, r: &crate::config::Resolved) {
+    state.agents_sidebar = r.agents.sidebar.clone();
+    state.agents_grid = r.agents.grid.clone();
+    state.agents_picker = r.agents.picker.clone();
+    state.agents_new = r.agents.new.clone();
+}
+
 fn register_builtins(state: &mut State) {
     register_input_hook(state, Arc::new(prompt::PromptHook));
     register_overlay(state, Arc::new(prompt::PromptOverlay));
@@ -363,8 +397,23 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(menu::MenuOverlay));
     register_input_hook(state, Arc::new(popup::PopupHook));
     register_overlay(state, Arc::new(popup::PopupOverlay));
+    register_overlay(state, Arc::new(sidebar::SidebarOverlay));
+    register_input_hook(state, Arc::new(grid::GridHook));
+    register_overlay(state, Arc::new(grid::GridOverlay));
+    register_input_hook(state, Arc::new(picker::PickerHook));
+    register_overlay(state, Arc::new(picker::PickerOverlay));
+    register_input_hook(state, Arc::new(tray::TrayHook));
+    register_overlay(state, Arc::new(tray::TrayOverlay));
+    register_input_hook(state, Arc::new(toast::ToastHook));
+    register_overlay(state, Arc::new(toast::ToastOverlay));
+    register_input_hook(state, Arc::new(keymenu::KeyMenuHook));
+    register_overlay(state, Arc::new(keymenu::KeyMenuOverlay));
     register_input_hook(state, Arc::new(tree::TreeHook));
     register_overlay(state, Arc::new(tree::TreeOverlay));
+    // After every overlay hook, so a grid or picker keeps its keys and
+    // clicks while the strip is focused; before the mouse, so the strip's
+    // clicks never reach a pane.
+    register_input_hook(state, Arc::new(sidebar::SidebarHook));
     register_input_hook(state, Arc::new(mouse::MouseHook));
     clock::register(state);
     copy::register(state);
@@ -386,6 +435,9 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         kind,
     } = event;
     let Some(p) = state.model.panes.get(&pane) else {
+        if matches!(kind, PaneEventKind::Exited(_)) {
+            state.model.drop_stashed(pane, generation);
+        }
         return;
     };
     if p.handle.generation() != generation {
@@ -401,6 +453,18 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
             // A restored pane whose resumed process exited is kept (T4.4).
             if !restore::on_pane_exited(state, pane) {
                 state.model.pane_exited(pane, status);
+                // A kept pane shows its `remain-on-exit-format` text.
+                if state
+                    .model
+                    .panes
+                    .get(&pane)
+                    .is_some_and(|p| p.dead.is_some())
+                {
+                    let text = state.model.dead_pane_text(pane);
+                    if !text.is_empty() {
+                        state.model.panes[&pane].handle.show_dead_text(&text);
+                    }
+                }
                 hooks::pane_exited(state, pane, window);
                 if state.model.closed() {
                     state.exit = true;
@@ -418,7 +482,8 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
         | PaneEventKind::Clipboard { .. }
         | PaneEventKind::ClipboardQuery { .. }
         | PaneEventKind::Path(_)
-        | PaneEventKind::Osc(_)) => passthrough::on_pane_event(state, pane, kind),
+        | PaneEventKind::Osc(_)
+        | PaneEventKind::AgentStatus(_)) => passthrough::on_pane_event(state, pane, kind),
         PaneEventKind::Graphics(bytes) => graphics::on_graphics(state, pane, bytes),
         // The reader handles sixel images; they never reach the actor.
         PaneEventKind::Sixel { .. } => {}
@@ -465,7 +530,6 @@ pub fn run_daemon(socket: &Path, ready_fd: Option<RawFd>, exit_when_empty: bool)
         socket.display()
     );
 
-    restore::take_request();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -600,23 +664,40 @@ async fn serve(
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
         plugins: plugins::Plugins::default(),
+        lua: None,
         hooks: hooks::Hooks::for_server(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        pickers: picker::Pickers::default(),
+        sidebars: sidebar::Sidebars::default(),
+        grids: grid::Grids::default(),
+        notify: notify::Notifier::default(),
+        notify_runner: notify::desktop::Runner::default(),
+        trays: tray::Trays::default(),
+        keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
+        agents: agents::Agents::default(),
+        agent_kinds: agents::kinds::builtin(),
+        agents_enabled: true,
+        agents_sidebar: crate::config::ConfigAgents::default().sidebar,
+        agents_grid: crate::config::ConfigAgents::default().grid,
+        agents_picker: crate::config::ConfigAgents::default().picker,
+        agents_new: crate::config::ConfigAgents::default().new,
         jobs: jobs_tx,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        cli_io: None,
-        command_log: Default::default(),
-        event_key: None,
-        command_key: None,
+        source_depth: 0,
+        source_verbose: false,
+        typing: (0, false),
+        snapshot_writer: None,
+        resume_timer: None,
+        from_resume: Vec::new(),
         exit: false,
         exit_when_empty,
         connections: 0,
@@ -638,6 +719,7 @@ async fn serve(
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
+    dispatch::options::source_start_files(&mut state);
     // Before ready: the starting CLI's command sees the restored sessions.
     restore::at_start(&mut state);
     plugins::start(&mut state);
@@ -861,22 +943,20 @@ fn handle(state: &mut State, msg: ServerMsg) {
             }
             // Parsed once: classified, then run.
             state.failed_out.clear();
-            state.cli_io = Some(CliIo::of(&req, pid));
-            let ctx = crate::compat::forget_stale_pane(state, ctx);
+            let mut ctx = crate::compat::forget_stale_pane(state, ctx);
+            ctx.request.cli_io = Some(std::sync::Arc::new(cli_io_of(&req, pid)));
             let parsed = dispatch::parse(state, &ctx, &req.argv);
             let read_only = dispatch::read_only(&parsed);
             // Logged as tmux 3.7b logs a client's commands and errors
             // (`show-messages`).
             let who = pid.map_or_else(|| "client".to_string(), |p| format!("client-{p}"));
-            state.command_log = match &parsed {
+            let mut log = match &parsed {
                 Ok(dispatch::Parsed::Commands(cmds)) => {
                     clients::plan_command_log(state, &who, &ctx, &req.argv, cmds.len())
                 }
                 _ => Default::default(),
             };
-            let result = dispatch::run_parsed(state, &ctx, parsed);
-            state.cli_io = None;
-            state.command_log.clear();
+            let result = dispatch::run_parsed(state, &ctx, parsed, &mut log);
             if let Err(e) = &result {
                 clients::log_error(state, &who, e);
             }
@@ -1292,6 +1372,7 @@ pub(crate) fn test_ctx() -> ClientCtx {
         env: Vec::new(),
         client: None,
         dialect: protocol::Dialect::Grofe,
+        request: Default::default(),
     }
 }
 
@@ -1322,23 +1403,40 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         graphics: graphics::Graphics::default(),
         sources: sources::Sources::default(),
         plugins: plugins::Plugins::default(),
+        lua: None,
         hooks: hooks::Hooks::default(),
         popups: popup::Popups::default(),
         menus: menu::Menus::default(),
         trees: tree::Trees::default(),
+        pickers: picker::Pickers::default(),
+        sidebars: sidebar::Sidebars::default(),
+        grids: grid::Grids::default(),
+        notify: notify::Notifier::default(),
+        notify_runner: notify::desktop::Runner::default(),
+        trays: tray::Trays::default(),
+        keymenus: keymenu::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
         alerts: alerts::Alerts::default(),
+        agents: agents::Agents::default(),
+        agent_kinds: agents::kinds::builtin(),
+        agents_enabled: true,
+        agents_sidebar: crate::config::ConfigAgents::default().sidebar,
+        agents_grid: crate::config::ConfigAgents::default().grid,
+        agents_picker: crate::config::ConfigAgents::default().picker,
+        agents_new: crate::config::ConfigAgents::default().new,
         jobs,
         shell_jobs: shell_jobs::ShellJobs::default(),
         deferred_reply: None,
         held: None,
         failed_out: String::new(),
-        cli_io: None,
-        command_log: Default::default(),
-        event_key: None,
-        command_key: None,
+        source_depth: 0,
+        source_verbose: false,
+        typing: (0, false),
+        snapshot_writer: None,
+        resume_timer: None,
+        from_resume: Vec::new(),
         exit: false,
         exit_when_empty: false,
         connections: 0,

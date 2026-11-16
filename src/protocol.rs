@@ -74,6 +74,31 @@ pub struct ClientCtx {
     /// decides it, and `compat` routes a tmux one to the front end.
     #[serde(default, skip_serializing_if = "Dialect::is_grofe")]
     pub dialect: Dialect,
+    /// What the server knows of the request now running, set where it
+    /// starts one. Never on the wire.
+    #[serde(skip)]
+    pub request: RequestCtx,
+}
+
+/// The per-request facts a command reads from its context rather than from
+/// `State`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestCtx {
+    /// A CLI request's stdin, umask and process (TM.7); `None` for a
+    /// request that is not one.
+    pub cli_io: Option<std::sync::Arc<CliIo>>,
+    /// The key whose binding is running the command (`show-messages`).
+    pub event_key: Option<String>,
+}
+
+/// What a CLI request brings besides its argv (TM.7).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CliIo {
+    /// Its stdin, decoded; `None` when it sent none.
+    pub stdin: Option<Vec<u8>>,
+    pub umask: Option<u32>,
+    /// The requesting process (the socket peer), when the OS says.
+    pub pid: Option<i32>,
 }
 
 /// A request's command language (spec D12): grofe's own, or tmux's as the
@@ -120,7 +145,7 @@ mod env_map {
 }
 
 /// Per-client rendering/input capabilities, probed once against the outer
-/// terminal before the hello (spec §4.4; M2 fills in the probing). Every
+/// terminal before the hello (spec §4.4). Every
 /// field defaults to `false`, and the struct-level `default` means a caps
 /// object missing some (or all) fields, from an older or newer client,
 /// still parses instead of failing the whole hello.
@@ -141,6 +166,11 @@ pub struct Caps {
     /// (image tools need it).
     #[serde(default)]
     pub cell_px: Option<(u16, u16)>,
+    /// The terminal's default `(foreground, background)` from OSC 10 and
+    /// 11; `None` when it did not say. Panes answer their programs' colour
+    /// queries with it where `window-style` sets no colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colours: Option<([u8; 3], [u8; 3])>,
 }
 
 /// The JSON hello a client sends first (spec §4.6), choosing the mode for
@@ -267,12 +297,27 @@ pub fn encode_hello(hello: &Hello) -> Result<String, ProtocolError> {
     let mut value = serde_json::to_value(hello)?;
     if let serde_json::Value::Object(map) = &mut value {
         map.insert("grofe".to_string(), PROTOCOL_VERSION.into());
+        // serde_json keeps insertion order (agent setup needs that for
+        // settings files); the frozen wire form is key-sorted.
     }
+    sort_deep(&mut value);
     let line = value.to_string();
     if line.len() > HELLO_MAX_LEN {
         return Err(ProtocolError::TooLarge { len: line.len() });
     }
     Ok(line)
+}
+
+/// Sorts every object's keys, recursively.
+fn sort_deep(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.sort_keys();
+            map.values_mut().for_each(sort_deep);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(sort_deep),
+        _ => {}
+    }
 }
 
 /// Decodes a hello line, checking the protocol version before the shape so
@@ -595,6 +640,7 @@ mod tests {
                 .collect(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         }
     }
 
@@ -610,6 +656,7 @@ mod tests {
                 .collect(),
             client: None,
             dialect: Dialect::Grofe,
+            request: Default::default(),
         });
         let err = encode_hello(&hello).unwrap_err().to_string();
         assert!(
@@ -641,6 +688,7 @@ mod tests {
                 kitty_graphics: true,
                 sixel: true,
                 cell_px: Some((10, 20)),
+                colours: Some(([0x3c, 0x38, 0x36], [0xfb, 0xf1, 0xc7])),
             },
             target: Some("main:2".to_string()),
             detach_others: true,

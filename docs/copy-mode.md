@@ -10,8 +10,8 @@ later M5 task, TP.11 and TP.9b check themselves against the table below.
 - `tests/fixtures/compat/copy-mode.conf` holds what the owner's setup adds
   to tmux's stock table, reproduced from the sources, never from a live
   server. tmux-yank's five rows come from its vendored `yank.tmux` with the
-  plugin's defaults. canopy's port of vim-tmux-navigator
-  (`40-canopy-nav.toml`) defers its five copy-mode rows to M5; the plugin is
+  plugin's defaults. A private port of vim-tmux-navigator
+  defers its five copy-mode rows to M5; the plugin is
   not vendored, so their argv comes from the TC.0 container recording of the
   old config (`tests/compat/corpus/container-stored.argv`).
 - `tests/fixtures/compat/golden/tm_0/list-keys-copy-mode-vi.scenario` starts
@@ -606,7 +606,7 @@ of the view, starting over when the cursor's line changes);
 ## Decisions for the owner
 
 1. **95 rows, not 93.** The table includes vim-tmux-navigator's five rows,
-   which canopy's port defers to M5, taken from the container recording
+   which that private port defers to M5, taken from the container recording
    because the plugin is not vendored. Without them the table would be 92
    and `C-h`, `C-j` would keep tmux's stock meaning in copy mode.
 2. **`pbcopy` in the fixture.** The golden and TM.7's scenarios use the
@@ -622,5 +622,30 @@ of the view, starting over when the cursor's line changes);
 5. **Default bindings.** The stub edit is to load "the 93 rows from TM.0's
    golden" as grofe's default table. The proposal is that grofe's default
    table holds only the 88 stock rows; yank's five come from the plugin
-   (TP.11) and the navigator's five from canopy's port, so a plain grofe
+   (TP.11) and the navigator's five from the private port, so a plain grofe
    user never gets `pbcopy` bound to `y`.
+
+## Hints (grofe's own)
+
+`copy-mode -h` (bound to `prefix G` under grofe identity, unbound under tmux
+identity) labels the matches on the visible text, so a URL, path, git hash,
+IP address or long number is copied in two keystrokes. tmux's own `-H` hides
+the position indicator, so hints take the lowercase flag.
+
+- Each match gets a label of home-row letters (`asdfghjkl`) drawn over its
+  first cells. The nearest matches to the cursor get the shortest labels;
+  two-letter labels appear only when there are more matches than letters,
+  and the labels depend only on the screen and the cursor.
+- Typing a label copies its match to a new paste buffer, and to the
+  clipboard when `set-clipboard` allows, then leaves copy mode.
+- An uppercase letter in the label also pastes the match into the pane, as
+  `paste-buffer -p` does.
+- Any other key ends the hints; a copy mode that `copy-mode -h` itself
+  started ends with them. A screen with no match does the same at once.
+- The patterns are the list option `copy-hint-patterns` (`copy-hint-patterns`
+  in the TOML config), regular expressions tried in order: a match that
+  overlaps an earlier one is dropped, and a capture group, when the pattern
+  has one, is the text that is labelled and copied. An invalid pattern is
+  skipped. The default list covers URLs, absolute, home and relative paths,
+  IPv6, IPv4, git hashes and numbers of four or more digits.
+- Matches do not span wrapped lines.

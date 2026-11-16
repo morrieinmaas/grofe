@@ -1,12 +1,27 @@
 [package]
 name = "grofe"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Edition 2024 needs 1.85, but the locked graph needs 1.88 (home 0.5.12, via
 # alacritty_terminal).
 rust-version = "1.88"
 license = "Apache-2.0"
-publish = false
+description = "An agent-native terminal multiplexer that speaks tmux"
+repository = "https://github.com/termage/grofe"
+homepage = "https://termage.github.io/grofe/"
+readme = "README.md"
+keywords = ["tmux", "terminal", "multiplexer", "pty", "tui"]
+categories = ["command-line-utilities"]
+# What a build needs, and nothing else. The compat golden is compiled in.
+include = [
+    "/src/**",
+    "/tests/fixtures/compat/golden/list-commands.txt",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+]
 
 [dependencies]
 alacritty_terminal = "0.26.0"
@@ -14,11 +29,12 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 crossterm = "0.29.0"
 futures-util = { version = "0.3.34", features = ["sink"] }
+mlua = { version = "0.12", features = ["luau", "send"] }
 nix = { version = "0.31.3", features = ["user", "term", "process", "signal", "fs", "ioctl", "poll"] }
 regex = "1.13.1"
 regex-automata = { version = "0.4.18", default-features = false, features = ["std", "syntax", "hybrid", "unicode", "perf"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal", "process", "fs"] }
 tokio-util = { version = "0.7.19", features = ["codec"] }
@@ -32,3 +48,29 @@ expectrl = "0.9.0"
 insta = "1.48.0"
 proptest = "1.11.0"
 tempfile = "3.27.0"
+
+# `cargo deb --target <triple>` and `cargo generate-rpm --target <triple>`
+# (see the justfile's deb and rpm recipes) read target/<triple>/release.
+[package.metadata.deb]
+maintainer = "termage (https://github.com/termage/grofe)"
+copyright = "grofe contributors"
+section = "utils"
+priority = "optional"
+# Static musl builds: no shared library dependencies.
+depends = ""
+extended-description = """\
+grofe keeps what tmux got right (sessions, windows and panes, a server that \
+outlives your terminal, a prefix key, tmux's commands) and fixes the parts \
+you keep fighting."""
+assets = [
+    ["target/release/grofe", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/grofe/", "644"],
+]
+
+[package.metadata.generate-rpm]
+auto-req = "disabled"
+assets = [
+    { source = "target/release/grofe", dest = "/usr/bin/grofe", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/grofe/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/grofe/LICENSE", mode = "644", doc = true },
+]

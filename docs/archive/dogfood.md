@@ -1,0 +1,140 @@
+# Dogfood log
+
+The dogfood week runs grofe as the daily multiplexer before alias day
+(plan M3.6). Every rough edge goes in this file as one entry, so M3.6 works
+from a list rather than from memory. Add entries at the bottom, newest last.
+
+## Before you start
+
+- **Terminals:** Ghostty and WezTerm are the first-class outer terminals
+  (spec D11). WezTerm speaks kitty keys only with
+  `enable_kitty_keyboard = true` in its config.
+- **Copy mode** is tmux's since M5 (`docs/copy-mode.md`): the wheel enters
+  it, a drag selects and copies, `q` leaves. Shift-drag still uses the
+  outer terminal's own selection.
+- **A hung binding freezes its client.** As in tmux, a binding waits for its
+  `run-shell` (without `-b`), prompt, menu or popup, and so does all of
+  that client's input, prefix and `detach` included. See "Bindings wait" in
+  `docs/copy-mode.md` for the ways out.
+- **Where things are written** (`<state dir>` is `$XDG_STATE_HOME/grofe`,
+  else `~/.local/state/grofe`; `<instance>` is the socket's instance name,
+  `default` unless you used `-L` or `-S`):
+  - the server log: `<state dir>/<instance>.log`
+  - panic reports: `<state dir>/<instance>.panic.<unix-ms>.log`, one per
+    panic in the server, an attach client or a CLI call. Each names the
+    message, the source location, the thread, a backtrace, the grofe
+    version and the OS. Attach the report to the entry.
+  - `compat-miss.log` (from M3.6, under tmux identity): `<state
+    dir>/compat-miss.log`, every tmux verb, flag or format variable grofe
+    did not know. Review it at the end of each day.
+- **Falling back to tmux.** Detach grofe (`prefix d`) and start tmux as
+  usual; grofe keeps running and `grofe attach` returns to it. Inside a
+  grofe pane, run tmux as `env -u TMUX <absolute path to tmux>`, since
+  `$TMUX` may point at grofe (spec D12). Log every fallback: the reason is
+  the most useful part of an entry.
+
+## Known gaps at the start of the week
+
+Found by the T3.6 acceptance suite; no need to log them again unless they
+hurt more than described.
+
+- **`kitten icat --unicode-placeholder`** runs through grofe in the
+  suite only where `kitten` is installed (T3.8's rule); the recorded
+  placeholder fixture always runs. Try one image preview by hand in each
+  terminal on day one and log what you see.
+
+Fixed since: VS16 emoji width (`❤️` is now two cells, as in Ghostty and
+WezTerm) and XTVERSION (`CSI > q` is answered with grofe's name and version).
+
+## Entry template
+
+Copy this block for each entry.
+
+```markdown
+### <YYYY-MM-DD> <one-line summary>
+
+- Terminal: Ghostty | WezTerm (version)
+- OS: macOS | Linux (version)
+- grofe: the commit it was built from (`git rev-parse --short HEAD`)
+- What hurt: what you did, what you expected, what happened
+- Severity: blocker (alias day cannot happen) | annoying (daily friction) |
+  cosmetic
+- tmux fallback used: no | yes, because ...
+- Evidence: panic report, server log lines, `compat-miss.log` lines, a
+  screenshot, or the smallest command that reproduces it
+```
+
+## Entries
+
+### 2026-10-01 Daily bindings, checked by script (TP.9a)
+
+The owner ruled that this check runs as a script, not by hand.
+`scripts/key-parity.sh` presses each daily binding once, through a client
+attached on a pty, with the whole config and every plugin loaded. It does
+this on real tmux 3.7b and on two grofe servers, one under the tmux name and
+one under grofe's own. A key passes when grofe ran what tmux ran: the same
+script or stub, with the same argv and input, in the same directory. Where a
+key opens a window, its size must match too: the popup of `g G P T W`, the
+agent's pane inside the popup of `a` and `A`, and the picker of `s` (fzf-tmux's
+popup) and `u` (fzf's own floating pane), as the real fzf reports it. `K`
+and `?` open nothing here: their tools are stubs, run by `run-shell`. Your own
+tools are stubs that log a line; the plugin scripts run unchanged, and fzf is
+the real one behind a wrapper that logs its argv. Tick the last column once
+you have used the key yourself.
+
+| Key | What it does | Script (grofe under the tmux name, and under its own) | You |
+|---|---|---|---|
+| `prefix s` | sessionx's picker (fzf-tmux, the session list) | [x] same as tmux | [ ] |
+| `prefix K` | `~/.local/bin/tsess` | [x] same as tmux | [ ] |
+| `prefix ?` | `keys-popup.sh`, the searchable key list | [x] same as tmux | [ ] |
+| `prefix u` | fzf-url's picker over the pane's URLs | [x] same as tmux | [ ] |
+| `prefix g` | gh-dash in a 95% by 90% popup | [x] same as tmux | [ ] |
+| `prefix G` | `enhance-pr.sh` in a popup, in the pane's directory | [x] same as tmux | [ ] |
+| `prefix P` | `pet-pick.sh` in a borderless popup | [x] same as tmux | [ ] |
+| `prefix T` | `theme` with `THEME_POPUP=1` in a popup | [x] same as tmux | [ ] |
+| `prefix W` | `net-popup.sh` in the 66 by 26 network popup | [x] same as tmux | [ ] |
+| `prefix a` | claude-session-manager's agent for this directory, in a popup | [x] same as tmux | [ ] |
+| `prefix A` | claude-session-manager's agent picker | [x] same as tmux | [ ] |
+
+- grofe: built from TP.9a's branch
+- What the script cannot see: how a popup looks (its border and title) and
+  what you do inside it. Those are yours to judge when you tick a row.
+
+### 2026-10-02 Copy mode, buffers and the mouse, checked by script (TP.9b)
+
+The owner ruled that these checks run as a script, not by hand.
+`scripts/key-parity.sh` now compares every key table, `copy-mode-vi`
+included, and tmux's `copy-mode-vi` must be TM.0's 95-row golden. On the
+same attached client as the daily bindings, it then presses the copy-mode
+and buffer keys and sends the mouse as the outer terminal would (SGR
+reports). It runs on real tmux 3.7b and on both grofe servers, one under the
+tmux name and one under grofe's own. A step passes when grofe reads back
+what tmux did: the pane's mode and scroll position, the newest buffer, what
+the clipboard command got and what was pasted into the pane. Every
+clipboard command (`pbcopy`, `wl-copy`, `xclip` and the rest) is a stub
+that logs its input, so the machine's clipboard is never touched. Tick the
+last column once you have done it yourself.
+
+| What | What it does | Script (grofe under the tmux name, and under its own) | You |
+|---|---|---|---|
+| `prefix [` | copy mode at the bottom | [x] same as tmux | [ ] |
+| `prefix PageUp` | copy mode, a page up | [x] same as tmux | [ ] |
+| `Space`, `e`, `y` in copy mode | tmux-yank copies the word to the clipboard and a buffer | [x] same as tmux | [ ] |
+| wheel up, twice | copy mode, then 5 lines up | [x] same as tmux | [ ] |
+| drag, release | selects, and tmux-yank copies on release | [x] same as tmux | [ ] |
+| double click | copies the word to a buffer | [x] same as tmux | [ ] |
+| triple click | copies the line to a buffer | [x] same as tmux | [ ] |
+| `prefix =`, `q` | the buffer chooser (`buffer-mode`), then closed | [x] same as tmux | [ ] |
+| middle click | pastes the newest buffer | [x] same as tmux | [ ] |
+| `prefix ]` | pastes the newest buffer | [x] same as tmux | [ ] |
+
+- grofe: built from TP.9b's branch
+- Fixed on the way, each with a test: a middle click now pastes (it only
+  focused the pane), and `#{pane_in_mode}` and `#{pane_mode}` now see an open
+  chooser (they read 0 and empty).
+- Known gap, not grofe's: in copy mode `C-h C-j C-k C-l C-\` keep tmux's
+  stock meaning (or none), because the session manager's navigator port still defers
+  vim-tmux-navigator's copy-mode rows.
+- What the script cannot see: how the selection and the indicator look,
+  and the 0.3 s highlight after a double or triple click. Those are yours
+  to judge when you tick a row.

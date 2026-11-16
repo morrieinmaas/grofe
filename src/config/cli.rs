@@ -6,15 +6,16 @@
 // shown; this shows what the files resolve to.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::{
-    ConfigHook, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, OPTION_NAMES, Resolved,
-    Ty, closest, list_tmux_name, load, load_with_file, tmux_name, toml_type,
+    ConfigHook, ConfigKind, ConfigPlugin, ConfigSource, Env, KeyBinding, LIST_NAMES, Resolved,
+    closest, list_tmux_name, literal, load, load_with_file, option_names, tmux_name,
 };
 use crate::server::dispatch::options::has_no_effect;
 use crate::server::input::parse_key;
+use crate::util::quote;
 
 const USAGE: &str = "usage: show-config [--explain] [--file <path>]... [<key>]";
 
@@ -92,9 +93,17 @@ fn run(args: &[String]) -> Result<String, String> {
     let binding = |out: &mut String, b: &KeyBinding| {
         out.push_str(&format!(
             "keys.{}.{} = {}\n",
-            bare_or_quoted(&b.table),
-            bare_or_quoted(&b.key.to_string()),
-            binding_value(b)
+            quote::toml_key(&b.table),
+            quote::toml_key(&b.key.to_string()),
+            quote::toml_binding(
+                &b.command,
+                &[
+                    ("desc", b.desc.as_deref()),
+                    ("group", b.group.as_deref()),
+                    ("name", b.name.as_deref()),
+                ],
+                b.repeat,
+            )
         ));
         if explain {
             out.push_str(&format!("  set by {}\n", b.source.describe(home)));
@@ -110,7 +119,7 @@ fn run(args: &[String]) -> Result<String, String> {
     let status_source = |out: &mut String, name: &str, s: &ConfigSource| {
         out.push_str(&format!(
             "status.sources.{} = {}\n",
-            bare_or_quoted(name),
+            quote::toml_key(name),
             source_value(s)
         ));
         if explain {
@@ -120,7 +129,7 @@ fn run(args: &[String]) -> Result<String, String> {
     let plugin = |out: &mut String, name: &str, p: &ConfigPlugin| {
         out.push_str(&format!(
             "plugins.{} = {}\n",
-            bare_or_quoted(name),
+            quote::toml_key(name),
             plugin_value(p)
         ));
         if explain {
@@ -133,15 +142,15 @@ fn run(args: &[String]) -> Result<String, String> {
         let name = name.strip_prefix('@').unwrap_or(name);
         out.push_str(&format!(
             "user-options.{} = {}\n",
-            bare_or_quoted(name),
-            quote(value)
+            quote::toml_key(name),
+            quote::toml_str(value)
         ));
     };
     let variable = |out: &mut String, name: &str, value: &str| {
         out.push_str(&format!(
             "environment.{} = {}\n",
-            bare_or_quoted(name),
-            quote(value)
+            quote::toml_key(name),
+            quote::toml_str(value)
         ));
     };
     let load_commands = |out: &mut String| {
@@ -166,7 +175,7 @@ fn run(args: &[String]) -> Result<String, String> {
     // the loader keeps no provenance for them.
     match key {
         None => {
-            for (k, _) in OPTION_NAMES {
+            for (k, _) in option_names() {
                 option(&mut out, k);
             }
             for (k, _) in LIST_NAMES {
@@ -184,6 +193,8 @@ fn run(args: &[String]) -> Result<String, String> {
             for (name, p) in &r.plugins {
                 plugin(&mut out, name, p);
             }
+            out.push_str(&agents_lines(&r, home, explain, "agents")?);
+            out.push_str(&notify_lines(&r, home, explain, "notify")?);
             for (name, value) in &r.user_options {
                 user_option(&mut out, name, value);
             }
@@ -191,6 +202,12 @@ fn run(args: &[String]) -> Result<String, String> {
                 variable(&mut out, name, value);
             }
             load_commands(&mut out);
+        }
+        Some(k) if k == "agents" || k.starts_with("agents.") => {
+            out.push_str(&agents_lines(&r, home, explain, k)?);
+        }
+        Some(k) if k == "notify" || k.starts_with("notify.") => {
+            out.push_str(&notify_lines(&r, home, explain, k)?);
         }
         Some("plugins") => {
             for (name, p) in &r.plugins {
@@ -263,7 +280,12 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         Some(k) => {
             let mut msg = format!("show-config: unknown key {k}");
-            if let Some(s) = closest(k, OPTION_NAMES.iter().chain(LIST_NAMES).map(|(t, _)| *t)) {
+            if let Some(s) = closest(
+                k,
+                option_names()
+                    .chain(LIST_NAMES.iter().copied())
+                    .map(|(t, _)| t),
+            ) {
                 msg.push_str(&format!(", did you mean {s}?"));
             }
             return Err(msg);
@@ -296,30 +318,8 @@ fn find_binding<'a>(r: &'a Resolved, rest: &str) -> Option<&'a KeyBinding> {
     r.keys.iter().find(|b| b.table == table && b.key == key)
 }
 
-/// An option value (tmux form) as the TOML literal a config would write.
-fn literal(toml: &str, value: &str) -> String {
-    match (toml_type(toml), toml, value) {
-        (Ty::Bool, _, v) => (v == "on").to_string(),
-        (Ty::Int, "status.lines", "off") => "0".to_string(),
-        (Ty::Int, "status.lines", "on") => "1".to_string(),
-        (Ty::Int, _, v) => v.to_string(),
-        (Ty::Str, _, v) => quote(v),
-    }
-}
-
-fn quote(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
-}
-
-fn bare_or_quoted(s: &str) -> String {
-    let bare = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if bare { s.to_string() } else { quote(s) }
-}
-
 fn source_value(s: &ConfigSource) -> String {
-    let mut fields = vec![format!("cmd = {}", quote(&s.cmd))];
+    let mut fields = vec![format!("cmd = {}", quote::toml_str(&s.cmd))];
     for (k, v) in [("interval", s.interval), ("timeout", s.timeout)] {
         if let Some(v) = v {
             fields.push(format!("{k} = {v}"));
@@ -335,7 +335,7 @@ fn plugin_value(p: &ConfigPlugin) -> String {
         let vars: Vec<String> = p
             .env
             .iter()
-            .map(|(k, v)| format!("{} = {}", bare_or_quoted(k), quote(v)))
+            .map(|(k, v)| format!("{} = {}", quote::toml_key(k), quote::toml_str(v)))
             .collect();
         fields.push(format!("env = {{ {} }}", vars.join(", ")));
     }
@@ -344,18 +344,183 @@ fn plugin_value(p: &ConfigPlugin) -> String {
     format!("{{ {} }}", fields.join(", "))
 }
 
-fn binding_value(b: &KeyBinding) -> String {
-    if b.desc.is_none() && b.group.is_none() && b.name.is_none() && !b.repeat {
-        return quote(&b.command);
+/// The `[agents]` lines under `key` (`agents`, `agents.enabled`,
+/// `agents.kinds` or `agents.kinds.<name>`, ...).
+fn agents_lines(
+    r: &Resolved,
+    home: Option<&Path>,
+    explain: bool,
+    key: &str,
+) -> Result<String, String> {
+    let a = &r.agents;
+    let mut out = String::new();
+    let scalar = |out: &mut String, k: &str, value: String| {
+        out.push_str(&format!("{k} = {value}\n"));
+        if explain {
+            let by = r
+                .provenance
+                .get(k)
+                .map_or_else(|| "built-in defaults".to_string(), |s| s.describe(home));
+            out.push_str(&format!("  set by {by}\n"));
+        }
+    };
+    let kind = |out: &mut String, name: &str, k: &ConfigKind| {
+        out.push_str(&format!(
+            "agents.kinds.{} = {}\n",
+            quote::toml_key(name),
+            kind_value(k)
+        ));
+        if explain {
+            for field in ["match", "command", "resume", "enabled", "worktree"] {
+                let path = format!("agents.kinds.{name}.{field}");
+                if let Some(src) = r.provenance.get(&path) {
+                    out.push_str(&format!("  {field} set by {}\n", src.describe(home)));
+                }
+            }
+        }
+    };
+    let want = |k: &str| key == "agents" || key == k;
+    if want("agents.enabled") {
+        scalar(&mut out, "agents.enabled", a.enabled.to_string());
     }
-    let mut fields = vec![format!("cmd = {}", quote(&b.command))];
-    for (k, v) in [("desc", &b.desc), ("group", &b.group), ("name", &b.name)] {
-        if let Some(v) = v {
-            fields.push(format!("{k} = {}", quote(v)));
+    if want("agents.scan-interval") {
+        let ms = a.scan_interval.as_millis();
+        let text = if ms.is_multiple_of(1000) {
+            format!("{}s", ms / 1000)
+        } else {
+            format!("{ms}ms")
+        };
+        scalar(&mut out, "agents.scan-interval", quote::toml_str(&text));
+    }
+    let list =
+        |v: &[String]| toml::Value::Array(v.iter().cloned().map(toml::Value::String).collect());
+    let rows = [
+        ("agents.sidebar.width", a.sidebar.width.to_string()),
+        (
+            "agents.sidebar.show-on-attach",
+            a.sidebar.show_on_attach.to_string(),
+        ),
+        (
+            "agents.sidebar.min-client-width",
+            a.sidebar.min_client_width.to_string(),
+        ),
+        ("agents.grid.tile-width", a.grid.tile_width.to_string()),
+        (
+            "agents.grid.preview-lines",
+            a.grid.preview_lines.to_string(),
+        ),
+        (
+            "agents.picker.width",
+            quote::toml_str(&format!("{}%", a.picker.width_pct)),
+        ),
+        (
+            "agents.picker.height",
+            quote::toml_str(&format!("{}%", a.picker.height_pct)),
+        ),
+        ("agents.new.worktree", quote::toml_str(&a.new.worktree)),
+        (
+            "agents.new.worktree-command",
+            list(&a.new.worktree_command).to_string(),
+        ),
+    ];
+    let mut shown = false;
+    for (k, v) in rows {
+        let table = k.rsplit_once('.').map_or("", |(t, _)| t);
+        if want(k) || key == table {
+            scalar(&mut out, k, v);
+            shown = true;
         }
     }
-    if b.repeat {
-        fields.push("repeat = true".to_string());
+    if key == "agents" || key == "agents.kinds" {
+        for (name, k) in &a.kinds {
+            kind(&mut out, name, k);
+        }
+    } else if let Some(name) = key.strip_prefix("agents.kinds.") {
+        let k = a
+            .kinds
+            .get(name)
+            .ok_or_else(|| format!("show-config: no kind {key}"))?;
+        kind(&mut out, name, k);
+    } else if !want("agents.enabled") && !want("agents.scan-interval") && !shown {
+        return Err(format!("show-config: unknown key {key}"));
+    }
+    Ok(out)
+}
+
+/// The `[notify]` lines under `key` (`notify` or `notify.<key>`).
+fn notify_lines(
+    r: &Resolved,
+    home: Option<&Path>,
+    explain: bool,
+    key: &str,
+) -> Result<String, String> {
+    let n = &r.notify;
+    let list =
+        |v: &[String]| toml::Value::Array(v.iter().cloned().map(toml::Value::String).collect());
+    let secs = |d: std::time::Duration| {
+        let ms = d.as_millis();
+        quote::toml_str(&if ms.is_multiple_of(1000) {
+            format!("{}s", ms / 1000)
+        } else {
+            format!("{ms}ms")
+        })
+    };
+    let mut rows = vec![
+        ("enabled", n.enabled.to_string()),
+        ("on", list(&n.on).to_string()),
+        ("toast", list(&n.toast).to_string()),
+        ("desktop", list(&n.desktop).to_string()),
+        ("history", n.history.to_string()),
+        ("skip-when-seen", n.skip_when_seen.to_string()),
+        ("done-min-work", secs(n.done_min_work)),
+        ("min-interval", secs(n.min_interval)),
+        ("toast-time", secs(n.toast_time)),
+        ("delivery", quote::toml_str(&n.delivery)),
+        ("sound", n.sound.to_string()),
+    ];
+    if let Some(c) = &n.command {
+        rows.push(("command", list(c).to_string()));
+    }
+    let mut out = String::new();
+    let mut found = key == "notify";
+    for (name, value) in rows {
+        let path = format!("notify.{name}");
+        if key != "notify" && key != path {
+            continue;
+        }
+        found = true;
+        out.push_str(&format!("{path} = {value}\n"));
+        if explain {
+            let by = r
+                .provenance
+                .get(&path)
+                .map_or_else(|| "built-in defaults".to_string(), |s| s.describe(home));
+            out.push_str(&format!("  set by {by}\n"));
+        }
+    }
+    if found {
+        Ok(out)
+    } else {
+        Err(format!("show-config: unknown key {key}"))
+    }
+}
+
+fn kind_value(k: &ConfigKind) -> String {
+    let mut fields = Vec::new();
+    if let Some(m) = &k.matches {
+        let m = toml::Value::Array(m.iter().cloned().map(toml::Value::String).collect());
+        fields.push(format!("match = {m}"));
+    }
+    for (name, v) in [("command", &k.command), ("resume", &k.resume)] {
+        if let Some(v) = v {
+            fields.push(format!("{name} = {}", quote::toml_str(v)));
+        }
+    }
+    if let Some(e) = k.enabled {
+        fields.push(format!("enabled = {e}"));
+    }
+    if let Some(w) = &k.worktree {
+        fields.push(format!("worktree = {}", quote::toml_str(w)));
     }
     format!("{{ {} }}", fields.join(", "))
 }
@@ -363,6 +528,40 @@ fn binding_value(b: &KeyBinding) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn resolved(text: &str) -> Resolved {
+        use crate::config::load_one;
+        let dir = std::env::temp_dir().join(format!("grofe-agents-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("a.toml");
+        std::fs::write(&path, text).expect("write");
+        let env = Env::from_vars(None, None);
+        load_one(&path, &env).expect("loads")
+    }
+
+    #[test]
+    fn show_config_lists_agents() {
+        let r = resolved(
+            "[agents]\nscan-interval = \"500ms\"\n[agents.kinds.claude]\nmatch = [\"claude\"]\nresume = \"claude -r {id}\"",
+        );
+        let out = agents_lines(&r, None, false, "agents").expect("lines");
+        assert_eq!(
+            out,
+            "agents.enabled = true\nagents.scan-interval = \"500ms\"\n\
+             agents.sidebar.width = 32\nagents.sidebar.show-on-attach = false\n\
+             agents.sidebar.min-client-width = 120\nagents.grid.tile-width = 60\n\
+             agents.grid.preview-lines = 12\nagents.picker.width = \"80%\"\n\
+             agents.picker.height = \"70%\"\nagents.new.worktree = \"never\"\n\
+             agents.new.worktree-command = [\"git\", \"-C\", \"{dir}\", \"worktree\", \"add\", \"-b\", \"{branch}\", \"{path}\"]\n\
+             agents.kinds.claude = { match = [\"claude\"], resume = \"claude -r {id}\" }\n"
+        );
+        let one = agents_lines(&r, None, true, "agents.kinds.claude").expect("lines");
+        assert!(one.contains("  resume set by "), "{one}");
+        assert!(agents_lines(&r, None, false, "agents.kinds.nope").is_err());
+        assert!(agents_lines(&r, None, false, "agents.bogus").is_err());
+        let sc = agents_lines(&r, None, true, "agents.enabled").expect("lines");
+        assert_eq!(sc, "agents.enabled = true\n  set by built-in defaults\n");
+    }
 
     #[test]
     fn explain_marks_a_no_effect_option() {

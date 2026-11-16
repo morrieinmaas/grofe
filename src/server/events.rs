@@ -19,7 +19,8 @@
 //! `session-closed`, `client-session-changed`, `client-resized` and the
 //! alerts in `server::hooks` beside the hook each fires, `pane-resized`,
 //! `window-focused`, `window-created` and `window-resized` in
-//! `hooks::run_command`, and `pane-focus` in [`track_focus`].
+//! `hooks::run_command`, `pane-focus` in [`track_focus`], and `agent-changed`
+//! in [`emit_agent_changed`].
 //!
 //! **`subscribe -t`.** A subscription may be limited to a [`Scope`], a pane,
 //! window or session resolved when it was made. An event passes when the
@@ -32,10 +33,13 @@ use std::collections::BTreeMap;
 
 use tokio::sync::mpsc;
 
+use crate::cmd::format::fnmatch;
 use crate::cmd::{Resolve, Target};
 use crate::event::{Event, Place};
 use crate::protocol::ClientCtx;
 use crate::server::State;
+use crate::server::agents;
+use crate::server::dispatch;
 use crate::server::model::{Model, Removed};
 use crate::server::pane;
 use crate::types::{ClientId, PaneId, SessionId, WindowId};
@@ -64,6 +68,7 @@ pub const NAMES: &[&str] = &[
     "alert-activity",
     "alert-silence",
     "option-changed",
+    "agent-changed",
 ];
 
 /// `pane-output` is sent only to subscribers that name it: a bare
@@ -142,7 +147,11 @@ impl Subscriber {
         if name == PANE_OUTPUT {
             return self.filters.iter().any(|f| f == PANE_OUTPUT);
         }
-        self.filters.is_empty() || self.filters.iter().any(|f| glob(f, name))
+        self.filters.is_empty()
+            || self
+                .filters
+                .iter()
+                .any(|f| fnmatch(f.as_bytes(), name.as_bytes()))
     }
 
     fn passes(&self, event: &Event, place: Place, model: &Model) -> bool {
@@ -179,26 +188,6 @@ impl Subscriber {
             Err(TrySendError::Closed(_)) => false,
         }
     }
-}
-
-/// `*` matches any run of characters; everything else literally.
-fn glob(pattern: &str, name: &str) -> bool {
-    let mut parts = pattern.split('*');
-    let first = parts.next().unwrap_or("");
-    let Some(mut rest) = name.strip_prefix(first) else {
-        return false;
-    };
-    let parts: Vec<&str> = parts.collect();
-    let Some((last, middle)) = parts.split_last() else {
-        return rest.is_empty();
-    };
-    for part in middle {
-        match rest.find(part) {
-            Some(i) => rest = &rest[i + part.len()..],
-            None => return false,
-        }
-    }
-    rest.ends_with(last)
 }
 
 /// What a client's view was when `pane-focus` last looked at it.
@@ -361,6 +350,50 @@ pub fn track_focus(state: &mut State) {
             });
         }
     }
+    mark_agents_seen(state);
+}
+
+/// Marks each attached client's active pane seen when
+/// `dispatch::agent::is_seen` says it is; clients redraw if that changed
+/// anything (spec §2.4).
+fn mark_agents_seen(state: &mut State) {
+    let panes: Vec<PaneId> = state
+        .clients
+        .values()
+        .filter_map(|c| {
+            let window = state.model.sessions.get(&c.session)?.active;
+            Some(state.model.windows.get(&window)?.active)
+        })
+        .collect();
+    let mut changed = false;
+    for pane in panes {
+        if dispatch::agent::is_seen(state, pane) {
+            changed |= state.agents.mark_seen(pane);
+            changed |= state.notify.seen(pane);
+        }
+    }
+    if changed {
+        crate::server::clients::mark_all_dirty(state);
+    }
+}
+
+/// `agent-changed` for `pane` (spec §10): `old` and `new` are the state
+/// names, null for no record.
+pub fn emit_agent_changed(state: &mut State, pane: PaneId, change: &agents::Change) {
+    let uid = state
+        .model
+        .panes
+        .get(&pane)
+        .map(|p| p.uid.clone())
+        .unwrap_or_default();
+    state.events.emit(Event::AgentChanged {
+        pane,
+        uid,
+        kind: change.kind.clone(),
+        old: change.old.map(|s| s.as_str().to_string()),
+        new: change.new.map(|s| s.as_str().to_string()),
+    });
+    crate::server::hooks::agent_changed(state, pane);
 }
 
 #[cfg(test)]
@@ -378,17 +411,6 @@ mod tests {
 
     fn names(n: &[&str]) -> Vec<String> {
         n.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn globs_match_like_fnmatch_star() {
-        assert!(glob("option-*", "option-changed"));
-        assert!(glob("*", "pane-exited"));
-        assert!(glob("pane-*ed", "pane-exited"));
-        assert!(glob("*-exited", "pane-exited"));
-        assert!(!glob("window-*", "pane-exited"));
-        assert!(!glob("pane-", "pane-exited"));
-        assert!(glob("pane-exited", "pane-exited"));
     }
 
     #[test]
@@ -573,5 +595,170 @@ mod tests {
         assert!(Scope::Window(WindowId(2)).passes(&changed("@2"), none, &model));
         assert!(Scope::Pane(PaneId(3)).passes(&changed("%3"), none, &model));
         assert!(!Scope::Pane(PaneId(3)).passes(&changed("%4"), none, &model));
+    }
+
+    #[test]
+    fn agent_changed_in_names() {
+        assert!(NAMES.contains(&"agent-changed"));
+        let mut events = Events::default();
+        let (tx, _rx) = mpsc::channel(4);
+        events
+            .subscribe(names(&["agent-changed"]), None, tx)
+            .expect("subscribe");
+    }
+
+    #[test]
+    fn set_hook_agent_changed_accepted() {
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let argv: Vec<String> = ["set-hook", "-g", "agent-changed", "list-sessions"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        crate::server::dispatch::run(&mut state, &ctx, &argv).expect("set-hook");
+    }
+
+    /// A state with one session `main`, one attached client, and an agent
+    /// record on its active pane.
+    fn agent_state() -> (State, PaneId, ClientId) {
+        use crate::server::agents::{AgentState, Report, ReportState};
+        use crate::server::clients::{AttachRequest, attach};
+        let mut state = crate::server::test_state();
+        let ctx = crate::server::test_ctx();
+        let argv: Vec<String> = ["new-session", "-d", "-s", "main", "sleep 30"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        crate::server::dispatch::run(&mut state, &ctx, &argv).expect("new-session");
+        let accepted = attach(
+            &mut state,
+            AttachRequest {
+                ctx: ctx.clone(),
+                size: (80, 24),
+                term: "xterm".to_string(),
+                caps: Default::default(),
+                pid: None,
+                target: Some("main".to_string()),
+                detach_others: false,
+                nest: true,
+                tty: None,
+                created: false,
+                extras: Default::default(),
+            },
+        )
+        .expect("attach");
+        let session = state.model.session_by_name("main").expect("session");
+        let window = state.model.sessions[&session].active;
+        let pane = state.model.windows[&window].active;
+        let report = Report {
+            state: ReportState::Set(AgentState::Done),
+            kind: None,
+            msg: None,
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        state
+            .agents
+            .apply(pane, report, false, std::time::Instant::now());
+        (state, pane, accepted.id)
+    }
+
+    #[tokio::test]
+    async fn seen_clears_unseen_focused() {
+        let (mut state, pane, _) = agent_state();
+        assert!(state.agents.get(pane).expect("record").unseen);
+        track_focus(&mut state);
+        assert!(!state.agents.get(pane).expect("record").unseen);
+    }
+
+    #[tokio::test]
+    async fn unfocused_client_not_seen() {
+        let (mut state, pane, id) = agent_state();
+        state.clients.get_mut(&id).expect("client").focused = false;
+        track_focus(&mut state);
+        assert!(state.agents.get(pane).expect("record").unseen);
+    }
+
+    #[tokio::test]
+    async fn focus_unknown_counts_seen() {
+        // A client that never reported focus starts focused, as in tmux.
+        let (mut state, pane, id) = agent_state();
+        assert!(state.clients[&id].focused);
+        track_focus(&mut state);
+        assert!(!state.agents.get(pane).expect("record").unseen);
+    }
+
+    #[tokio::test]
+    async fn emit_agent_changed_names_the_pane_and_states() {
+        use crate::server::agents::{AgentState, Change};
+        let (mut state, pane, _) = agent_state();
+        let (tx, mut rx) = mpsc::channel(4);
+        state
+            .events
+            .subscribe(names(&["agent-changed"]), None, tx)
+            .expect("subscribe");
+        let change = Change {
+            old: None,
+            new: Some(AgentState::Idle),
+            kind: None,
+            session_changed: false,
+        };
+        emit_agent_changed(&mut state, pane, &change);
+        state.events.flush(&state.model);
+        let event = rx.try_recv().expect("event");
+        let uid = state.model.panes[&pane].uid.clone();
+        assert_eq!(event.name(), "agent-changed");
+        assert!(matches!(
+            event,
+            Event::AgentChanged { pane: p, uid: u, old: None, new: Some(n), .. }
+                if p == pane && u == uid && n == "idle"
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn seen_marks_read() {
+        use crate::server::{dispatch, test_ctx, test_state};
+        let mut state = test_state();
+        let argv = ["new-session", "-d", "-s", "a", "sleep 600"].map(String::from);
+        dispatch::run(&mut state, &test_ctx(), &argv).expect("new-session");
+        let pane = *state.model.panes.keys().next().expect("pane");
+        state.notify.cfg.delivery = "off".into();
+        let accepted = crate::server::clients::attach(
+            &mut state,
+            crate::server::clients::AttachRequest {
+                ctx: crate::protocol::ClientCtx {
+                    client: None,
+                    ..test_ctx()
+                },
+                size: (80, 24),
+                term: "xterm".into(),
+                caps: Default::default(),
+                pid: None,
+                target: Some("a".into()),
+                detach_others: false,
+                nest: false,
+                tty: None,
+                created: false,
+                extras: Default::default(),
+            },
+        )
+        .expect("attach");
+        state.clients.get_mut(&accepted.id).expect("client").focused = false;
+        let report = crate::server::agents::Report {
+            state: crate::server::agents::ReportState::Set(
+                crate::server::agents::AgentState::Blocked,
+            ),
+            kind: Some("claude".into()),
+            msg: Some("perm".into()),
+            blocked: None,
+            session_id: None,
+            ts: 1,
+        };
+        dispatch::agent::apply(&mut state, pane, report);
+        assert!(!state.notify.items()[0].read);
+        state.clients.get_mut(&accepted.id).expect("client").focused = true;
+        mark_agents_seen(&mut state);
+        assert!(state.notify.items()[0].read);
     }
 }

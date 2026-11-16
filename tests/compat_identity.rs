@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 mod common;
 
-use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, wait_child, wait_until};
+use common::{CMD_TIMEOUT, CmdOutput, TestServer, run_bounded, try_wait_until, wait_child};
 use grofe::protocol::{Dialect, Hello, decode_hello};
 
 const TMUX_NESTED: &str = "sessions should be nested with care, unset $TMUX to force";
@@ -113,7 +113,7 @@ fn pane_env(srv: &TestServer, verb: &[&str], file: &str) -> BTreeMap<String, Str
     let mut args = verb.to_vec();
     args.push(&command);
     grofe(srv, &args).expect("spawn an env pane");
-    wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its env");
+    try_wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its env");
     fs::read_to_string(&path)
         .unwrap()
         .lines()
@@ -223,7 +223,7 @@ fn xtversion_replies(srv: &TestServer, name: &str) -> String {
         path.display()
     );
     grofe(srv, &["new-session", "-d", "-s", name, &script]).expect("new-session");
-    wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its replies");
+    try_wait_until(|| path.exists(), CMD_TIMEOUT).expect("the pane wrote its replies");
     fs::read_to_string(&path).unwrap()
 }
 
@@ -296,6 +296,12 @@ fn the_hello_carries_the_invoking_name_s_dialect() {
         other => panic!("{other:?}"),
     }
 
+    // A socket of its own: a CLI whose request goes unanswered connects once
+    // more to see whether a server is still there, and that connection
+    // waits in the first listener's queue.
+    let fake = root(&srv).join("fake2.sock");
+    let listener = UnixListener::bind(&fake).unwrap();
+    let fake_arg = fake.display().to_string();
     let mut cmd = srv.command();
     isolate(&srv, &mut cmd);
     cmd.args(["-S", &fake_arg, "list-sessions"]);
@@ -315,7 +321,7 @@ fn type_line(srv: &TestServer, target: &str, line: &str) {
 
 /// `path`'s text once the shell has written its `rc=<status>` line.
 fn wait_file(path: &Path) -> String {
-    wait_until(
+    try_wait_until(
         || fs::read_to_string(path).is_ok_and(|t| t.contains("rc=") && t.ends_with('\n')),
         CMD_TIMEOUT,
     )
@@ -384,7 +390,7 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
         "outer",
         &format!("{grofe_bin} attach -t inner; echo rc=$? > {home}/other"),
     );
-    wait_until(
+    try_wait_until(
         || {
             grofe(&srv, &["list-clients", "-F", "#{client_session}"])
                 .is_ok_and(|out| out.trim() == "inner")
@@ -395,7 +401,7 @@ fn attach_from_a_pane_refuses_only_its_own_session() {
 
     grofe(&srv, &["send-keys", "-t", "outer", "C-b", ":"]).unwrap();
     type_line(&srv, "outer", "setw -g @typed at-the-prompt");
-    wait_until(
+    try_wait_until(
         || {
             // tmux's global window scope, which formats see.
             grofe(&srv, &["display-message", "-p", "#{@typed}"])
@@ -967,9 +973,12 @@ fn a_stale_dollar_tmux_pane_falls_back_under_the_tmux_name() {
     // The case a plugin hits: the server's environment carries the stale
     // pane into its jobs.
     grofe(&srv, &["set-environment", "-g", "TMUX_PANE", "%99"]).expect("setenv");
+    // `##`: run-shell expands its command first, and the job's own
+    // display-message must look the pane up. A `%0` already in the text
+    // is a strftime conversion to display-message, `0` on macOS.
     let out = tmux(
         &srv,
-        &["run-shell", "tmux display-message -p 'job #{pane_id}'"],
+        &["run-shell", "tmux display-message -p 'job ##{pane_id}'"],
     );
     assert!(out.status.success(), "{}", out.stderr);
     assert_eq!(out.stdout, format!("job {active}"));

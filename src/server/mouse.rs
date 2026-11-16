@@ -52,9 +52,10 @@
 //! `drag-pane -M` (grofe's `C-MouseDrag1Pane`) moves any pane the same
 //! way. While the button is down the pane is drawn under the pointer, its
 //! place left empty ([`lifted`]), the window's `drop_preview` shows where
-//! it lands, and the release drops it there ([`crate::server::drop`]), or
-//! off every tile leaves it floating there. A right click or Escape
-//! cancels the move.
+//! it lands, and the release drops it there ([`crate::server::drop`]): a
+//! tiled pane off every tile snaps to the nearest, a floating pane there
+//! stays floating where it was dropped. A right click or Escape cancels
+//! the move.
 //!
 //! `focus-follows-mouse` makes motion over a pane its window's active pane,
 //! whether or not `mouse` is on ([`focus_follows`]), and has the client
@@ -995,8 +996,9 @@ fn start_move(
 }
 
 /// Where move `mv` lands with the pointer at client cell `cell`: `None`
-/// over the pane itself, a gap, no pane, or once the client shows another
-/// window.
+/// over the pane itself, once the client shows another window, or, for a
+/// floating pane, off every tile. A tiled pane released off every tile (a
+/// gap, the status line, off the window) lands on the nearest.
 fn plan_move(
     state: &State,
     client: ClientId,
@@ -1005,7 +1007,15 @@ fn plan_move(
 ) -> Option<crate::server::drop::Drop> {
     let cx = clients::overlay_ctx(state, client)?;
     let w = client_window(state, client).filter(|w| w.id == mv.window)?;
-    crate::server::drop::plan(w, mv.pane, window_cell(&cx, cell)?)
+    let at = window_cell(&cx, cell).or_else(|| {
+        // Off the window, a tiled pane still snaps: the pointer counts at
+        // the closest window cell.
+        w.floating(mv.pane).is_none().then(|| {
+            let (x, y) = drag_cell(&cx, w, cell);
+            (x.max(0) as u32, y.max(0) as u32)
+        })
+    })?;
+    crate::server::drop::plan(w, mv.pane, at)
 }
 
 /// Where move `mv` draws the pane with the pointer at client cell `cell`:
@@ -1090,9 +1100,10 @@ fn set_preview(state: &mut State, window: WindowId, preview: Option<Rect>) {
 }
 
 /// The release of move `mv` at client cell `cell`: the preview goes, and
-/// the pane lands where it showed ([`crate::server::drop`]). Released over
-/// no tile, it stays floating where it was dropped; over a tile that takes
-/// no drop (itself among them) nothing changes.
+/// the pane lands where it showed ([`crate::server::drop`]). A floating
+/// pane released over no tile stays floating where it was dropped; a tiled
+/// one never floats, and over a tile that takes no drop (itself among them)
+/// nothing changes.
 fn drop_move(state: &mut State, client: ClientId, mv: PaneMove, cell: (u16, u16)) {
     let planned = plan_move(state, client, mv, cell);
     let at = lifted_at(state, client, mv, cell);
@@ -1101,7 +1112,8 @@ fn drop_move(state: &mut State, client: ClientId, mv: PaneMove, cell: (u16, u16)
         client_window(state, client).filter(|w| w.id == mv.window),
     ) {
         (Some(cx), Some(w)) => {
-            window_cell(&cx, cell).is_some_and(|c| crate::server::drop::over_tile(w, c))
+            w.floating(mv.pane).is_none()
+                || window_cell(&cx, cell).is_some_and(|c| crate::server::drop::over_tile(w, c))
         }
         _ => true,
     };

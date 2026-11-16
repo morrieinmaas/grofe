@@ -44,6 +44,7 @@ fn ctx(pane: Option<PaneId>, dialect: Dialect) -> ClientCtx {
         env: vec![("SSH_AUTH_SOCK".into(), "/run/user/1000/ssh.sock".into())],
         client: None,
         dialect,
+        request: Default::default(),
     }
 }
 
@@ -72,6 +73,7 @@ fn hellos() -> Vec<(&'static str, Hello)> {
                     kitty_graphics: true,
                     sixel: false,
                     cell_px: Some((9, 18)),
+                    colours: None,
                 },
                 target: Some("main".into()),
                 detach_others: false,
@@ -247,6 +249,13 @@ fn event_samples() -> Vec<Event> {
             name: "status".into(),
             value: Some("on".into()),
         },
+        Event::AgentChanged {
+            pane: p,
+            uid: "01JABCDEFGHJKMNPQRSTVWXYZ0".into(),
+            kind: Some("claude".into()),
+            old: Some("working".into()),
+            new: Some("blocked".into()),
+        },
         Event::EventsDropped { count: 3 },
     ]
 }
@@ -271,7 +280,8 @@ fn index(event: &Event) -> usize {
         Event::AlertActivity { .. } => 13,
         Event::AlertSilence { .. } => 14,
         Event::OptionChanged { .. } => 15,
-        Event::EventsDropped { .. } => 16,
+        Event::AgentChanged { .. } => 16,
+        Event::EventsDropped { .. } => 17,
     }
 }
 

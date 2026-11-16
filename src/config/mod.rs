@@ -21,205 +21,22 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use cli::show_config;
+pub use load::agents::{
+    ConfigAgents, ConfigGrid, ConfigKind, ConfigNew, ConfigPicker, ConfigSidebar,
+};
 pub use load::plugins::{ConfigPlugin, Restart};
 pub use load::{load, load_one, load_with_file};
 pub use provenance::{Layer, Provenance, Source};
 
 use crate::server::input::Key;
+use crate::server::notify::NotifyConfig;
 
-/// TOML key (spec §5.2) to tmux option name (R4), for every built-in
-/// option. Shared with `import-tmux` (TI.1) and the tmux front end (FE.1).
-pub const OPTION_NAMES: &[(&str, &str)] = &[
-    ("prefix", "prefix"),
-    ("base-index", "base-index"),
-    ("pane-base-index", "pane-base-index"),
-    ("escape-time-ms", "escape-time"),
-    ("repeat-time-ms", "repeat-time"),
-    ("history-limit", "history-limit"),
-    ("mouse", "mouse"),
-    ("remain-on-exit", "remain-on-exit"),
-    // M4 (spec §6): read by T4.3 and T4.4.
-    ("restore-on-start", "restore-on-start"),
-    ("restore-stagger-ms", "restore-stagger-ms"),
-    ("start-from-tmux", "start-from-tmux"),
-    ("resurrect-dir", "resurrect-dir"),
-    ("automatic-rename", "automatic-rename"),
-    ("automatic-rename-format", "automatic-rename-format"),
-    ("allow-rename", "allow-rename"),
-    ("set-titles", "set-titles"),
-    ("set-titles-string", "set-titles-string"),
-    ("set-clipboard", "set-clipboard"),
-    ("focus-events", "focus-events"),
-    // Top-level keys stay above the sectioned ones: `import-tmux` writes
-    // them in this order.
-    // FE.1: tmux options grofe stores without acting on them (spec §4.5).
-    ("aggressive-resize", "aggressive-resize"),
-    ("default-command", "default-command"),
-    ("default-shell", "default-shell"),
-    ("default-terminal", "default-terminal"),
-    ("extended-keys", "extended-keys"),
-    ("extended-keys-format", "extended-keys-format"),
-    ("mode-keys", "mode-keys"),
-    ("renumber-windows", "renumber-windows"),
-    ("synchronize-panes", "synchronize-panes"),
-    ("window-style", "window-style"),
-    ("window-active-style", "window-active-style"),
-    // B1a: options plugins and themes set; see docs/compat-coverage.md.
-    ("prefix2", "prefix2"),
-    ("status-bg", "status-bg"),
-    ("status-fg", "status-fg"),
-    (
-        "window-status-activity-style",
-        "window-status-activity-style",
-    ),
-    ("focus-follows-mouse", "focus-follows-mouse"),
-    ("default-size", "default-size"),
-    ("exit-empty", "exit-empty"),
-    ("detach-on-destroy", "detach-on-destroy"),
-    ("main-pane-width", "main-pane-width"),
-    ("main-pane-height", "main-pane-height"),
-    ("window-size", "window-size"),
-    // MF (spec 2026-11-05-frames.md): grofe's own options, taken here
-    // under either identity (only their defaults differ), though tmux's
-    // CLI does not know them.
-    ("pane-frames", "pane-frames"),
-    ("pane-gap", "pane-gap"),
-    ("pane-frame-title", "pane-frame-title"),
-    ("pane-frame-tab-ends", "pane-frame-tab-ends"),
-    ("status.lines", "status"),
-    ("status.position", "status-position"),
-    ("status.style", "status-style"),
-    ("status.left", "status-left"),
-    ("status.right", "status-right"),
-    ("status.left-length", "status-left-length"),
-    ("status.right-length", "status-right-length"),
-    ("status.interval", "status-interval"),
-    ("status.window.format", "window-status-format"),
-    (
-        "status.window.current-format",
-        "window-status-current-format",
-    ),
-    ("status.justify", "status-justify"),
-    ("status.left-style", "status-left-style"),
-    ("status.right-style", "status-right-style"),
-    ("status.window.separator", "window-status-separator"),
-    ("status.window.style", "window-status-style"),
-    ("status.window.current-style", "window-status-current-style"),
-    ("status.window.last-style", "window-status-last-style"),
-    ("status.window.bell-style", "window-status-bell-style"),
-    ("message.style", "message-style"),
-    ("message.display-time-ms", "display-time"),
-    ("pane-border.style", "pane-border-style"),
-    ("pane-border.active-style", "pane-active-border-style"),
-    ("pane-border.format", "pane-border-format"),
-    ("pane-border.status", "pane-border-status"),
-    ("pane-border.lines", "pane-border-lines"),
-    ("pane-border.indicators", "pane-border-indicators"),
-    ("status.keys", "status-keys"),
-    ("compat-identity", "compat-identity"),
-    ("graphics", "graphics"),
-    ("allow-passthrough", "allow-passthrough"),
-    // Window alerts (TP.10), by tmux's names.
-    ("monitor-bell", "monitor-bell"),
-    ("monitor-activity", "monitor-activity"),
-    ("monitor-silence", "monitor-silence"),
-    ("bell-action", "bell-action"),
-    ("activity-action", "activity-action"),
-    ("silence-action", "silence-action"),
-    ("visual-bell", "visual-bell"),
-    ("visual-activity", "visual-activity"),
-    ("visual-silence", "visual-silence"),
-    // Paste buffers (TM.4).
-    ("buffer-limit", "buffer-limit"),
-    // Clock mode (B1d), by tmux's names.
-    ("clock-mode-colour", "clock-mode-colour"),
-    ("clock-mode-style", "clock-mode-style"),
-    // Copy mode (M5 stub).
-    ("word-separators", "word-separators"),
-    ("wrap-search", "wrap-search"),
-    ("copy-command", "copy-command"),
-    ("mode-style", "mode-style"),
-    ("copy-mode.match-style", "copy-mode-match-style"),
-    (
-        "copy-mode.current-match-style",
-        "copy-mode-current-match-style",
-    ),
-    // B2a: the rest of tmux 3.7b's options, by tmux's names.
-    ("prefix-timeout", "prefix-timeout"),
-    ("assume-paste-time", "assume-paste-time"),
-    ("destroy-unattached", "destroy-unattached"),
-    ("display-panes-active-colour", "display-panes-active-colour"),
-    ("display-panes-colour", "display-panes-colour"),
-    ("display-panes-time", "display-panes-time"),
-    ("initial-repeat-time", "initial-repeat-time"),
-    ("key-table", "key-table"),
-    ("lock-after-time", "lock-after-time"),
-    ("lock-command", "lock-command"),
-    ("message-command-style", "message-command-style"),
-    ("message-format", "message-format"),
-    ("message-line", "message-line"),
-    ("prompt-cursor-colour", "prompt-cursor-colour"),
-    ("prompt-cursor-style", "prompt-cursor-style"),
-    ("prompt-command-cursor-style", "prompt-command-cursor-style"),
-    ("cursor-colour", "cursor-colour"),
-    ("cursor-style", "cursor-style"),
-    ("menu-style", "menu-style"),
-    ("menu-selected-style", "menu-selected-style"),
-    ("menu-border-style", "menu-border-style"),
-    ("menu-border-lines", "menu-border-lines"),
-    ("pane-status-current-style", "pane-status-current-style"),
-    ("pane-status-style", "pane-status-style"),
-    (
-        "session-status-current-style",
-        "session-status-current-style",
-    ),
-    ("session-status-style", "session-status-style"),
-    ("allow-set-title", "allow-set-title"),
-    ("alternate-screen", "alternate-screen"),
-    ("copy-mode-mark-style", "copy-mode-mark-style"),
-    ("copy-mode-position-format", "copy-mode-position-format"),
-    ("copy-mode-position-style", "copy-mode-position-style"),
-    ("copy-mode-selection-style", "copy-mode-selection-style"),
-    (
-        "copy-mode-current-line-number-style",
-        "copy-mode-current-line-number-style",
-    ),
-    ("copy-mode-line-number-style", "copy-mode-line-number-style"),
-    ("copy-mode-line-numbers", "copy-mode-line-numbers"),
-    ("fill-character", "fill-character"),
-    ("other-pane-height", "other-pane-height"),
-    ("other-pane-width", "other-pane-width"),
-    ("pane-scrollbars", "pane-scrollbars"),
-    ("pane-scrollbars-style", "pane-scrollbars-style"),
-    ("pane-scrollbars-position", "pane-scrollbars-position"),
-    ("popup-style", "popup-style"),
-    ("popup-border-style", "popup-border-style"),
-    ("popup-border-lines", "popup-border-lines"),
-    ("remain-on-exit-format", "remain-on-exit-format"),
-    ("scroll-on-clear", "scroll-on-clear"),
-    ("tiled-layout-max-columns", "tiled-layout-max-columns"),
-    ("tree-mode-preview-format", "tree-mode-preview-format"),
-    ("tree-mode-preview-style", "tree-mode-preview-style"),
-    (
-        "window-pane-current-status-format",
-        "window-pane-current-status-format",
-    ),
-    ("window-pane-status-format", "window-pane-status-format"),
-    ("xterm-keys", "xterm-keys"),
-    ("backspace", "backspace"),
-    ("default-client-command", "default-client-command"),
-    ("editor", "editor"),
-    ("exit-unattached", "exit-unattached"),
-    ("get-clipboard", "get-clipboard"),
-    ("history-file", "history-file"),
-    ("input-buffer-size", "input-buffer-size"),
-    ("message-limit", "message-limit"),
-    ("prompt-history-limit", "prompt-history-limit"),
-    (
-        "variation-selector-always-wide",
-        "variation-selector-always-wide",
-    ),
-];
+/// Every built-in option as `(TOML key, tmux option name)` (spec §5.2, R4),
+/// from the option table, the one list of them. Shared with `import-tmux`
+/// (TI.1) and the tmux front end (FE.1).
+pub fn option_names() -> impl Iterator<Item = (&'static str, &'static str)> {
+    crate::server::dispatch::options::toml_names()
+}
 
 /// TOML key to tmux option name for every list option (TC.2b). A TOML
 /// array of strings sets the whole list, element N from index N.
@@ -232,6 +49,7 @@ pub const LIST_NAMES: &[(&str, &str)] = &[
     ("codepoint-widths", "codepoint-widths"),
     ("pane-colours", "pane-colours"),
     ("user-keys", "user-keys"),
+    ("copy-hint-patterns", "copy-hint-patterns"),
 ];
 
 /// The tmux name of a list option's TOML key.
@@ -252,65 +70,34 @@ pub(crate) enum Ty {
 }
 
 pub(crate) fn toml_type(toml_key: &str) -> Ty {
-    match toml_key {
-        "mouse"
-        | "remain-on-exit"
-        | "restore-on-start"
-        | "start-from-tmux"
-        | "automatic-rename"
-        | "allow-rename"
-        | "focus-events"
-        | "set-titles"
-        | "aggressive-resize"
-        | "renumber-windows"
-        | "synchronize-panes"
-        | "monitor-bell"
-        | "monitor-activity"
-        | "wrap-search"
-        | "graphics"
-        | "focus-follows-mouse"
-        | "exit-empty"
-        | "allow-set-title"
-        | "alternate-screen"
-        | "scroll-on-clear"
-        | "xterm-keys"
-        | "exit-unattached"
-        | "variation-selector-always-wide"
-        | "pane-frames"
-        | "pane-frame-title" => Ty::Bool,
-        "base-index"
-        | "pane-base-index"
-        | "escape-time-ms"
-        | "repeat-time-ms"
-        | "history-limit"
-        | "status.lines"
-        | "status.left-length"
-        | "status.right-length"
-        | "status.interval"
-        | "message.display-time-ms"
-        | "monitor-silence"
-        | "buffer-limit"
-        | "assume-paste-time"
-        | "display-panes-time"
-        | "initial-repeat-time"
-        | "lock-after-time"
-        | "tiled-layout-max-columns"
-        | "pane-gap"
-        | "input-buffer-size"
-        | "message-limit"
-        | "prefix-timeout"
-        | "prompt-history-limit"
-        | "restore-stagger-ms" => Ty::Int,
-        _ => Ty::Str,
+    tmux_name(toml_key)
+        .and_then(crate::server::dispatch::options::toml_ty_of)
+        .unwrap_or(Ty::Str)
+}
+
+/// An option value (tmux form) as the TOML literal a config would write.
+pub(crate) fn literal(toml: &str, value: &str) -> String {
+    match (toml_type(toml), toml, value) {
+        (Ty::Bool, _, v) => (v == "on").to_string(),
+        (Ty::Int, "status.lines", "off") => "0".to_string(),
+        (Ty::Int, "status.lines", "on") => "1".to_string(),
+        (Ty::Int, _, v) => v.to_string(),
+        (Ty::Str, _, v) => crate::util::quote::toml_str(v),
+    }
+}
+
+/// The TOML type of an option, for the config reference.
+pub fn toml_type_name(toml_key: &str) -> &'static str {
+    match toml_type(toml_key) {
+        Ty::Bool => "boolean",
+        Ty::Int => "integer",
+        Ty::Str => "string",
     }
 }
 
 /// The tmux option name for a TOML key.
 pub fn tmux_name(toml_key: &str) -> Option<&'static str> {
-    OPTION_NAMES
-        .iter()
-        .find(|(t, _)| *t == toml_key)
-        .map(|(_, n)| *n)
+    option_names().find(|(t, _)| *t == toml_key).map(|(_, n)| n)
 }
 
 /// Where the config lives. [`Env::from_process`] reads it from the
@@ -472,7 +259,7 @@ pub struct ConfigCommand {
 }
 
 /// A fully loaded and validated config.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Resolved {
     /// Every option by TOML key, in tmux's value form (`on`, `50000`,
     /// `C-b`), already normalized by the option store's validation.
@@ -485,6 +272,12 @@ pub struct Resolved {
     pub sources: BTreeMap<String, ConfigSource>,
     /// `[plugins.<name>]` (T6.3), merged key by key across the layers.
     pub plugins: BTreeMap<String, ConfigPlugin>,
+    /// `[[pack]]`: the plugin manager's specs, in file order.
+    pub pack: Vec<crate::pack::spec::Spec>,
+    /// `[agents]` and `[agents.kinds.<name>]`, merged key by key.
+    pub agents: ConfigAgents,
+    /// `[notify]`, key by key over the defaults.
+    pub notify: NotifyConfig,
     /// Every list option by TOML key (TC.2b), element N at index N.
     pub lists: BTreeMap<&'static str, Vec<String>>,
     /// `[user-options]` (TP.0): global user options by name, `@` included,
@@ -576,18 +369,45 @@ mod tests {
     fn every_builtin_option_has_a_toml_name() {
         for name in builtin_names().chain(grofe_only_names()) {
             assert!(
-                OPTION_NAMES.iter().any(|(_, n)| *n == name),
-                "built-in option {name} has no OPTION_NAMES row"
+                option_names().any(|(_, n)| n == name),
+                "built-in option {name} has no TOML key"
             );
         }
-        for (toml, tmux) in OPTION_NAMES {
+    }
+
+    /// A TOML type must follow the option's `Kind`: booleans for `Bool`,
+    /// integers for `Number`, strings for the rest. A choice option may be
+    /// spelled as a boolean or an integer (`remain-on-exit`, `status.lines`).
+    #[test]
+    fn toml_types_agree_with_option_kinds() {
+        use crate::server::dispatch::options::{Kind, kind_of};
+        for (toml, tmux) in option_names() {
+            let kind = kind_of(tmux).unwrap_or_else(|| panic!("{tmux} has no kind"));
+            let ok = match kind {
+                Kind::Bool => toml_type(toml) == Ty::Bool,
+                Kind::Number { .. } => toml_type(toml) == Ty::Int,
+                Kind::Choice(vs) => match toml_type(toml) {
+                    Ty::Str => true,
+                    Ty::Bool | Ty::Int => vs.contains(&"on") && vs.contains(&"off"),
+                },
+                _ => toml_type(toml) == Ty::Str,
+            };
             assert!(
-                builtin_names()
-                    .chain(grofe_only_names())
-                    .any(|n| n == *tmux),
-                "OPTION_NAMES row {toml} names unknown option {tmux}"
+                ok,
+                "{toml} ({tmux}) is {kind:?}, TOML says {:?}",
+                toml_type(toml)
             );
         }
+    }
+
+    /// Only the two choice options the TOML spells as a boolean or an integer
+    /// carry a type override (`remain-on-exit`, `status.lines`).
+    #[test]
+    fn only_two_options_override_their_toml_type() {
+        assert_eq!(toml_type("remain-on-exit"), Ty::Bool);
+        assert_eq!(toml_type("status.lines"), Ty::Int);
+        assert_eq!(toml_type("set-clipboard"), Ty::Str);
+        assert_eq!(toml_type("status.position"), Ty::Str);
     }
 
     #[test]
@@ -599,10 +419,9 @@ mod tests {
 
     #[test]
     fn toml_names_are_unique() {
-        let all: Vec<&str> = OPTION_NAMES
-            .iter()
-            .chain(LIST_NAMES)
-            .map(|(t, _)| *t)
+        let all: Vec<&str> = option_names()
+            .chain(LIST_NAMES.iter().copied())
+            .map(|(t, _)| t)
             .collect();
         for (i, a) in all.iter().enumerate() {
             assert!(all[i + 1..].iter().all(|b| a != b), "{a} listed twice");
@@ -611,7 +430,9 @@ mod tests {
 
     #[test]
     fn every_list_option_has_a_toml_name() {
-        let lists: Vec<&str> = crate::server::dispatch::options::list_names().collect();
+        let lists: Vec<&str> = crate::server::dispatch::options::list_names()
+            .chain(crate::server::dispatch::options::grofe_only_list_names())
+            .collect();
         let named: Vec<&str> = LIST_NAMES.iter().map(|(_, n)| *n).collect();
         assert_eq!(lists.len(), named.len());
         for name in lists {
@@ -658,5 +479,44 @@ mod tests {
             ..e
         };
         assert_eq!(e.to_string(), "/c/config.toml: bad");
+    }
+
+    #[test]
+    fn scratchpad_history_toml_range_is_0_to_100() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for ok in ["0", "100"] {
+            std::fs::write(&path, format!("scratchpad-history = {ok}\n")).unwrap();
+            let resolved = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+                .expect("in range loads");
+            assert_eq!(resolved.get("scratchpad-history"), Some(ok));
+        }
+        for bad in ["-1", "101"] {
+            std::fs::write(&path, format!("scratchpad-history = {bad}\n")).unwrap();
+            let errors = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+                .expect_err("out of range is refused");
+            assert!(
+                errors.iter().any(|e| e.key == "scratchpad-history"),
+                "{bad}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scratchpad_history_toml_is_int() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "scratchpad-history = 3\n").unwrap();
+        let resolved = load_with_file(&Env::from_vars(None, None), std::slice::from_ref(&path))
+            .expect("an integer loads");
+        assert_eq!(resolved.get("scratchpad-history"), Some("3"));
+
+        std::fs::write(&path, "scratchpad-history = \"x\"\n").unwrap();
+        let errors =
+            load_with_file(&Env::from_vars(None, None), &[path]).expect_err("a string is refused");
+        assert!(
+            errors.iter().any(|e| e.key == "scratchpad-history"),
+            "the error names the key: {errors:?}"
+        );
     }
 }

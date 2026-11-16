@@ -1,6 +1,5 @@
-//! `#{...}` format expansion (spec §4.5). M1 supports a bare variable
-//! reference, `#{name}`, and a ternary, `#{?cond,then,else}`. M2 adds
-//! nesting, `##` escaping, `#{==:a,b}` and the `#{b:var}` modifier.
+//! `#{...}` format expansion (spec §4.5): a bare variable
+//! reference, `#{name}`, a ternary, `#{?cond,then,else}`, nesting, `##` escaping, `#{==:a,b}` and the `#{b:var}` modifier.
 //!
 //! Format-bearing flag values (`-c`, `-F`, `display-message` text) stay
 //! raw strings on the parsed `Command`; dispatch calls [`expand`] against
@@ -10,9 +9,22 @@ use std::cell::{Cell, RefCell};
 
 mod modify;
 mod names;
+pub mod time;
 mod x11;
 
-pub use modify::escape_arg;
+/// A [`FormatVars`] that names nothing, for formats expanded with no context.
+pub struct NoVars;
+
+impl FormatVars for NoVars {
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
+}
+
+/// Terminal columns of one character: 0 for control and combining marks, 2 for wide.
+pub fn char_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
 
 /// Supplies named values to [`expand`]. Implemented by whatever holds the
 /// pane/window/session/client state a format string reaches for
@@ -200,7 +212,7 @@ pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
     if !fmt.contains('%') {
         return expand_after_time(fmt, vars);
     }
-    match modify::strftime_now(fmt, 8192) {
+    match time::strftime_now(fmt, 8192) {
         Some(timed) => expand_after_time(&timed, vars),
         None => String::new(),
     }
@@ -209,8 +221,9 @@ pub fn expand_time(fmt: &str, vars: &dyn FormatVars) -> String {
 /// `display-message -a`: every variable `vars` answers as `name=value`
 /// lines, in the order tmux lists them (a name `vars` has no value for is
 /// left out, as tmux leaves out one whose callback has none).
-// ponytail: grofe answers about 115 of tmux's 195 table entries; the rest
-// are absent from the list rather than empty.
+// ponytail: grofe answers 124 of the 141 names tmux lists for a detached
+// session (`tests/tmux_parity.rs` pins the rest); a name it has no data for
+// is absent from the list rather than empty.
 pub fn all_variables(vars: &dyn FormatVars) -> String {
     let mut out = String::new();
     // A pane in a mode adds its own variables (grofe has a stub for some
@@ -402,7 +415,7 @@ impl<'a> Expander<'a> {
         if self.shared.expand_time.get() && !top_done && fmt.contains('%') {
             // tmux 3.7b: a format too long for strftime's 8 KiB buffer gives
             // nothing.
-            let Some(timed) = modify::strftime_now(fmt, 8192) else {
+            let Some(timed) = time::strftime_now(fmt, 8192) else {
                 self.log(|| "format is too long".to_string());
                 return String::new();
             };
@@ -918,7 +931,7 @@ impl<'a> Expander<'a> {
     /// text that may itself contain nested `#{...}` (mixed-text, like a
     /// `then`/`else` branch), not a bare variable lookup -- so
     /// `#{==:#{window_name},bash}` compares the window's name against the
-    /// literal word `bash`. With no comma, `==:` (M2) passes through and
+    /// literal word `bash`. With no comma, `==:` passes through and
     /// the rest give nothing.
     // ponytail: tmux also drops the rest of the format after a comparison
     // with no comma; grofe drops only that piece.
@@ -982,19 +995,11 @@ fn match_modifier(body: &str) -> Option<(&str, &str)> {
 
 /// `ctime(3)`'s text for `secs`, without the newline.
 fn ctime(secs: i64) -> Option<String> {
-    use nix::libc;
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    // `time_t` is 64 bits wide on every target grofe builds for.
-    let t = secs as libc::time_t;
-    // SAFETY: `tm` is plain old data, so all zeroes is a valid value.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers are to live locals; localtime_r is reentrant.
-    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-        return None;
-    }
+    let tm = time::localtime(secs)?;
     Some(format!(
         "{} {}{:3} {:02}:{:02}:{:02} {}",
         DAYS.get(usize::try_from(tm.tm_wday).ok()?)?,
@@ -1049,12 +1054,13 @@ fn regex_match(pattern: &str, s: &str, icase: bool) -> bool {
     })
 }
 
-/// `fnmatch(3)` with no flags, as tmux's `#{m:}`: `*` and `?` also match
+/// `fnmatch(3)` with no flags, as tmux's `#{m:}`, `terminal-features` and
+/// the event filters and `source-file` globs: `*` and `?` also match
 /// `/` and a leading `.`, `[...]` takes ranges and `!` or `^` to negate,
 /// and a backslash quotes the next character. An unclosed `[` is an
 /// ordinary character, as in glibc. Iterative, backtracking only to the
 /// last `*`, so it takes O(pattern x string) steps whatever the input.
-fn fnmatch(p: &[u8], s: &[u8]) -> bool {
+pub fn fnmatch(p: &[u8], s: &[u8]) -> bool {
     let (mut pi, mut si) = (0, 0);
     // Where to resume after the last `*`: the pattern after it, and the
     // string position it has absorbed up to.
@@ -1200,6 +1206,23 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn char_width_is_columns_for_every_callers_input() {
+        for (c, w) in [
+            ('a', 1),
+            (' ', 1),
+            ('\u{4e2d}', 2),
+            ('\u{1f600}', 2),
+            ('\u{301}', 0),
+            ('\u{0}', 0),
+            ('\n', 0),
+            ('\u{7f}', 0),
+            ('\u{e9}', 1),
+        ] {
+            assert_eq!(char_width(c), w, "{c:?}");
+        }
+    }
+
     struct MapVars(BTreeMap<&'static str, &'static str>);
 
     impl FormatVars for MapVars {
@@ -1309,7 +1332,7 @@ mod tests {
         );
     }
 
-    // --- M2: nesting, escaping, ==:, b: ---
+    // --- nesting, escaping, ==:, b: ---
 
     /// tmux keeps its time flag for the whole status expansion: a format
     /// `#{E:}` expands again is through strftime too, while the outer one,
@@ -1468,7 +1491,7 @@ mod tests {
         }
     }
 
-    /// tmux 3.7b gives nothing for these with no comma; `==:` (M2) keeps
+    /// tmux 3.7b gives nothing for these with no comma; `==:` keeps
     /// passing through (`equality_missing_comma_passes_through`).
     #[test]
     fn comparison_missing_comma_gives_nothing() {
@@ -1539,10 +1562,23 @@ mod tests {
     /// once (a pane can put such text in its title).
     #[test]
     fn fnmatch_does_not_backtrack_exponentially() {
-        let pattern = "*a*a*a*a*a*a*a*a*a*a*b";
-        let s = "a".repeat(30);
         let start = crate::thread_cpu_time();
-        assert!(!fnmatch(pattern.as_bytes(), s.as_bytes()));
+        // The `#{m:}` shape, then each former caller's: event filters
+        // (`*` runs), `terminal-features` (`*` and `?`), `source-file`
+        // globs (sets between `*`).
+        for (pattern, unit) in [
+            ("*a*a*a*a*a*a*a*a*a*a*b", "a"),
+            ("*-a*-a*-a*-a*-a*-a*-a*-a*-a*-a*-b", "-a"),
+            ("?*a?*a?*a?*a?*a?*a?*a?*a?*a?*a?*b", "aa"),
+            (
+                "*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*[a-b]*b.conf",
+                "a",
+            ),
+        ] {
+            let s = unit.repeat(30);
+            assert!(!fnmatch(pattern.as_bytes(), s.as_bytes()), "{pattern}");
+        }
+        let (pattern, s) = ("*a*a*a*a*a*a*a*a*a*a*b", "a".repeat(30));
         assert!(fnmatch(pattern.as_bytes(), format!("{s}b").as_bytes()));
         let took = crate::thread_cpu_time() - start;
         assert!(took < std::time::Duration::from_millis(50), "{took:?}");
@@ -1556,6 +1592,33 @@ mod tests {
         // Cached patterns keep matching.
         for _ in 0..3 {
             assert_eq!(expand("#{m/r:^a+$,aaa}", &vars(&[])), "1");
+        }
+    }
+
+    /// `terminal-features` and `#{m:}` are fnmatch(3) in tmux: the same
+    /// answers as libc on awkward sets and escapes. An unterminated `[` is
+    /// left out: glibc and musl match it literally, as grofe does, macOS libc
+    /// does not.
+    #[test]
+    fn fnmatch_agrees_with_libc() {
+        let pats = [
+            "[]", "[]a]", "[!]", "[!]a]", "[a-]", "[-a]", "[a-c]", "[c-a]", "[!a-c]", "[^a]", "?",
+            "??", "*?", "?*", "a\\", "\\a", "\\[a]", "x[[]y", "*[]", "[*]", "[?]", "a*[bc]*d", "",
+            "*", "**", "xterm*", "[xy]term",
+        ];
+        let strs = [
+            "", "a", "b", "[", "]", "ab", "a[", "[a", "[a]", "x[y", "xterm", "yterm", "?", "*",
+            "-", "abcd", "c",
+        ];
+        for p in pats {
+            for s in strs {
+                let (cp, cs) = (
+                    std::ffi::CString::new(p).expect("no nul"),
+                    std::ffi::CString::new(s).expect("no nul"),
+                );
+                let want = unsafe { nix::libc::fnmatch(cp.as_ptr(), cs.as_ptr(), 0) } == 0;
+                assert_eq!(fnmatch(p.as_bytes(), s.as_bytes()), want, "{p:?} ~ {s:?}");
+            }
         }
     }
 
@@ -1583,6 +1646,29 @@ mod tests {
             ("a*b*c", "axxbyy", false),
             ("*[0-9]", "win3", true),
             ("\\*a", "*a", true),
+            // Event filters (`events.rs`), `*` only.
+            ("option-*", "option-changed", true),
+            ("*", "pane-exited", true),
+            ("pane-*ed", "pane-exited", true),
+            ("*-exited", "pane-exited", true),
+            ("window-*", "pane-exited", false),
+            ("pane-", "pane-exited", false),
+            ("pane-exited", "pane-exited", true),
+            // `terminal-features` patterns (`clients.rs`).
+            ("xterm*", "xterm-256color", true),
+            ("*", "anything", true),
+            ("screen?256color", "screen-256color", true),
+            ("foot", "foot", true),
+            ("foot", "foot-extra", false),
+            ("xterm*", "screen", false),
+            ("a?", "a", false),
+            // `source-file` globs (`import_tmux.rs`).
+            ("[1-9]*.conf", "20-status.conf", true),
+            ("[1-9]*.conf", "00-core.conf", false),
+            ("*.conf", ".hidden.conf", true),
+            ("?-x.conf", "1-x.conf", true),
+            ("[!0]*.conf", "00-core.conf", false),
+            ("[ab", "[ab", true),
         ] {
             assert_eq!(
                 fnmatch(pattern.as_bytes(), s.as_bytes()),

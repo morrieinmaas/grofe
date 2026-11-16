@@ -253,7 +253,8 @@ pub fn load_buffer(state: &mut State, ctx: &ClientCtx, c: LoadBuffer) -> Result<
     if c.path == "-" {
         // ponytail: a binding has no CLI stdin, so it loads nothing; tmux
         // reads the server's own.
-        let data = state
+        let data = ctx
+            .request
             .cli_io
             .as_ref()
             .and_then(|io| io.stdin.clone())
@@ -319,7 +320,13 @@ pub fn save_buffer(state: &mut State, ctx: &ClientCtx, c: SaveBuffer) -> Result<
     }
     let data = b.data.clone();
     let path = cli_path(ctx, &c.path);
-    let mode = 0o644 & !state.cli_io.as_ref().and_then(|io| io.umask).unwrap_or(0);
+    let mode = 0o644
+        & !ctx
+            .request
+            .cli_io
+            .as_ref()
+            .and_then(|io| io.umask)
+            .unwrap_or(0);
     let new = std::fs::symlink_metadata(&path).is_err();
     let mut options = OpenOptions::new();
     options.create(true).mode(mode).custom_flags(O_NONBLOCK);

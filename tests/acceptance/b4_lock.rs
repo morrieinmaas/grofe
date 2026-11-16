@@ -5,7 +5,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use std::thread::sleep;
 use std::time::Duration;
 
 use common::TestServer;
@@ -47,7 +46,7 @@ fn a_prompt_left_open_takes_no_keys_while_the_client_is_locked() {
     srv.cmd(&["lock-client"]).expect("lock-client");
     a.wait_for("LOCKED");
     a.send("set -g @pwned 1\r");
-    sleep(Duration::from_millis(500));
+    common::quiet_period(Duration::from_millis(500));
     let got = srv
         .cmd(&["show-options", "-gqv", "@pwned"])
         .expect("show-options");

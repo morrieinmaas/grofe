@@ -23,11 +23,33 @@ impl PrivateTmux<'_> {
             .env("TMUX_TMPDIR", self.0)
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
+            .env_remove("GROFE")
+            .env_remove("GROFE_PANE")
             .args(args)
             .stdout(Stdio::null())
             .status()
             .is_ok_and(|s| s.success());
         assert!(ok, "tmux {args:?}");
+    }
+
+    /// Waits until every pane's shell has moved into `prefix`: on Linux a
+    /// pane's cwd is the server's own until its child has done `chdir`.
+    fn wait_cwds(&self, prefix: &str) {
+        for _ in 0..200 {
+            let out = Command::new("tmux")
+                .env("TMUX_TMPDIR", self.0)
+                .env_remove("TMUX")
+                .env_remove("TMUX_PANE")
+                .args(["list-panes", "-a", "-F", "#{pane_current_path}"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            if !out.is_empty() && out.lines().all(|l| l.starts_with(prefix)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("tmux panes never reached {prefix}");
     }
 }
 
@@ -36,10 +58,21 @@ impl Drop for PrivateTmux<'_> {
         let _ = Command::new("tmux")
             .env("TMUX_TMPDIR", self.0)
             .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .env_remove("GROFE")
+            .env_remove("GROFE_PANE")
             .args(["kill-server"])
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// The first `PATH` directory whose `tmux` is not a link to a grofe binary.
+fn real_tmux_dir() -> Option<std::path::PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?).find(|dir| {
+        fs::canonicalize(dir.join("tmux"))
+            .is_ok_and(|exe| exe.file_name().is_some_and(|n| n != "grofe"))
+    })
 }
 
 fn ok(srv: &TestServer, args: &[&str]) -> String {
@@ -48,10 +81,16 @@ fn ok(srv: &TestServer, args: &[&str]) -> String {
 
 #[test]
 fn an_empty_server_starts_with_the_running_tmux_sessions() {
-    if Command::new("tmux").arg("-V").output().is_err() {
-        eprintln!("skipping: no tmux");
+    // A real tmux, never a `tmux` link to grofe: on a machine where grofe
+    // answers to `tmux` (and in every grofe pane), the cleanup's
+    // `kill-server` would otherwise stop the user's own grofe server.
+    let Some(dir) = real_tmux_dir() else {
+        eprintln!("skipping: no real tmux on PATH");
         return;
-    }
+    };
+    let path = std::env::var("PATH").unwrap_or_default();
+    // SAFETY: this file's only test; nothing else reads the environment.
+    unsafe { std::env::set_var("PATH", format!("{}:{path}", dir.display())) };
     let tmpdir = tempfile::Builder::new()
         .prefix("gt")
         .tempdir_in("/tmp")
@@ -79,6 +118,8 @@ fn an_empty_server_starts_with_the_running_tmux_sessions() {
     tmux.run(&["split-window", "-h", "-t", "alpha", "-c", b]);
     tmux.run(&["new-window", "-d", "-t", "alpha", "-n", "second", "-c", b]);
     tmux.run(&["new-session", "-d", "-s", "beta", "-c", a]);
+    let real = fs::canonicalize(work.path()).expect("canonicalize");
+    tmux.wait_cwds(real.to_str().expect("utf8"));
 
     // SAFETY: this file's only test; nothing else reads the environment.
     unsafe { std::env::set_var("TMUX_TMPDIR", tmpdir.path()) };

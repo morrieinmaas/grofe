@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use schema::Plan;
 
+use crate::util::quote;
+
 pub use up::{UpOptions, UpReport, up, watch};
 
 /// What the layout commands need from the running program and server.
@@ -280,11 +282,6 @@ pub fn entries(dirs: &Dirs) -> Result<Vec<Entry>, String> {
     Ok(found)
 }
 
-/// Single-quotes `s` for a POSIX shell.
-pub fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// The `display-menu` request for the valid layouts: each item runs `up`.
 fn pick_menu(entries: &[Entry], me: &[String], dirs: &Dirs) -> Result<Vec<String>, String> {
     let usable: Vec<&Entry> = entries.iter().filter(|e| e.sessions.is_ok()).collect();
@@ -293,7 +290,7 @@ fn pick_menu(entries: &[Entry], me: &[String], dirs: &Dirs) -> Result<Vec<String
     }
     let keys = "123456789abcdefghijklmnopqrstuvwxyz";
     let mut argv = words(&["display-menu", "-T", "Layouts", "-x", "C", "-y", "C"]);
-    let me: Vec<String> = me.iter().map(|w| shell_quote(w)).collect();
+    let me: Vec<String> = me.iter().map(|w| quote::sh(w)).collect();
     for (e, key) in usable.iter().zip(keys.chars()) {
         let sessions = e
             .sessions
@@ -302,10 +299,10 @@ fn pick_menu(entries: &[Entry], me: &[String], dirs: &Dirs) -> Result<Vec<String
             .unwrap_or_default();
         argv.push(format!("{} ({sessions})", e.name).replace('#', "##"));
         argv.push(key.to_string());
-        let up = format!("{} layout up -- {}", me.join(" "), shell_quote(&e.name));
+        let up = format!("{} layout up -- {}", me.join(" "), quote::sh(&e.name));
         argv.push(format!(
             "run-shell -b {}",
-            shell_quote(&up.replace('#', "##"))
+            quote::sh(&up.replace('#', "##"))
         ));
     }
     Ok(argv)

@@ -353,6 +353,7 @@ fn ctx() -> ClientCtx {
         env: Vec::new(),
         client: None,
         dialect: Dialect::Tmux,
+        request: Default::default(),
     }
 }
 
@@ -493,10 +494,7 @@ fn every_corpus_option_is_in_the_option_table() {
     let mut names = 0;
     for row in table.lines().filter(|l| l.starts_with("| `")) {
         let name = row.split('`').nth(1).unwrap().trim_end_matches("[N]");
-        assert!(
-            tmux::option_name(name).is_some(),
-            "{name} is not in OPTION_NAMES"
-        );
+        assert!(tmux::option_name(name).is_some(), "{name} is not an option");
         names += 1;
     }
     assert!(names >= 42, "only {names} options in the coverage table");

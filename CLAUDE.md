@@ -1,6 +1,6 @@
 # grofe: agent conventions
 
-Conventions for agents implementing tasks from `docs/plans/2026-09-23-milestones.md`.
+Conventions for agents implementing tasks from `docs/archive/plans/2026-09-23-milestones.md`.
 
 ## Before starting a task
 
@@ -45,6 +45,18 @@ and the rest would still change the live server.
 - No `unwrap()`/`expect()` on socket or pty paths in non-test code.
 - Keep it simple: no speculative abstractions. If a deliberate simplification
   is made, mark it with a `// ponytail:` comment naming the ceiling it hits.
+
+## Docs ship with the feature
+
+A change a user can see is not done until its docs are, in the same PR:
+
+- The book (`docs/book/src/`): update the page for that area, or add one and
+  list it in `SUMMARY.md`.
+- The README, when the change alters what grofe is or how it is installed.
+- New or changed options: write the option's `doc` line and regenerate the
+  options reference (`just docs`); a test fails if either is missing.
+- Changed visuals: `just screenshots`.
+- The landing page (`site/index.html`), when a headline feature is added.
 
 ## Commits
 

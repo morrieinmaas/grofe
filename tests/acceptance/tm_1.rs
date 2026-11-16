@@ -13,7 +13,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -176,13 +176,13 @@ pub fn replay(name: &str) {
                     (stdout, out.stderr, out.status.code().unwrap_or(-1))
                 };
                 if std::mem::take(&mut typed) {
-                    let _ = wait_until(|| run() == want, CMD_TIMEOUT);
+                    let _ = try_wait_until(|| run() == want, CMD_TIMEOUT);
                 }
                 assert_eq!(run(), want, "{name}: {line}");
             }
             Step::Client(cols, rows) => {
                 let a = Harness::spawn_attach_with_env(srv.command(), "main", &[], cols, rows);
-                wait_until(
+                try_wait_until(
                     || !srv.cmd(&["list-clients"]).unwrap_or_default().is_empty(),
                     CMD_TIMEOUT,
                 )
@@ -310,7 +310,7 @@ fn start() -> TestServer {
         &fixture_cmd(),
     ])
     .expect("new-session");
-    wait_until(|| pane_var(&srv, "#{history_size}") == "500", CMD_TIMEOUT).expect("fixture");
+    try_wait_until(|| pane_var(&srv, "#{history_size}") == "500", CMD_TIMEOUT).expect("fixture");
     srv
 }
 
@@ -325,7 +325,7 @@ fn output_arriving_in_copy_mode_does_not_move_the_view() {
     a.send(b"\x02[");
     a.wait_for("[0/500]");
     a.send(b"k");
-    wait_until(|| readout(&srv) == "16,22,0", CMD_TIMEOUT).expect("k");
+    try_wait_until(|| readout(&srv) == "16,22,0", CMD_TIMEOUT).expect("k");
     let before = a.text();
     srv.cmd(&[
         "run-shell",
@@ -334,7 +334,7 @@ fn output_arriving_in_copy_mode_does_not_move_the_view() {
         "seq 1 50 | sed 's/^/new /' > #{pane_tty}",
     ])
     .unwrap();
-    wait_until(|| pane_var(&srv, "#{history_size}") == "550", CMD_TIMEOUT)
+    try_wait_until(|| pane_var(&srv, "#{history_size}") == "550", CMD_TIMEOUT)
         .expect("the 50 lines arrive");
     assert_eq!(readout(&srv), "16,22,0");
     assert_eq!(a.text(), before, "the view moved");
@@ -354,7 +354,7 @@ fn prefix_ppage_enters_a_page_up() {
     a.wait_for("[22/500]");
     assert_eq!(pane_var(&srv, "#{pane_in_mode} #{scroll_position}"), "1 22");
     a.send(b"q");
-    wait_until(|| pane_var(&srv, "#{pane_in_mode}") == "0", CMD_TIMEOUT).unwrap();
+    try_wait_until(|| pane_var(&srv, "#{pane_in_mode}") == "0", CMD_TIMEOUT).unwrap();
     a.send(b"\x02[");
     a.wait_for("[0/500]");
     assert_eq!(readout(&srv), "0,23,0");

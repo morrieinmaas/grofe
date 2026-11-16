@@ -25,6 +25,7 @@ const RICH: Caps = Caps {
     kitty_graphics: false,
     sixel: false,
     cell_px: None,
+    colours: None,
 };
 const PLAIN: Caps = Caps {
     truecolor: false,
@@ -34,6 +35,7 @@ const PLAIN: Caps = Caps {
     kitty_graphics: false,
     sixel: false,
     cell_px: None,
+    colours: None,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -722,6 +724,7 @@ mod randomized {
         kitty_graphics: false,
         sixel: false,
         cell_px: None,
+        colours: None,
     };
 
     const KEEP: CellFlags = CellFlags::BOLD

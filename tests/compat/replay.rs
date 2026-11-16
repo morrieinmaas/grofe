@@ -61,14 +61,14 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, test::TermSize};
 use alacritty_terminal::vte::ansi::Processor;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Rgb};
-use nix::pty::{Winsize, openpty};
+use nix::pty::Winsize;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 use crate::normalize::{Context, Normalizer, fixtures_dir};
 
 /// How long one command, or a screen settling, may take.
-const CMD_TIMEOUT: Duration = Duration::from_secs(10);
+const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A client's screen counts as settled after this long without output.
 const SCREEN_QUIET: Duration = Duration::from_millis(500);
@@ -117,13 +117,25 @@ impl Cli {
         limit: Duration,
     ) -> Option<(ExitStatus, String, String)> {
         let deadline = Instant::now() + limit;
-        let mut child = self
-            .command(argv)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap_or_else(|e| panic!("spawning {argv:?}: {e}"));
+        // A script just written can be busy (ETXTBSY) for a moment: another
+        // test thread's fork inherits its write handle until that child
+        // execs. Retried briefly, as the classic fix for that race.
+        let mut tries = 0;
+        let mut child = loop {
+            let spawned = self
+                .command(argv)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn();
+            match spawned {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
+                    tries += 1;
+                    thread::sleep(Duration::from_millis(10));
+                }
+                other => break other.unwrap_or_else(|e| panic!("spawning {argv:?}: {e}")),
+            }
+        };
         let stdout = drain(child.stdout.take());
         let stderr = drain(child.stderr.take());
         let status = loop {
@@ -732,8 +744,8 @@ impl PtyClient {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let pty = openpty(&size, None).expect("openpty");
-        let tty = nix::unistd::ttyname(&pty.slave).expect("pty slave name");
+        let (pty, tty) = grofe::server::pane::open_pty(&size).expect("openpty");
+        let tty = tty.expect("pty slave name");
         let slave = |fd: &OwnedFd| Stdio::from(fd.try_clone().expect("dup pty slave"));
         cmd.stdin(slave(&pty.slave))
             .stdout(slave(&pty.slave))

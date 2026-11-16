@@ -510,7 +510,7 @@ fn attached(config: &str) -> (TestServer, Harness) {
             "40",
             "-y",
             "12",
-            "exec cat",
+            "exec /bin/cat",
         ],
         &[
             "set",
@@ -519,8 +519,8 @@ fn attached(config: &str) -> (TestServer, Harness) {
             "#{pane_index}: #{pane_current_command}",
         ],
         &["set", "-g", "status", "off"],
-        &["split-window", "-h", "-t", "f", "exec cat"],
-        &["split-window", "-v", "-t", "f:.1", "exec cat"],
+        &["split-window", "-h", "-t", "f", "exec /bin/cat"],
+        &["split-window", "-v", "-t", "f:.1", "exec /bin/cat"],
     ];
     for args in cmds {
         srv.cmd(args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
@@ -586,6 +586,10 @@ fn tmux_identity_with_frames_on_keeps_the_stock_title_buttons() {
     srv.cmd(&["set", "-gu", "pane-border-format"])
         .expect("default format");
     srv.cmd(&["set", "-g", "mouse", "on"]).expect("mouse");
+    // The default title is the host name, long enough on some hosts to push
+    // the buttons out of the frame, as in tmux: a short one keeps them.
+    srv.cmd(&["select-pane", "-t", "f:.1", "-T", "t"])
+        .expect("title");
     // Zoomed, so the one frame is wide enough for the whole title.
     srv.cmd(&["resize-pane", "-Z", "-t", "f:.1"]).expect("zoom");
     client.wait_for("[u][x]");

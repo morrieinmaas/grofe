@@ -12,8 +12,11 @@ use toml::de::{DeString, DeTable, DeValue};
 use super::provenance::tilde;
 use super::{
     ConfigCommand, ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer,
-    OPTION_NAMES, Provenance, Resolved, Source, Ty, closest, tmux_name, toml_type,
+    Provenance, Resolved, Source, Ty, closest, option_names, tmux_name, toml_type,
 };
+pub mod agents;
+pub mod notify;
+pub mod pack;
 pub mod plugins;
 
 use crate::cmd;
@@ -94,6 +97,9 @@ struct Loader {
     hooks: BTreeMap<String, ConfigHook>,
     sources: BTreeMap<String, ConfigSource>,
     plugins: plugins::Merge,
+    pack: Vec<crate::pack::spec::Spec>,
+    agents: agents::Merge,
+    notify: notify::Merge,
     user_options: BTreeMap<String, String>,
     environment: Vec<(String, String)>,
     load_commands: Vec<ConfigCommand>,
@@ -147,9 +153,9 @@ impl Loader {
         let store = Options::new(false);
         let mut options = BTreeMap::new();
         let mut provenance = Provenance::default();
-        for (toml, tmux) in OPTION_NAMES.iter().filter(|_| defaults) {
+        for (toml, tmux) in option_names().filter(|_| defaults) {
             if let Some(e) = store.get(Owner::Global, tmux) {
-                options.insert(*toml, e.value.clone());
+                options.insert(toml, e.value.clone());
                 provenance.set(toml, Source::defaults());
             }
         }
@@ -170,6 +176,9 @@ impl Loader {
             hooks: BTreeMap::new(),
             sources: BTreeMap::new(),
             plugins: plugins::Merge::default(),
+            pack: Vec::new(),
+            agents: agents::Merge::default(),
+            notify: notify::Merge::default(),
             user_options: BTreeMap::new(),
             environment: Vec::new(),
             load_commands: Vec::new(),
@@ -191,6 +200,9 @@ impl Loader {
             hooks: self.hooks,
             sources: self.sources,
             plugins: self.plugins.resolved(),
+            pack: self.pack,
+            agents: self.agents.resolved(),
+            notify: self.notify.resolved(),
             user_options: self.user_options,
             environment: self.environment,
             load_commands: self.load_commands,
@@ -270,6 +282,9 @@ impl Loader {
                 "keys" => self.key_tables(&f, line, v.get_ref()),
                 "hooks" => self.hooks(&f, line, v.get_ref()),
                 "plugins" => self.plugins(&f, line, v.get_ref()),
+                "pack" => self.pack(&f, line, v.get_ref()),
+                "agents" => self.agents(&f, line, v.get_ref()),
+                "notify" => self.notify(&f, line, v.get_ref()),
                 "user-options" => self.user_options(&f, line, v.get_ref()),
                 "environment" => self.environment(&f, line, v.get_ref()),
                 "load-commands" => self.load_commands(&f, line, v.get_ref()),
@@ -397,7 +412,7 @@ impl Loader {
         if full == "status.sources" {
             return self.sources(f, line, v.get_ref());
         }
-        if let Some(toml) = OPTION_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
+        if let Some(toml) = option_names().map(|(t, _)| t).find(|t| *t == full) {
             return self.set_option(f, line, toml, v.get_ref());
         }
         if let Some(toml) = LIST_NAMES.iter().map(|(t, _)| *t).find(|t| *t == full) {
@@ -411,16 +426,18 @@ impl Loader {
             }
             _ => {
                 let mut msg = "unknown key".to_string();
-                let known = OPTION_NAMES
-                    .iter()
-                    .chain(LIST_NAMES)
-                    .map(|(t, _)| *t)
+                let known = option_names()
+                    .chain(LIST_NAMES.iter().copied())
+                    .map(|(t, _)| t)
                     .chain([
                         "requires",
                         "source-file",
                         "keys",
                         "hooks",
                         "plugins",
+                        "pack",
+                        "agents",
+                        "notify",
                         "status.sources",
                         "user-options",
                         "environment",
@@ -797,9 +814,7 @@ fn join(prefix: &str, key: &str) -> String {
 
 /// Whether `key` is a table that holds options (`status`, `pane-border`).
 fn is_section(key: &str) -> bool {
-    OPTION_NAMES
-        .iter()
-        .any(|(t, _)| t.strip_prefix(key).is_some_and(|r| r.starts_with('.')))
+    option_names().any(|(t, _)| t.strip_prefix(key).is_some_and(|r| r.starts_with('.')))
 }
 
 /// The path with symlinks and `..` resolved, for cycle detection; the path

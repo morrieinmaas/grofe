@@ -28,7 +28,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor, Rgb};
 
-use common::{CMD_TIMEOUT, TestServer, wait_until};
+use common::{CMD_TIMEOUT, TestServer, try_wait_until};
 
 use crate::harness::Harness;
 
@@ -223,14 +223,14 @@ fn replay_with(name: &str, differs: &[(&str, &str)]) {
                     (stdout, out.stderr, out.status.code().unwrap_or(-1))
                 };
                 if std::mem::take(&mut typed) {
-                    let _ = wait_until(|| run() == want, CMD_TIMEOUT);
+                    let _ = try_wait_until(|| run() == want, CMD_TIMEOUT);
                 }
                 assert_eq!(run(), want, "{name}: {line} (after {previous})");
                 previous = line;
             }
             Step::Client(cols, rows) => {
                 let a = Harness::spawn_attach_with_env(srv.command(), "main", &[], cols, rows);
-                wait_until(
+                try_wait_until(
                     || !srv.cmd(&["list-clients"]).unwrap_or_default().is_empty(),
                     CMD_TIMEOUT,
                 )
@@ -556,7 +556,7 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
         "seq -f 'line %g of the history, some text to search' 1 50100; exec sleep 100000",
     ])
     .unwrap();
-    wait_until(
+    try_wait_until(
         || display(&srv, "big", "#{history_size}") == "50000",
         Duration::from_secs(30),
     )
@@ -642,12 +642,12 @@ fn commands_behind_a_search_run_in_order() {
         "seq -f 'foo%g' 1 3000; exec sleep 100000",
     ])
     .unwrap();
-    wait_until(
+    try_wait_until(
         || display(&srv, "main", "#{history_size}") != "0",
         CMD_TIMEOUT,
     )
     .unwrap();
-    wait_until(|| srv.capture("main").contains("foo3000"), CMD_TIMEOUT).unwrap();
+    try_wait_until(|| srv.capture("main").contains("foo3000"), CMD_TIMEOUT).unwrap();
     srv.cmd(&["copy-mode", "-t", "main"]).unwrap();
     let out = srv
         .cmd(&[
@@ -712,7 +712,7 @@ fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
         "seq -f 'line %g of the history' 1 50100; exec sleep 100000",
     ])
     .unwrap();
-    wait_until(
+    try_wait_until(
         || display(&srv, "big", "#{history_size}") == "50000",
         Duration::from_secs(30),
     )
@@ -742,7 +742,7 @@ fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
         ]);
         std::thread::spawn(move || cmd.output().expect("search"))
     };
-    wait_until(|| display(&srv, "big", "#{@started}") == "1", CMD_TIMEOUT)
+    try_wait_until(|| display(&srv, "big", "#{@started}") == "1", CMD_TIMEOUT)
         .expect("the search launched");
     let raced = !search.is_finished();
     srv.cmd(&[
@@ -753,7 +753,7 @@ fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
         "printf 'after one\\nafter two\\n'; exec sleep 100000",
     ])
     .unwrap();
-    wait_until(|| srv.capture("big").contains("after two"), CMD_TIMEOUT).unwrap();
+    try_wait_until(|| srv.capture("big").contains("after two"), CMD_TIMEOUT).unwrap();
     srv.cmd(&["copy-mode", "-t", "big"]).unwrap();
     srv.cmd(&["send-keys", "-t", "big", "-X", "search-backward", "after"])
         .unwrap();
