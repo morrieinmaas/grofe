@@ -851,6 +851,51 @@ fn apply_config_copies_agent_surface_tables() {
     assert_eq!(state.agents_grid.tile_width, 33);
 }
 
+/// The pinned tmux text (`tmux-options.txt`) is a second source for tmux's
+/// option names and spelled defaults; the options table must agree with it.
+/// Its numbers come from the compat tests' own config, so only names and
+/// spelled formats are compared, not the `tmux_default` column's numbers.
+#[test]
+fn the_options_table_agrees_with_the_pinned_tmux_text() {
+    use crate::compat::tmux::formats::{Table, tmux_default, tmux_table};
+    // Options grofe has that tmux 3.7b has not, without being `GROFE_ONLY`
+    // (tmux's CLI would call them invalid; the dialect shows them).
+    let not_tmux = [
+        "compat-identity",
+        "graphics",
+        "restore-on-start",
+        "restore-stagger-ms",
+        "resurrect-dir",
+        "start-from-tmux",
+    ];
+    let pinned: BTreeSet<&str> = [Table::Session, Table::Window, Table::Server]
+        .into_iter()
+        .flat_map(tmux_table)
+        .map(|(n, _)| n.split('[').next().unwrap_or(n))
+        .collect();
+    let ours: BTreeSet<&str> = builtin_names().chain(list_names()).collect();
+    for name in &pinned {
+        assert!(ours.contains(name), "tmux has {name}, the table does not");
+    }
+    for name in &ours {
+        assert_eq!(
+            pinned.contains(name),
+            !not_tmux.contains(name),
+            "{name} against the pinned tmux tables"
+        );
+    }
+    for b in BUILTINS
+        .iter()
+        .filter(|b| b.tmux_default.is_some() && !is_grofe_only(b.name))
+    {
+        assert!(pinned.contains(b.name), "{} is not tmux's", b.name);
+    }
+    for name in SPELLED_DEFAULTS {
+        let spelled = tmux_default(name).or_else(|| tmux_default(&format!("{name}[0]")));
+        assert!(spelled.is_some(), "{name} has no pinned tmux text");
+    }
+}
+
 /// Every built-in option, scalar or list, says what it does: the
 /// generated reference prints it.
 #[test]
