@@ -743,6 +743,15 @@ fn session_gone(err: &str) -> bool {
         || err.starts_with("server closed the connection")
 }
 
+/// Whether a request error means the server went away before replying: a
+/// connection queued on an exiting server's listener ends as EOF on macOS
+/// and as a reset on Linux once the listener closes.
+fn server_left(err: &str) -> bool {
+    err.starts_with("sending request: ")
+        || err.starts_with("server closed the connection")
+        || (err.starts_with("reading reply: ") && err.contains("Connection reset"))
+}
+
 /// Sends `argv` as one control-mode request and exits with its status.
 fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     if let Err(e) = control_hello(socket) {
@@ -768,15 +777,10 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     // there any more, say so as for any other command; the request is
     // never sent again, so it cannot run twice.
     let reply = match request(stream, socket, argv) {
-        Err(e)
-            if e.starts_with("sending request: ")
-                || e.starts_with("server closed the connection") =>
-        {
-            match connect(socket) {
-                Err(gone) if no_server(&gone) => return fail(&gone),
-                _ => Err(e),
-            }
-        }
+        Err(e) if server_left(&e) => match connect(socket) {
+            Err(gone) if no_server(&gone) => return fail(&gone),
+            _ => Err(e),
+        },
         reply => reply,
     };
     match reply {
@@ -1559,6 +1563,17 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_reset_reply_from_an_exiting_server_counts_as_it_leaving() {
+        assert!(server_left(
+            "reading reply: Connection reset by peer (os error 104)"
+        ));
+        assert!(server_left("server closed the connection without replying"));
+        assert!(server_left("sending request: Broken pipe (os error 32)"));
+        assert!(!server_left("reading reply: Interrupted system call"));
+        assert!(!server_left("bad reply from server: EOF"));
     }
 
     #[test]

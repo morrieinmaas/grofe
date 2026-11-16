@@ -256,7 +256,10 @@ fn hook_calls(os: &Opensessions) -> String {
     let rig = &os.rig;
     rig.start("main");
     let mut a = rig.attach("main");
-    rig.t(&[
+    // The script exits with its last command's status: a `curl -m 0.2`
+    // POST that times out on a loaded machine, under tmux as here. The
+    // server it starts first is what matters, and `wait_hooks` checks it.
+    let _ = rig.try_t(&[
         "run-shell",
         &format!("sh '{}/ensure-sidebar.sh'", scripts(rig)),
     ]);
