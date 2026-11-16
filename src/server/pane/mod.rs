@@ -1492,11 +1492,22 @@ fn cursor_state(term: &Term<Listener>) -> CursorState {
     }
 }
 
-/// The environment a pane's child gets: the spawn env, a UTF-8 locale if
-/// it sets none, then grofe's variables.
+/// Variables a pane's child never inherits from the server: a Claude Code
+/// keeps an inherited entrypoint, so a server started from a `claude -p`
+/// would make every Claude in its panes look like an SDK helper, whose
+/// reports `agent report --hook claude` drops.
+const NOT_INHERITED: [&str; 1] = ["CLAUDE_CODE_ENTRYPOINT"];
+
+/// The environment a pane's child gets: the spawn env (less
+/// [`NOT_INHERITED`]), a UTF-8 locale if it sets none, then grofe's
+/// variables.
 fn child_env(spec: &PaneSpawn) -> Vec<(OsString, OsString)> {
-    let mut env: Vec<(OsString, OsString)> =
-        spec.env.iter().map(|(k, v)| (k.into(), v.into())).collect();
+    let mut env: Vec<(OsString, OsString)> = spec
+        .env
+        .iter()
+        .filter(|(k, _)| !NOT_INHERITED.contains(&k.as_str()))
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
     let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|k| {
         let set = |v: &str| !v.is_empty();
         spec.env
@@ -1827,6 +1838,18 @@ mod tests {
             .map(|(_, v)| v.to_str().unwrap());
         assert_eq!(term, Some("a-term-that-is-not-the-live-cache"));
         assert_ne!(term, Some(inner_term()));
+    }
+
+    #[test]
+    fn a_pane_does_not_inherit_a_claude_entrypoint() {
+        let mut spec = spec_with_term("xterm-256color");
+        spec.env
+            .push(("CLAUDE_CODE_ENTRYPOINT".into(), "sdk-cli".into()));
+        spec.env.push(("KEPT".into(), "1".into()));
+        let env = child_env(&spec);
+        let has = |name: &str| env.iter().any(|(k, _)| k.to_str() == Some(name));
+        assert!(!has("CLAUDE_CODE_ENTRYPOINT"));
+        assert!(has("KEPT"));
     }
 
     fn spec_for(argv: &[&str]) -> PaneSpawn {

@@ -176,7 +176,10 @@ that directory is used.
   `~/.config/opencode/plugins/grofe.js`. `pi` needs no hooks; grofe
   recognises it by name. `--dry-run` shows the change and writes nothing,
   `--yes` skips the question, and `--remove` takes out exactly what it
-  added.
+  added. A Claude Code started through its SDK or `claude -p` (a memory
+  hook's helper, say) inside a pane is not that pane's agent: its hook
+  reports are ignored, so it cannot replace the pane's state or the
+  session grofe resumes there.
 - **Reports from anything:** a script can call
   `grofe agent report <state> [--kind k] [--msg text] [--blocked permission|question|auth]`
   from inside a grofe pane. Outside one, or with no server, it does nothing.
