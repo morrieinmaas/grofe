@@ -73,6 +73,7 @@ Beyond these options, a config file can hold `[[bind]]` key bindings, hooks,
 | `fill-character` | string | `""` | `fill-character` |
 | `focus-events` | boolean | `true` | `focus-events` |
 | `focus-follows-mouse` | boolean | `false` | `focus-follows-mouse` |
+| `forward-browser` | boolean | `true` | `forward-browser` |
 | `get-clipboard` | string | `"buffer"` | `get-clipboard` |
 | `graphics` | boolean | `false` | `graphics` |
 | `history-file` | string | `""` | `history-file` |
@@ -146,6 +147,7 @@ Beyond these options, a config file can hold `[[bind]]` key bindings, hooks,
 | `set-titles` | boolean | `false` | `set-titles` |
 | `set-titles-string` | string | `"#{session_name}:#{window_index}:#{window_name} - "#{pane_title}" #{session_alerts}"` | `set-titles-string` |
 | `silence-action` | string | `"other"` | `silence-action` |
+| `stable-ssh-agent` | boolean | `true` | `stable-ssh-agent` |
 | `start-from-tmux` | boolean | `false` | `start-from-tmux` |
 | `status-bg` | string | `"default"` | `status-bg` |
 | `status-fg` | string | `"default"` | `status-fg` |

@@ -255,6 +255,18 @@ fn event_samples() -> Vec<Event> {
             old: Some("working".into()),
             new: Some("blocked".into()),
         },
+        Event::OpenUrl {
+            url: "https://example.com/a".into(),
+            pane: Some(p),
+        },
+        Event::PortsChanged {
+            pane: p,
+            ports: vec![3000, 5173],
+        },
+        Event::PaneEcho {
+            pane: p,
+            echo: false,
+        },
         Event::EventsDropped { count: 3 },
     ]
 }
@@ -280,7 +292,10 @@ fn index(event: &Event) -> usize {
         Event::AlertSilence { .. } => 14,
         Event::OptionChanged { .. } => 15,
         Event::AgentChanged { .. } => 16,
-        Event::EventsDropped { .. } => 17,
+        Event::OpenUrl { .. } => 17,
+        Event::PortsChanged { .. } => 18,
+        Event::PaneEcho { .. } => 19,
+        Event::EventsDropped { .. } => 20,
     }
 }
 
@@ -293,6 +308,20 @@ fn event_extras() -> Vec<(&'static str, Event)> {
                 pane: PaneId(4),
                 uid: "01JABCDEFGHJKMNPQRSTVWXYZ0".into(),
                 status: None,
+            },
+        ),
+        (
+            "event-open-url-no-pane",
+            Event::OpenUrl {
+                url: "http://localhost:8080/".into(),
+                pane: None,
+            },
+        ),
+        (
+            "event-ports-changed-none",
+            Event::PortsChanged {
+                pane: PaneId(4),
+                ports: vec![],
             },
         ),
         (
