@@ -1,8 +1,8 @@
 //! FR.3: moving panes with the mouse (spec 2026-11-05-frames.md "The
 //! mouse", "Drag and drop"), through SGR reports from an attached client.
 //! A framed tile's title drag and `drag-pane -M` (`C-MouseDrag1Pane`) move
-//! a pane: onto another's middle they swap, onto the thin band along a
-//! side the pane docks there, onto itself nothing changes, off every tile
+//! a pane: onto another's middle they swap, onto the outer quarter
+//! towards a side the pane docks there, onto itself nothing changes, off every tile
 //! a tiled pane snaps to the nearest. A drag on a gap
 //! or any other frame edge resizes. A Ctrl-drop of a floating pane
 //! unfloats it where it lands. Under tmux identity `drag-pane` is unknown
@@ -909,4 +909,33 @@ fn the_tab_ends_are_an_option() {
     tab_at(&mut a, row, "\u{e0b6} z f x \u{e0b4}");
     ok(&srv, &["set", "-g", "pane-frame-tab-ends", ""]);
     tab_at(&mut a, row, "─  z f x  ─");
+}
+
+#[test]
+fn a_stacked_pane_dropped_on_a_side_band_goes_side_by_side() {
+    let srv = framed();
+    // %0 on top, %1 below: one column.
+    ok(&srv, &["kill-pane", "-t", "%1"]);
+    ok(&srv, &["split-window", "-v", "-t", "%0", "cat"]);
+    let mut a = attach(&srv);
+    let (l0, t0, w0, h0) = rect(&srv, "%0");
+    let below = ok(&srv, &["display-message", "-p", "-t", "main", "#{pane_id}"]);
+    let below = below.trim();
+    // A fifth of the way in: past a fixed few-cell band on a wide pane,
+    // still on its left side.
+    let to = (l0 + w0 / 5, t0 + h0 / 2);
+    drag(
+        &mut a,
+        0,
+        title(&srv, below),
+        &[(l0 + w0 / 2, t0 + h0 / 2), to],
+    );
+    let side = try_wait_until(
+        || {
+            let (b, top) = (rect(&srv, below), rect(&srv, "%0"));
+            b.1 == top.1 && b.0 < top.0
+        },
+        WAIT,
+    );
+    assert!(side.is_ok(), "{:?}", layout(&srv));
 }
