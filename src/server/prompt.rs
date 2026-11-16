@@ -1657,8 +1657,12 @@ impl Overlay for PromptOverlay {
             draw_box(prompt, &status::base_style(border, vars), ends, screen);
             return;
         }
-        if let Some(ends) = clients::pill_ends(model, &chain) {
-            draw_pill(prompt, row, ends, screen);
+        if let Some(look) = clients::pill_look(model, &chain, render::Level::Info) {
+            // ponytail: the status rows of the last frame, so a status-right
+            // that changes width moves the pill's end a frame late.
+            let rows = clients::drawn_status(state, client).map_or(&[][..], |(r, _)| r);
+            let span = clients::pill_span(rows, usize::from(line), screen.cols);
+            draw_pill(prompt, row, span, &look, screen);
             return;
         }
         let label_vars = clients::MessageVars {
@@ -1706,25 +1710,16 @@ impl Overlay for PromptOverlay {
 /// How many columns the prompt's pill or box takes at most.
 const PROMPT_WIDTH: usize = 60;
 
-/// The narrowest the prompt's pill is, so a short command still reads as an
-/// input field.
-const PROMPT_MIN: usize = 24;
-
-/// The prompt as a pill alone on status row `row` (`message-pill`): its
-/// label and text in an info message's colours, between the pill's `ends`,
-/// as wide as they are (at least [`PROMPT_MIN`]) and scrolled past the
-/// row's width.
-fn draw_pill(prompt: &Prompt, row: u16, ends: &str, screen: &mut Screen) {
+/// The prompt as a pill over the first `span` columns of status row `row`
+/// (`message-pill`): its label and text drawn as `look`, the text scrolled
+/// past the pill's width.
+fn draw_pill(prompt: &Prompt, row: u16, span: usize, look: &render::PillLook, screen: &mut Screen) {
     if screen.cols < 6 {
         return;
     }
-    let level = render::Level::Info;
-    let label = format!(" {}", prompt.label);
-    let text: String = prompt.text.iter().collect();
-    // The label, the text, the cursor's cell, a space and the two ends.
-    let want = (visible_width(&label) + visible_width(&text) + 4).max(PROMPT_MIN);
-    let (x, w) = render::status_pill(screen, row, want, level, ends);
-    let style = level.body();
+    let label = format!("  {} ", prompt.label);
+    let (x, w) = render::status_pill(screen, row, span.max(6), look);
+    let style = look.body();
     let drawn = status::draw(&label, style, w as u16);
     let start = visible_width(&label).min(w);
     let (cells, col) = prompt.row_over(line_cells(&drawn.line, w), start, &style);
@@ -2425,27 +2420,22 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_pill_takes_the_status_row_alone_and_fits_its_text() {
+    fn the_prompt_pill_covers_the_left_of_the_status_row() {
         let mut screen = Screen::new(60, 1);
-        for (cell, c) in screen.cells.iter_mut().zip("[s] 1 pimo  2 stoa".chars()) {
+        let status = format!("[s] 1 pimo  2 stoa{}RIGHT", " ".repeat(37));
+        for (cell, c) in screen.cells.iter_mut().zip(status.chars()) {
             cell.c = c;
         }
-        draw_pill(&prompt("kwnjck"), 0, "()", &mut screen);
+        let look = render::PillLook::named(render::Level::Info, "()");
+        draw_pill(&prompt("kwnjck"), 0, 50, &look, &mut screen);
         let row: String = screen.cells.iter().map(|c| c.c).collect();
-        // 24 wide (the minimum), centred: the label, the text, then blank
-        // pill to its end; the status line's parts are gone.
-        assert_eq!(
-            row,
-            format!(
-                "{}( :kwnjck{}){}",
-                " ".repeat(18),
-                " ".repeat(14),
-                " ".repeat(18)
-            )
-        );
+        // The label and text, padded, then blank pill to column 48 and a
+        // blank column; the window list is gone and status-right stays.
+        assert_eq!(row, format!("(  : kwnjck{})      RIGHT", " ".repeat(37)));
+        // One colour from end to end, the label's cells too.
         let blue = Color::Named(NamedColor::Blue);
-        assert!(screen.cells[19..41].iter().all(|c| c.bg == blue));
-        assert_eq!(screen.cursor.map(|c| c.col), Some(27));
+        assert!(screen.cells[1..48].iter().all(|c| c.bg == blue));
+        assert_eq!(screen.cursor.map(|c| c.col), Some(11));
     }
 
     /// tmux 3.7b's `status_prompt_key` for an incremental prompt: what
