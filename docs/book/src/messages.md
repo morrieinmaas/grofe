@@ -12,7 +12,12 @@ It goes after `display-time` milliseconds, as in tmux, or at the next key.
 
 The command prompt (`prefix :`, `command-prompt`, `confirm-before`) opens as
 the same pill, in the information colour, with what you type scrolling inside
-it, or as a rounded box a third down the window:
+it, or as a rounded box a third down the window.
+
+As you type a command, the pill shows dim after the cursor what Tab would
+complete: the rest of the one command or option your word starts, the part
+several share, or how many match. Tab takes it; with several matches and
+nothing more in common, Tab opens a menu of them. An empty prompt says so.
 
 ```toml
 prompt-position = "status"  # "centre" (or "center"): a box in the middle of the window

@@ -224,9 +224,9 @@ impl PillLook {
     }
 }
 
-/// A pill over the first `span` columns of status row `row` (a column
-/// short of them when they stop before the row's end): those columns are
-/// blanked, so the status line's left side and window list are gone
+/// A pill over the first `span` columns of status row `row` (inside a
+/// blank column at each side when they stop before the row's end, see
+/// [`pill_body`]): those columns are blanked, so the status line's left side and window list are gone
 /// while it shows (the rest of the row, `status-right`, stays), and the
 /// pill fills them, its body in `look`'s colour between its ends. Returns
 /// the body's start column and width.
@@ -234,28 +234,38 @@ impl PillLook {
 // background; read that here if a coloured bar needs it.
 pub fn status_pill(screen: &mut Screen, row: u16, span: usize, look: &PillLook) -> (usize, usize) {
     let cols = usize::from(screen.cols);
-    let span = span.clamp(2, cols.max(2)).min(cols);
+    let span = span.clamp(4, cols.max(4)).min(cols);
     let blank = Screen::new(1, 1).cells.remove(0);
     let at = usize::from(row) * cols;
     screen.cells[at..at + span].fill(blank.clone());
-    // Short of the row's end, the last column stays blank: a gap before
-    // what follows.
-    let w = if span < cols { span - 1 } else { span };
+    let (x, w) = pill_body(span, cols);
     let body = SnapCell {
         bg: look.body().bg,
         ..blank
     };
-    screen.cells[at + 1..at + w - 1].fill(body);
-    pill_ends(screen, row, w, look);
-    (1, w - 2)
+    screen.cells[at + x..at + x + w].fill(body);
+    pill_ends(screen, row, (x - 1, x + w), look);
+    (x, w)
 }
 
-/// A pill's two ends at columns 0 and `w - 1` of `row`: `look`'s end
-/// glyphs in its colour on the background already there.
-fn pill_ends(screen: &mut Screen, row: u16, w: usize, look: &PillLook) {
+/// The body (start column and width) of a pill over the first `span` of
+/// `cols` columns: short of the row's end it keeps a blank column at each
+/// side, a margin on the left and a gap before what follows; across the
+/// whole row its ends are the row's.
+pub fn pill_body(span: usize, cols: usize) -> (usize, usize) {
+    if span < cols {
+        (2, span.saturating_sub(4))
+    } else {
+        (1, span.saturating_sub(2))
+    }
+}
+
+/// A pill's two ends at columns `l` and `r` of `row`: `look`'s end glyphs
+/// in its colour on the background already there.
+fn pill_ends(screen: &mut Screen, row: u16, (l_col, r_col): (usize, usize), look: &PillLook) {
     let (l, r) = tab_ends(&look.ends);
     let at = usize::from(row) * usize::from(screen.cols);
-    for (col, glyph) in [(0, l), (w - 1, r)] {
+    for (col, glyph) in [(l_col, l), (r_col, r)] {
         let Some(under) = screen.cells.get(at + col) else {
             continue;
         };
@@ -1728,16 +1738,17 @@ mod tests {
     fn a_pill_covers_the_left_of_the_status_row_and_leaves_the_right() {
         let mut screen = status_screen(&format!("[s] 1*{}RITE", " ".repeat(30)));
         let look = PillLook::named(Level::Info, "()");
-        assert_eq!(status_pill(&mut screen, 0, 34, &look), (1, 31));
+        assert_eq!(status_pill(&mut screen, 0, 34, &look), (2, 30));
         let row = row_text(&screen);
-        assert_eq!(&row[..1], "(");
+        // A blank column on the left, as on the right.
+        assert_eq!(&row[..2], " (");
         assert_eq!(row.chars().nth(32), Some(')'));
         // A blank column, then the status line's right side stays.
         assert_eq!(&row[33..], "   RITE");
         let blue = Color::Named(NamedColor::Blue);
-        assert!(screen.cells[1..32].iter().all(|c| c.bg == blue));
-        assert_eq!(screen.cells[0].bg, Style::default().bg);
-        assert_eq!(screen.cells[0].fg, blue);
+        assert!(screen.cells[2..32].iter().all(|c| c.bg == blue));
+        assert_eq!(screen.cells[1].bg, Style::default().bg);
+        assert_eq!(screen.cells[1].fg, blue);
     }
 
     #[test]
@@ -1772,9 +1783,9 @@ mod tests {
         };
         draw_message_pill(&mut screen, 0, 20, "note", Level::Info, &look);
         let row = row_text(&screen);
-        assert!(row.starts_with("(  ℹ note "), "{row}");
-        assert_eq!(screen.cells[3].bg, look.body().bg);
-        assert_ne!(screen.cells[3].bg, Color::Named(NamedColor::Blue));
+        assert!(row.starts_with(" (  ℹ note "), "{row}");
+        assert_eq!(screen.cells[4].bg, look.body().bg);
+        assert_ne!(screen.cells[4].bg, Color::Named(NamedColor::Blue));
     }
 
     #[test]

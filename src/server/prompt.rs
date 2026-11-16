@@ -1662,7 +1662,11 @@ impl Overlay for PromptOverlay {
             // that changes width moves the pill's end a frame late.
             let rows = clients::drawn_status(state, client).map_or(&[][..], |(r, _)| r);
             let span = clients::pill_span(rows, usize::from(line), screen.cols);
+            let hint = suggestion(state, prompt);
             draw_pill(prompt, row, span, &look, screen);
+            if let Some(hint) = hint {
+                draw_suggestion(screen, row, span, &look, &hint);
+            }
             return;
         }
         let label_vars = clients::MessageVars {
@@ -1709,6 +1713,78 @@ impl Overlay for PromptOverlay {
 
 /// How many columns the prompt's pill or box takes at most.
 const PROMPT_WIDTH: usize = 60;
+
+/// What an empty command prompt shows dim at its cursor.
+const EMPTY_HINT: &str = "type a command, Tab completes";
+
+/// What Tab would add at the end of a command prompt's line, shown dim
+/// after the cursor: the rest of the one command or option the last word
+/// starts, or the part its candidates share, or how many there are; a hint
+/// on an empty line. `None` mid-line, after a space, and on other prompts.
+fn suggestion(state: &State, prompt: &Prompt) -> Option<String> {
+    if prompt.kind != 0 || !matches!(prompt.read, Read::Line) {
+        return None;
+    }
+    if prompt.cursor != prompt.text.len() {
+        return None;
+    }
+    let text: String = prompt.text.iter().collect();
+    if text.trim().is_empty() {
+        return Some(EMPTY_HINT.to_string());
+    }
+    if text.ends_with(' ') {
+        return None;
+    }
+    let start = text.rfind(' ').map_or(0, |i| i + 1);
+    let word = &text[start..];
+    if word.starts_with('-') {
+        return None;
+    }
+    let first = text[..start].trim().is_empty();
+    let list = completions(state, word, first);
+    let full = match list.len() {
+        0 => return None,
+        1 => list[0].clone(),
+        _ => common_prefix(&list),
+    };
+    let rest = full.strip_prefix(word).unwrap_or_default();
+    if !rest.is_empty() {
+        return Some(rest.to_string());
+    }
+    (list.len() > 1).then(|| format!("  Tab: {} matches", list.len()))
+}
+
+/// Draws `hint` dim after the cursor of the prompt pill on `row`, cut at
+/// the pill's body ([`render::status_pill`]'s span).
+fn draw_suggestion(
+    screen: &mut Screen,
+    row: u16,
+    span: usize,
+    look: &render::PillLook,
+    hint: &str,
+) {
+    let Some(cursor) = screen.cursor.filter(|c| c.row == row) else {
+        return;
+    };
+    let cols = usize::from(screen.cols);
+    let (x, w) = render::pill_body(span, cols);
+    let end = x + w;
+    let style = look.body();
+    let at = usize::from(row) * cols;
+    for (col, c) in (usize::from(cursor.col)..end).zip(hint.chars()) {
+        if let Some(cell) = screen.cells.get_mut(at + col) {
+            *cell = SnapCell {
+                c,
+                fg: style.fg,
+                bg: style.bg,
+                flags: CellFlags::DIM | CellFlags::ITALIC,
+                zerowidth: Vec::new(),
+                underline_color: style.underline_color,
+                hyperlink: None,
+            };
+        }
+    }
+}
 
 /// The prompt as a pill over the first `span` columns of status row `row`
 /// (`message-pill`): its label and text drawn as `look`, the text scrolled
@@ -2429,13 +2505,14 @@ mod tests {
         let look = render::PillLook::named(render::Level::Info, "()");
         draw_pill(&prompt("kwnjck"), 0, 50, &look, &mut screen);
         let row: String = screen.cells.iter().map(|c| c.c).collect();
-        // The label and text, padded, then blank pill to column 48 and a
-        // blank column; the window list is gone and status-right stays.
-        assert_eq!(row, format!("(  : kwnjck{})      RIGHT", " ".repeat(37)));
+        // A blank column, the label and text, padded, then blank pill to
+        // column 48 and a blank column; the window list is gone and
+        // status-right stays.
+        assert_eq!(row, format!(" (  : kwnjck{})      RIGHT", " ".repeat(36)));
         // One colour from end to end, the label's cells too.
         let blue = Color::Named(NamedColor::Blue);
-        assert!(screen.cells[1..48].iter().all(|c| c.bg == blue));
-        assert_eq!(screen.cursor.map(|c| c.col), Some(11));
+        assert!(screen.cells[2..48].iter().all(|c| c.bg == blue));
+        assert_eq!(screen.cursor.map(|c| c.col), Some(12));
     }
 
     /// tmux 3.7b's `status_prompt_key` for an incremental prompt: what

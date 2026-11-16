@@ -65,7 +65,7 @@ fn an_error_is_a_pill_over_the_left_of_the_status_line() {
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send("\x1b[15~");
     h.wait_until("the error pill", WAIT, |t| {
-        status(t).starts_with("(  ✗ Can't find window")
+        status(t).starts_with(" (  ✗ Can't find window")
     });
     let shown = h.text();
     let row = status(&shown);
@@ -94,7 +94,7 @@ fn display_message_is_an_info_pill() {
     h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
     h.send("\x1b[17~");
     h.wait_until("the info pill", WAIT, |t| {
-        status(t).starts_with("\u{e0b6}  ℹ all saved ")
+        status(t).starts_with(" \u{e0b6}  ℹ all saved ")
     });
 }
 
@@ -117,7 +117,7 @@ fn the_prompt_is_a_pill_over_the_left_of_the_status_line() {
     h.wait_until("the prompt pill", WAIT, |t| status(t).contains("  : "));
     h.send("abc");
     h.wait_until("the typed text", WAIT, |t| {
-        status(t).starts_with("\u{e0b6}  : abc")
+        status(t).starts_with(" \u{e0b6}  : abc")
     });
     let shown = h.text();
     let row = status(&shown);
@@ -151,4 +151,32 @@ fn prompt_position_centre_opens_a_box_a_third_down() {
     assert_eq!(h.cursor(), (5, top as u16 + 1));
     h.send("\x1b");
     h.wait_until("the box gone", WAIT, |t| !t.contains("( : )"));
+}
+
+#[test]
+fn the_prompt_suggests_what_tab_would_complete() {
+    let (_srv, mut h) = attached("");
+    h.wait_until("the status line", WAIT, |t| status(t).starts_with("LEFT"));
+    h.send(format!("{PREFIX}:"));
+    h.wait_until("the empty hint", WAIT, |t| {
+        status(t).contains(": type a command, Tab completes")
+    });
+    // One command starts so: the rest of it, dim, after the cursor.
+    h.send("list-ke");
+    h.wait_until("the suggestion", WAIT, |t| {
+        status(t).contains(": list-keys")
+    });
+    assert_eq!(h.cursor().0, 13, "{}", h.text());
+    // Several, sharing nothing more: how many.
+    h.send("\x15kill-se");
+    h.wait_until("the count", WAIT, |t| {
+        status(t).contains(": kill-se  Tab: 2 matches")
+    });
+    // Tab takes the suggestion.
+    h.send("\x15list-ke\t");
+    h.wait_until("the completion", WAIT, |t| {
+        status(t).contains(": list-keys ")
+    });
+    assert_eq!(h.cursor().0, 16, "{}", h.text());
+    h.send("\x1b");
 }
