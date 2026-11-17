@@ -188,7 +188,10 @@ struct Answer {
 
 impl Prompt for Answer {
     fn text(&self) -> String {
-        format!("{} {}", self.text, self.line)
+        // The upload directory comes from the remote: nothing in it may
+        // reach the terminal as a control.
+        crate::remote::ssh::sanitize(&format!("{} {}", self.text, self.line))
+            .replace(['\n', '\t'], " ")
     }
 
     fn key(&mut self, cx: &mut HookCtx<'_>, bytes: &[u8]) -> Option<session::Input> {

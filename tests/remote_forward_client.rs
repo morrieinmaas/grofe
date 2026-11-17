@@ -55,7 +55,7 @@ impl Remote {
             r#"#!/bin/sh
 for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
-shift
+shift 2
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 export SSH_AUTH_SOCK='{root}/agent.sock'
