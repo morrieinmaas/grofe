@@ -1,5 +1,7 @@
-//! The text of forwarding: paths in a paste, shell quoting, sizes, prompts.
+//! The text of forwarding: paths in a paste, shell quoting, sizes, prompts,
+//! and which local file a remote may ask to open.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use super::{FilePaste, UploadDir};
@@ -99,9 +101,89 @@ pub fn forward_prompt(host: &str, port: u16) -> String {
     format!("forward {host}:{port} to localhost:{port}? [y/N/always]")
 }
 
+/// Extensions macOS (or a desktop) runs or follows rather than shows.
+const RUNNABLE: &[&str] = &[
+    "app",
+    "command",
+    "tool",
+    "terminal",
+    "workflow",
+    "action",
+    "pkg",
+    "mpkg",
+    "scpt",
+    "scptd",
+    "applescript",
+    "jar",
+    "webloc",
+    "inetloc",
+    "fileloc",
+    "shortcut",
+    "prefpane",
+    "desktop",
+    "sh",
+];
+
+/// Whether a `file:` URL from the remote may be offered for opening here:
+/// an existing regular file that is neither executable nor of a kind that
+/// runs ([`RUNNABLE`]). Directories go too: on macOS an app is one.
+pub(super) fn local_file_to_open(url: &str) -> Result<(), String> {
+    let path = crate::open::file_path(url).ok_or("not a file on this machine")?;
+    let meta = std::fs::metadata(&path).map_err(|_| "that file does not exist here")?;
+    if meta.is_dir() {
+        return Err("a directory or bundle is not opened".to_string());
+    }
+    if meta.permissions().mode() & 0o111 != 0 {
+        return Err("an executable file is not opened".to_string());
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if RUNNABLE.contains(&ext.as_str()) {
+        return Err(format!("a .{ext} file is not opened"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_plain_files_are_offered_for_opening() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = |p: &std::path::Path| format!("file://{}", p.display());
+        let doc = dir.path().join("notes.pdf");
+        std::fs::write(&doc, "x").unwrap();
+        assert_eq!(local_file_to_open(&url(&doc)), Ok(()));
+        let exe = dir.path().join("run");
+        std::fs::write(&exe, "#!/bin/sh").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            local_file_to_open(&url(&exe))
+                .unwrap_err()
+                .contains("executable")
+        );
+        let command = dir.path().join("x.Command");
+        std::fs::write(&command, "echo").unwrap();
+        assert!(
+            local_file_to_open(&url(&command))
+                .unwrap_err()
+                .contains(".command")
+        );
+        let app = dir.path().join("Evil.app");
+        std::fs::create_dir(&app).unwrap();
+        assert!(
+            local_file_to_open(&url(&app))
+                .unwrap_err()
+                .contains("directory")
+        );
+        assert!(local_file_to_open(&url(dir.path())).is_err());
+        assert!(local_file_to_open("file:///no/such/file").is_err());
+        assert!(local_file_to_open("file://other.host/a").is_err());
+    }
 
     #[test]
     fn paths_in_the_three_terminal_forms() {

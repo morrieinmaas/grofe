@@ -1,9 +1,15 @@
 //! [`ForwardHook`]: forwarding plugged into the remote attach loop
 //! ([`session::Hook`](crate::remote::session::Hook)). Keys, events and ticks
 //! go into [`Forwarding`]; prompts go through the client's prompt; slow
-//! actions (uploads, the upload directory, opening a URL, messages) run on
-//! a worker thread whose results come back on the next tick; forwards run
-//! on the input thread (a bind is quick) over whatever link is current.
+//! actions (uploads, the upload directory, opening a URL, messages) and
+//! every control round trip run on a worker thread whose results come back
+//! on the next tick; forwards run on the input thread (a bind is quick)
+//! over whatever link is current.
+//!
+//! Events carry no session and reach every remote client of the server, so
+//! the worker passes on only those of a pane in this client's attached
+//! session, and reads that session's options and ports again on a connect
+//! and on a session switch.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -16,10 +22,18 @@ use super::ports::Forwarder;
 use super::{Action, ForwardMode, Forwarding, Input, Settings, UploadMode};
 use crate::event::Event;
 use crate::remote::connect::Link;
+use crate::remote::proxy_proto::ProxyConn;
 use crate::remote::session::{self, Hook, HookCtx, Prompt};
+use crate::types::PaneId;
 
 /// Events forwarding subscribes to.
-pub const EVENTS: [&str; 3] = ["open-url", "ports-changed", "pane-exited"];
+pub const EVENTS: [&str; 5] = [
+    "open-url",
+    "ports-changed",
+    "pane-exited",
+    "client-session-changed",
+    "option-changed",
+];
 
 /// The longest answer a prompt takes.
 const MAX_ANSWER: usize = 16;
@@ -35,13 +49,18 @@ struct Core {
     link: LinkCell,
     jobs: Sender<Job>,
     done: Receiver<Done>,
-    /// Whether the remote's options were asked for.
-    asked: bool,
+    /// The proxy connection last seen (its address), to tell a reconnect.
+    conn: Option<usize>,
 }
 
 /// Work for the worker thread.
 enum Job {
+    /// Read the attached session's options.
     Settings,
+    /// Pass the event on if it concerns the attached session.
+    Event(Event),
+    /// Read the attached session's listening ports ([`Input::Resync`]).
+    Resync,
     Slow(Action),
     Message(String),
 }
@@ -69,7 +88,7 @@ impl ForwardHook {
             link,
             jobs,
             done,
-            asked: false,
+            conn: None,
         };
         ForwardHook {
             core: Arc::new(Mutex::new(core)),
@@ -94,13 +113,16 @@ fn lock(core: &Mutex<Core>) -> MutexGuard<'_, Core> {
 }
 
 impl Core {
-    /// Points the forwards at `link` (a reconnect gives a new one) and asks
-    /// for the remote's options the first time.
+    /// Points the forwards at `link` and, on a new connection (the first,
+    /// or a reconnect), reads the options and ports again: what changed
+    /// while the link was down sent no event this client saw.
     fn connected(&mut self, link: &Link) {
-        self.link.set(link.clone());
-        if !self.asked {
-            self.asked = true;
+        let conn = std::ptr::from_ref::<ProxyConn>(link.conn()) as usize;
+        if self.conn != Some(conn) {
+            self.conn = Some(conn);
+            self.link.set(link.clone());
             let _ = self.jobs.send(Job::Settings);
+            let _ = self.jobs.send(Job::Resync);
         }
     }
 
@@ -154,9 +176,22 @@ impl Hook for ForwardHook {
     }
 
     fn on_event(&mut self, cx: &mut HookCtx<'_>, event: &serde_json::Value) {
-        if let Ok(event) = serde_json::from_value::<Event>(event.clone()) {
-            let send = self.feed(cx, Input::Event(event));
-            cx.send(send);
+        let Ok(event) = serde_json::from_value::<Event>(event.clone()) else {
+            return;
+        };
+        let mut core = self.lock();
+        core.connected(cx.link());
+        let jobs = match event {
+            Event::OptionChanged { name, .. } if name.starts_with("remote-") => vec![Job::Settings],
+            Event::OptionChanged { .. } => Vec::new(),
+            // ponytail: any client's switch rereads ours; the event names the
+            // client by a name this client does not know for itself.
+            Event::ClientSessionChanged { .. } => vec![Job::Settings, Job::Resync],
+            // Through the worker, so events keep their order with its checks.
+            event => vec![Job::Event(event)],
+        };
+        for job in jobs {
+            let _ = core.jobs.send(job);
         }
     }
 
@@ -188,8 +223,8 @@ struct Answer {
 
 impl Prompt for Answer {
     fn text(&self) -> String {
-        // The upload directory comes from the remote: nothing in it may
-        // reach the terminal as a control.
+        // The upload directory and a URL come from the remote: nothing in
+        // them may reach the terminal as a control.
         crate::remote::ssh::sanitize(&format!("{} {}", self.text, self.line))
             .replace(['\n', '\t'], " ")
     }
@@ -223,7 +258,20 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Done>
     for job in jobs {
         let Some(link) = link.get() else { continue };
         let reply = match job {
-            Job::Settings => Done::Settings(read_settings(&link, &hello)),
+            Job::Settings => {
+                let session = attached_session(&link, &hello);
+                Done::Settings(read_settings(&link, &hello, session.as_deref()))
+            }
+            Job::Event(event) => {
+                if !in_session(&link, &hello, &event) {
+                    continue;
+                }
+                Done::Input(Input::Event(event))
+            }
+            Job::Resync => match attached_session(&link, &hello) {
+                Some(s) => Done::Input(Input::Resync(session_ports(&link, &hello, &s))),
+                None => continue,
+            },
             Job::Message(text) => {
                 // `#` starts a format in a message; `##` is a plain one.
                 let argv = ["display-message", "-c", session::client_tty()]
@@ -248,11 +296,16 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Done>
     }
 }
 
-/// The remote options forwarding follows; a default for one that cannot be
-/// read.
-fn read_settings(link: &Link, hello: &str) -> Settings {
+/// The remote options forwarding follows, as `session` sees them (they are
+/// session options); a default for one that cannot be read.
+fn read_settings(link: &Link, hello: &str, session: Option<&str>) -> Settings {
     let get = |name: &str| {
-        let argv = ["show-options", "-gv", name].map(String::from);
+        let argv: Vec<String> = match session {
+            Some(s) => ["show-options", "-Av", "-t", s, name]
+                .map(String::from)
+                .to_vec(),
+            None => ["show-options", "-gv", name].map(String::from).to_vec(),
+        };
         link.request(hello, &argv)
             .ok()
             .map(|v| v.trim().to_string())
@@ -269,6 +322,56 @@ fn read_settings(link: &Link, hello: &str) -> Settings {
             .and_then(|v| ForwardMode::parse(&v))
             .unwrap_or(default.forward_ports),
     }
+}
+
+/// Whether `event` concerns this client: one of a pane in its attached
+/// session. A pane exiting, or an `open-url` from no pane (a CLI outside
+/// grofe), always does.
+fn in_session(link: &Link, hello: &str, event: &Event) -> bool {
+    let pane = match event {
+        Event::OpenUrl { pane: Some(p), .. } | Event::PortsChanged { pane: p, .. } => *p,
+        _ => return true,
+    };
+    let argv = [
+        "display-message".to_string(),
+        "-p".to_string(),
+        "-t".to_string(),
+        pane.to_string(),
+        "#{session_id}".to_string(),
+    ];
+    let Ok(theirs) = link.request(hello, &argv) else {
+        return false;
+    };
+    attached_session(link, hello).is_some_and(|ours| ours == theirs.trim())
+}
+
+/// Each pane of `session` and the ports it listens on.
+fn session_ports(link: &Link, hello: &str, session: &str) -> Vec<(PaneId, Vec<u16>)> {
+    let argv = ["list-panes", "-s", "-t", session, "-F", "#{pane_id}"].map(String::from);
+    let Ok(panes) = link.request(hello, &argv) else {
+        return Vec::new();
+    };
+    let mut ports: Vec<(PaneId, Vec<u16>)> = panes
+        .lines()
+        .filter_map(|p| p.trim().parse().ok())
+        .map(|p| (p, Vec::new()))
+        .collect();
+    let all = ["list-ports", "-a"].map(String::from);
+    for line in link.request(hello, &all).unwrap_or_default().lines() {
+        let Some((pane, list)) = line.split_once(' ') else {
+            continue;
+        };
+        let Ok(pane) = pane.parse::<PaneId>() else {
+            continue;
+        };
+        if let Some((_, slot)) = ports.iter_mut().find(|(p, _)| *p == pane) {
+            *slot = list
+                .split(',')
+                .filter_map(|n| n.trim().parse().ok())
+                .collect();
+        }
+    }
+    ports
 }
 
 /// The id of the session this client is attached to, from the remote's
