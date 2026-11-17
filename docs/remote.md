@@ -79,8 +79,11 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
 - **Notifications** reach your terminal the same way.
 - **Opening URLs.** Panes get `BROWSER="grofe open"` while `forward-browser` is on (the
   default), so a program that opens a link on the remote opens it on your machine. You can run
-  `grofe open <url>` yourself too. Only `http`, `https` and `file` URLs are opened, and `file`
-  only when the path exists on your machine. With no remote client attached, `grofe open` uses
+  `grofe open <url>` yourself too. Only `http`, `https` and `file` URLs are opened. A `file` URL
+  must name an existing local file; it is refused when it is a directory or bundle, executable,
+  or a script or launcher type (`.command`, `.app`, `.sh` and similar), and otherwise asks
+  `open file:///...? [y/N]` first. Only URLs and ports from the session you are attached to
+  reach your machine. With no remote client attached, `grofe open` uses
   the remote's own opener.
 - **Files.** Drop files into your terminal (a bracketed paste of absolute local paths that all
   exist) and they are uploaded to the pane's directory on the remote, or to
@@ -155,7 +158,8 @@ machine: name, target, session, transport and `on` or `off`, with `-` for an uns
   The client pins that certificate (no certificate authority is involved), TLS 1.3 only, with no
   0-RTT. A newer QUIC proxy for the same server stops the older one.
 - Port forwards bind `127.0.0.1` on your machine only.
-- `open-url` opens only http, https and existing local files; uploads never overwrite.
+- `open-url` opens only http, https and existing local files (those after asking, never
+  executables or launchers), and only from the attached session; uploads never overwrite.
 - The install checks `SHA256SUMS`, which comes from the same place as the archive: it proves the
   download is intact, and a mirror is trusted as much as its host. Release downloads use https.
 - Text a remote sends back in errors and prompts is shown with control characters escaped, so a
