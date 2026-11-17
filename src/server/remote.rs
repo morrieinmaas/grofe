@@ -128,14 +128,16 @@ pub fn remove_links(state: &State) {
 }
 
 /// The variables a new pane of `session` gets from the remote features,
-/// added last so they win: the agent link (once a client has set it) and
+/// added last so they win: the agent link (dangling until a client with an
+/// agent attaches) and
 /// `BROWSER`.
 pub fn pane_env(state: &State, session: SessionId, env: &mut Vec<(String, String)>) {
     if session_flag(state, session, "stable-ssh-agent") {
+        // Even before a client with an agent has made the link: a session
+        // made over a control channel (`grofe -r host`) has none yet, and its
+        // first pane must follow the attach that comes next.
         let link = paths::agent_link(&state.socket, session.0);
-        if std::fs::symlink_metadata(&link).is_ok() {
-            env.push(("SSH_AUTH_SOCK".to_string(), link.display().to_string()));
-        }
+        env.push(("SSH_AUTH_SOCK".to_string(), link.display().to_string()));
     }
     if session_flag(state, session, "forward-browser") {
         env.push(("BROWSER".to_string(), "grofe open".to_string()));
