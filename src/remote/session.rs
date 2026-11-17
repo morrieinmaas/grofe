@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder as _, Encoder as _};
 
-use super::connect::{Link, request_on};
+use super::connect::Link;
 use super::reconnect::{Backoff, Clocks, DetachKey, Jitter, bar_text, bottom_row, woke};
 use crate::client::{self, AttachOptions, Out, RESIZE_PENDING};
 use crate::protocol::{
@@ -877,13 +877,40 @@ fn read_events(
     generation: u64,
     out: SyncSender<Out>,
 ) {
+    pump_events(chan, hello, events, |value| {
+        post(&out, generation, Kind::Server(value))
+    });
+}
+
+/// Subscribes to `events` on `chan` and hands every event line to
+/// `deliver` until it returns false or the channel ends. One reader serves
+/// the reply and every line after it, so an event that came in the same
+/// read as the reply (the subscribe-time snapshots) is kept.
+fn pump_events<S: Read + Write>(
+    chan: S,
+    hello: &str,
+    events: &[String],
+    mut deliver: impl FnMut(serde_json::Value) -> bool,
+) {
     use std::io::BufRead;
     let mut argv = vec!["subscribe".to_string()];
     argv.extend(events.iter().cloned());
-    if !matches!(request_on(chan.clone(), hello, &argv), Ok(Reply::Ok { .. })) {
+    let Ok(req) = serde_json::to_string(&crate::protocol::Request {
+        id: 1,
+        argv,
+        ..Default::default()
+    }) else {
+        return;
+    };
+    let mut reader = std::io::BufReader::new(chan);
+    if reader
+        .get_mut()
+        .write_all(format!("{hello}\n{req}\n").as_bytes())
+        .is_err()
+    {
         return;
     }
-    let mut reader = std::io::BufReader::new(chan);
+    let mut subscribed = false;
     let mut line = String::new();
     loop {
         line.clear();
@@ -891,11 +918,19 @@ fn read_events(
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line)
-            && value.get("event").is_some()
-            && !post(&out, generation, Kind::Server(value))
-        {
-            return;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if value.get("event").is_some() {
+            if !deliver(value) {
+                return;
+            }
+        } else if !subscribed {
+            // The subscribe's reply: refused means no events.
+            if value.get("ok") != Some(&serde_json::Value::Bool(true)) {
+                return;
+            }
+            subscribed = true;
         }
     }
 }
@@ -903,6 +938,34 @@ fn read_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The subscribe reply and the first event in one read: the event is
+    /// still delivered.
+    #[test]
+    fn an_event_sent_with_the_subscribe_reply_is_kept() {
+        use std::io::BufRead;
+        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut r = std::io::BufReader::new(b.try_clone().unwrap());
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap(); // hello
+            r.read_line(&mut line).unwrap(); // subscribe
+            (&b).write_all(
+                b"{\"id\":1,\"ok\":true,\"out\":\"\"}\n{\"event\":\"pane-echo\",\"pane\":\"%0\",\"echo\":false}\n",
+            )
+            .unwrap();
+            b.shutdown(std::net::Shutdown::Both).unwrap();
+        });
+        let mut got = Vec::new();
+        pump_events(a, "{}", &["pane-echo".to_string()], |v| {
+            got.push(v);
+            true
+        });
+        server.join().unwrap();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["event"], "pane-echo");
+    }
+
     #[test]
     fn the_client_tty_is_unique_and_not_a_real_device() {
         let tty = client_tty();
