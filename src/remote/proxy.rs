@@ -45,7 +45,14 @@ fn serve(chan: Channel, payload: &[u8], connect: &Connect) {
         Err(e) => return chan.close(&format!("bad open: {e}")),
     };
     match spec {
-        OpenSpec::Attach | OpenSpec::Control => match connect() {
+        OpenSpec::Attach => match connect() {
+            Ok(mut stream) => match pass_hello(&chan, &mut stream) {
+                Ok(()) => bridge(chan, stream),
+                Err(e) => chan.close(&e),
+            },
+            Err(e) => chan.close(&e),
+        },
+        OpenSpec::Control => match connect() {
             Ok(stream) => bridge(chan, stream),
             Err(e) => chan.close(&e),
         },
@@ -179,5 +186,75 @@ fn expand_home(dir: &str) -> PathBuf {
     match (dir.strip_prefix("~/"), std::env::var_os("HOME")) {
         (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
         _ => PathBuf::from(dir),
+    }
+}
+
+/// The longest attach hello line passed on.
+const MAX_HELLO: usize = 64 * 1024;
+
+/// Passes the attach hello (the channel's first line) to the server with
+/// this proxy's own `SSH_AUTH_SOCK` added ([`add_agent`]).
+fn pass_hello(chan: &Channel, stream: &mut UnixStream) -> Result<(), String> {
+    let mut from_chan = chan.clone();
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    // Byte by byte, so nothing after the hello is read ahead of the bridge.
+    while line.last() != Some(&b'\n') {
+        match from_chan.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => line.push(byte[0]),
+            Err(e) => return Err(e.to_string()),
+        }
+        if line.len() > MAX_HELLO {
+            return Err("attach hello too long".to_string());
+        }
+    }
+    let agent = std::env::var("SSH_AUTH_SOCK").ok();
+    let out = match std::str::from_utf8(&line) {
+        Ok(text) => add_agent(text, agent.as_deref()).into_bytes(),
+        Err(_) => line,
+    };
+    stream.write_all(&out).map_err(|e| e.to_string())
+}
+
+/// `line` (an attach hello) with `SSH_AUTH_SOCK` set to `agent` in its
+/// client env when the client sent none: the remote client sends no local
+/// agent, and an attach over ssh should repoint the session's stable agent
+/// link (spec ssh-remote §3) at the agent ssh forwarded to this proxy.
+/// Anything else passes unchanged.
+fn add_agent(line: &str, agent: Option<&str>) -> String {
+    let Some(agent) = agent.filter(|a| a.starts_with('/')) else {
+        return line.to_string();
+    };
+    let Ok(serde_json::Value::Object(mut hello)) = serde_json::from_str(line.trim_end()) else {
+        return line.to_string();
+    };
+    let Some(serde_json::Value::Object(env)) = hello.get_mut("env") else {
+        return line.to_string();
+    };
+    if env.contains_key("SSH_AUTH_SOCK") {
+        return line.to_string();
+    }
+    env.insert("SSH_AUTH_SOCK".to_string(), agent.into());
+    env.sort_keys();
+    format!("{}\n", serde_json::Value::Object(hello))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_proxys_agent_goes_into_a_hello_without_one() {
+        let hello = "{\"cols\":80,\"env\":{\"TERM\":\"x\"},\"grofe\":1}\n";
+        assert_eq!(
+            add_agent(hello, Some("/tmp/ssh-x/agent.1")),
+            "{\"cols\":80,\"env\":{\"SSH_AUTH_SOCK\":\"/tmp/ssh-x/agent.1\",\"TERM\":\"x\"},\"grofe\":1}\n"
+        );
+        let own = "{\"env\":{\"SSH_AUTH_SOCK\":\"/a\"}}\n";
+        assert_eq!(add_agent(own, Some("/b")), own);
+        assert_eq!(add_agent(hello, None), hello);
+        assert_eq!(add_agent(hello, Some("relative")), hello);
+        assert_eq!(add_agent("not json\n", Some("/b")), "not json\n");
     }
 }
