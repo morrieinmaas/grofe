@@ -7,7 +7,7 @@
 //! UDP gets no answer the client says so and uses ssh instead.
 
 use std::io;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Mutex;
 
 use super::bootstrap::Install;
@@ -29,7 +29,7 @@ pub fn bootstrap(target: &Target, batch: bool) -> Result<Bootstrap, ConnectError
         keepalive: false,
         batch,
     };
-    let out = Command::new(ssh::program())
+    let out = ssh::command()
         .args(ssh::argv(target, opts, &remote))
         .stdin(Stdio::null())
         .output()
@@ -70,7 +70,7 @@ pub fn ssh_g_hostname(ssh_g: &str) -> Option<String> {
 /// The host to dial over UDP for `target`: what ssh would connect to
 /// (`ssh -G`), else the target's own host part.
 pub fn dial_host(target: &Target) -> String {
-    let mut cmd = Command::new(ssh::program());
+    let mut cmd = ssh::command();
     cmd.arg("-G");
     if let Some(p) = target.port {
         cmd.args(["-p", &p.to_string()]);

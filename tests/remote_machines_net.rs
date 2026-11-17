@@ -68,7 +68,9 @@ case "$host" in
 esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin'
 unset GROFE_PANE TMUX
-exec /bin/sh -c "$*"
+# `exec` inside too: dash (Linux /bin/sh) forks for a -c command's last
+# step where bash execs, and the test must signal the proxy itself.
+exec /bin/sh -c "exec $*"
 "#,
             root = root.display(),
             alpha = env(&alpha),

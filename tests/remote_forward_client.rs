@@ -60,7 +60,9 @@ export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 export SSH_AUTH_SOCK='{root}/agent.sock'
 unset GROFE_PANE TMUX
-exec /bin/sh -c "$*"
+# `exec` inside too: dash (Linux /bin/sh) forks for a -c command's last
+# step where bash execs, and the test must signal the proxy itself.
+exec /bin/sh -c "exec $*"
 "#,
             root = root.display(),
             sock = srv.socket.display(),
