@@ -36,6 +36,12 @@ stable-ssh-agent = true
   set by built-in defaults
 forward-browser = true
   set by built-in defaults
+remote-reconnect = true
+  set by built-in defaults
+remote-release-url = "https://github.com/termage/grofe/releases/download"
+  set by built-in defaults
+remote-transport = "ssh"
+  set by built-in defaults
 set-clipboard = "external"
   set by built-in defaults
 focus-events = true

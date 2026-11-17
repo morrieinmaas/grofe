@@ -1357,6 +1357,42 @@ Default:
 Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})
 ```
 
+## remote-reconnect
+
+Keep a remote attach (grofe -r) alive across a dropped connection: show a reconnect bar and attach again, instead of exiting.
+
+- **TOML key**: `remote-reconnect` (boolean)
+- **Scope**: global
+- **Values**: `on` or `off` (`true` or `false` in TOML)
+
+Default: `on`
+
+grofe only: tmux does not have this option.
+
+## remote-release-url
+
+Where grofe -r downloads the release it installs on a remote without grofe: a URL or directory holding v<version>/ with the archives and SHA256SUMS.
+
+- **TOML key**: `remote-release-url` (string)
+- **Scope**: global
+- **Values**: text
+
+Default: `https://github.com/termage/grofe/releases/download`
+
+grofe only: tmux does not have this option.
+
+## remote-transport
+
+How grofe -r reaches the remote proxy: ssh, or quic (a roaming UDP link set up over ssh).
+
+- **TOML key**: `remote-transport` (string)
+- **Scope**: global
+- **Values**: `ssh`, `quic`
+
+Default: `ssh`
+
+grofe only: tmux does not have this option.
+
 ## renumber-windows
 
 Renumber a session's windows when one is closed, so there are no gaps.

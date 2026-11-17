@@ -565,7 +565,7 @@ static SETUP: OnceLock<Vec<u8>> = OnceLock::new();
 static ACTIVE: Mutex<bool> = Mutex::new(false);
 
 /// Set by SIGWINCH; the writer thread sends one `resize` for it.
-static RESIZE_PENDING: AtomicBool = AtomicBool::new(false);
+pub(crate) static RESIZE_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// How long a signal or a panic waits for the tty lock and for the
 /// terminal to take the teardown before restoring termios regardless.
@@ -575,14 +575,17 @@ const RESTORE_BOUND: Duration = Duration::from_millis(200);
 /// stalls the stdin thread, never the signal thread (it only `try_send`s).
 /// Input still queued when the client exits (detach, signal, panic) is
 /// dropped by design.
-enum Out {
+pub(crate) enum Out {
     Input(Vec<u8>),
     Detach,
     /// Look at [`RESIZE_PENDING`].
     Wake,
+    /// A remote attach's connection said something (only the remote
+    /// loop sends these; see `remote::session`).
+    Remote(crate::remote::session::Event),
 }
 
-const OUT_QUEUE: usize = 64;
+pub(crate) const OUT_QUEUE: usize = 64;
 
 fn stdin_fd() -> BorrowedFd<'static> {
     // SAFETY: fd 0 stays open for the life of the process.
@@ -594,7 +597,7 @@ fn stdout_fd() -> BorrowedFd<'static> {
     unsafe { BorrowedFd::borrow_raw(1) }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -647,7 +650,7 @@ fn take_and_undo(active: &mut bool, deadline: Instant) {
 }
 
 /// Writes to the tty unless it was already restored.
-fn write_tty(bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_tty(bytes: &[u8]) -> io::Result<()> {
     let active = lock(&ACTIVE);
     if *active {
         write_all(stdout_fd(), bytes, None)?;
@@ -711,7 +714,7 @@ fn wait_ready(
     }
 }
 
-fn tty_size() -> (u16, u16) {
+pub(crate) fn tty_size() -> (u16, u16) {
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     (cols.max(1), rows.max(1))
 }
@@ -727,6 +730,17 @@ pub fn attach(
     opts: AttachOptions,
     term: String,
 ) -> Result<String, String> {
+    let (out_tx, out_rx) = enter_raw()?;
+    let result = run(stream, ctx, opts, term, out_tx, out_rx);
+    restore_tty();
+    result
+}
+
+/// Takes the tty for an attach: checks it is one, saves its termios,
+/// installs the panic hook and the signal thread, and makes it raw. The
+/// queue the stdin, signal and connection threads feed. The caller
+/// restores with [`restore_tty`].
+pub(crate) fn enter_raw() -> Result<(SyncSender<Out>, Receiver<Out>), String> {
     let is_tty = |fd| termios::tcgetattr(fd).is_ok();
     if !is_tty(stdin_fd()) || !is_tty(stdout_fd()) {
         return Err("open terminal failed: not a terminal".to_string());
@@ -744,10 +758,46 @@ pub fn attach(
         restore_tty();
         return Err(format!("raw mode: {e}"));
     }
+    Ok((out_tx, out_rx))
+}
 
-    let result = run(stream, ctx, opts, term, out_tx, out_rx);
-    restore_tty();
-    result
+/// What the probe found: the capabilities to send (test caps and `-T`
+/// features applied), typeahead, and the parser that keeps filtering late
+/// replies when DA1's has not come yet.
+pub(crate) struct Probed {
+    pub caps: Caps,
+    pub typeahead: Vec<u8>,
+    pub filter: Option<ProbeParser>,
+}
+
+/// Probes the terminal (already raw).
+pub(crate) fn probe_terminal(features: &[String]) -> Result<Probed, String> {
+    let mut probe = probe().map_err(|e| format!("probing the terminal: {e}"))?;
+    let mut caps = probe.caps(std::env::var("COLORTERM").ok().as_deref());
+    if let Ok(list) = std::env::var(TEST_CAPS_ENV) {
+        caps = with_test_caps(caps, &list);
+    }
+    apply_features(&mut caps, features);
+    let typeahead = probe.take_typeahead();
+    let filter = (!probe.done()).then_some(probe);
+    Ok(Probed {
+        caps,
+        typeahead,
+        filter,
+    })
+}
+
+/// Enters the alternate screen, bracketed paste, focus reporting and the
+/// key mode `caps` allow, and records their undoing for every exit path.
+pub(crate) fn start_screen(caps: &Caps) -> Result<(), String> {
+    let (keys_on, keys_off) = if caps.kitty_keys {
+        (KITTY_PUSH, KITTY_POP)
+    } else {
+        (MOK_ON, MOK_OFF)
+    };
+    let _ = TEARDOWN.set([keys_off, PASTE_OFF, RESET_TAIL, ALT_SCREEN_OFF].concat());
+    let setup = SETUP.get_or_init(|| [ALT_SCREEN_ON, PASTE_ON, FOCUS_ON, keys_on].concat());
+    write_tty(setup).map_err(|e| format!("writing to the terminal: {e}"))
 }
 
 fn run(
@@ -758,13 +808,11 @@ fn run(
     out_tx: SyncSender<Out>,
     out_rx: Receiver<Out>,
 ) -> Result<String, String> {
-    let mut probe = probe().map_err(|e| format!("probing the terminal: {e}"))?;
-    let mut caps = probe.caps(std::env::var("COLORTERM").ok().as_deref());
-    if let Ok(list) = std::env::var(TEST_CAPS_ENV) {
-        caps = with_test_caps(caps, &list);
-    }
-    apply_features(&mut caps, &opts.features);
-    let typeahead = probe.take_typeahead();
+    let Probed {
+        caps,
+        typeahead,
+        filter,
+    } = probe_terminal(&opts.features)?;
 
     let (cols, rows) = tty_size();
     let hello = encode_hello(&Hello::Attach {
@@ -793,14 +841,7 @@ fn run(
         other => return Err(format!("unexpected reply to attach: {other:?}")),
     }
 
-    let (keys_on, keys_off) = if caps.kitty_keys {
-        (KITTY_PUSH, KITTY_POP)
-    } else {
-        (MOK_ON, MOK_OFF)
-    };
-    let _ = TEARDOWN.set([keys_off, PASTE_OFF, RESET_TAIL, ALT_SCREEN_OFF].concat());
-    let setup = SETUP.get_or_init(|| [ALT_SCREEN_ON, PASTE_ON, FOCUS_ON, keys_on].concat());
-    write_tty(setup).map_err(|e| format!("writing to the terminal: {e}"))?;
+    start_screen(&caps)?;
 
     let writer = stream
         .try_clone()
@@ -817,7 +858,6 @@ fn run(
         return Err("lost server".to_string());
     }
     // Late probe replies are filtered until DA1's arrives.
-    let filter = (!probe.done()).then_some(probe);
     let wake = out_tx.clone();
     std::thread::Builder::new()
         .name("stdin".to_string())
@@ -909,7 +949,7 @@ fn read_frames(stream: UnixStream, wake: &SyncSender<Out>) -> Result<String, Str
 /// exit and the process stops with SIGTSTP, so the shell's job control
 /// takes over; once continued (`fg`), raw mode and the setup come back and
 /// the size is sent, which the server answers with a full redraw.
-fn suspend(wake: &SyncSender<Out>) {
+pub(crate) fn suspend(wake: &SyncSender<Out>) {
     {
         let mut active = lock(&ACTIVE);
         if !*active {
@@ -945,7 +985,7 @@ const PENDING_WAIT: Duration = Duration::from_millis(25);
 /// stdin to the writer; EOF on the tty detaches. With `filter`, bytes go
 /// through the probe parser until DA1's reply arrives, so late replies are
 /// dropped instead of reaching the server as keys.
-fn stdin_loop(out: SyncSender<Out>, mut filter: Option<ProbeParser>) {
+pub(crate) fn stdin_loop(out: SyncSender<Out>, mut filter: Option<ProbeParser>) {
     let test_panic = std::env::var(TEST_PANIC_ENV).is_ok_and(|v| v == "stdin");
     let mut chunk = [0u8; 4096];
     loop {
@@ -1013,11 +1053,11 @@ fn writer_loop(stream: UnixStream, queue: Receiver<Out>) {
         match queue.try_recv() {
             Ok(Out::Input(bytes)) => frames.push(Frame::Input(bytes)),
             Ok(Out::Detach) => frames.push(Frame::Detach),
-            Ok(Out::Wake) => {}
+            Ok(Out::Wake | Out::Remote(_)) => {}
             Err(TryRecvError::Empty) if frames.is_empty() => match queue.recv() {
                 Ok(Out::Input(bytes)) => frames.push(Frame::Input(bytes)),
                 Ok(Out::Detach) => frames.push(Frame::Detach),
-                Ok(Out::Wake) => {}
+                Ok(Out::Wake | Out::Remote(_)) => {}
                 Err(_) => return,
             },
             Err(TryRecvError::Empty) => {}
