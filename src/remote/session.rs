@@ -26,11 +26,15 @@
 //! - [`Hook::on_input`]: keys typed, before the server sees them; returns
 //!   what to send (possibly changed) and what to draw locally. Each hook
 //!   gets what the previous one decided to send.
+//! - [`Hook::before_output`]: server output about to reach the tty;
+//!   returns bytes to draw before it.
 //! - [`Hook::on_output`]: server output, after it reached the tty; returns
 //!   extra bytes to draw after it.
 //! - [`Hook::tick`]: about every [`TICK`], for timeouts.
-//! - [`HookCtx`]: the [`Link`] (channels, uploads, RTT), control requests,
-//!   a redraw, and [`HookCtx::prompt`] to raise a one-line prompt on the
+//! - [`HookCtx`]: the [`Link`] (channels, uploads, RTT), control requests
+//!   (blocking, or off the main thread with [`HookCtx::request_bg`]), a
+//!   redraw, [`HookCtx::draw`] to write to the tty from any hook method,
+//!   and [`HookCtx::prompt`] to raise a one-line prompt on the
 //!   bottom row; while it is up, input goes to [`Prompt::key`] instead of
 //!   the hooks and the server.
 
@@ -89,6 +93,11 @@ pub trait Hook: Send {
         Input::send(bytes)
     }
 
+    /// Server output about to be written to the tty; bytes to write before it.
+    fn before_output(&mut self, _cx: &mut HookCtx<'_>, _bytes: &[u8]) -> Vec<u8> {
+        Vec::new()
+    }
+
     /// Server output just written to the tty; extra bytes to write after it.
     fn on_output(&mut self, _cx: &mut HookCtx<'_>, _bytes: &[u8]) -> Vec<u8> {
         Vec::new()
@@ -120,6 +129,8 @@ pub struct HookCtx<'a> {
     hello: &'a str,
     tty: &'a str,
     prompt: &'a mut Option<Box<dyn Prompt>>,
+    draw: Vec<u8>,
+    generation: u64,
 }
 
 impl HookCtx<'_> {
@@ -133,6 +144,12 @@ impl HookCtx<'_> {
         self.host
     }
 
+    /// Which connection this is: it changes with every reconnect, when
+    /// the server forgets this client and draws its screen anew.
+    pub fn connection(&self) -> u64 {
+        self.generation
+    }
+
     /// The smoothed round trip time ([`Link::rtt`]).
     pub fn rtt(&self) -> Option<Duration> {
         self.link.rtt()
@@ -141,6 +158,22 @@ impl HookCtx<'_> {
     /// A control request on its own channel; its output or error.
     pub fn request(&self, argv: &[String]) -> Result<String, String> {
         self.link.request(self.hello, argv)
+    }
+
+    /// A control request on its own thread, so a slow link does not stall
+    /// the main loop; its output or error arrives on the receiver.
+    pub fn request_bg(&self, argv: Vec<String>) -> Receiver<Result<String, String>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (link, hello) = (self.link.clone(), self.hello.to_string());
+        std::thread::spawn(move || {
+            let _ = tx.send(link.request(&hello, &argv));
+        });
+        rx
+    }
+
+    /// Writes `bytes` to the tty once the hook call returns.
+    pub fn draw(&mut self, bytes: &[u8]) {
+        self.draw.extend_from_slice(bytes);
     }
 
     /// This client's name for `-t`/`-c` in requests.
@@ -405,8 +438,15 @@ impl Loop {
             hello: &self.params.hello,
             tty: client_tty(),
             prompt: &mut self.overlay,
+            draw: Vec::new(),
+            generation: self.generation,
         };
-        f(&mut a.hooks, &mut cx)
+        let out = f(&mut a.hooks, &mut cx);
+        if !cx.draw.is_empty() {
+            let _ = client::write_tty(&cx.draw);
+            self.draw_prompt();
+        }
+        out
     }
 
     fn input(&mut self, a: &mut RemoteAttach, bytes: Vec<u8>) {
@@ -467,6 +507,16 @@ impl Loop {
         }
         match ev.kind {
             Kind::Output(bytes) => {
+                let before = self.with_hooks(a, |hooks, cx| {
+                    let mut before = Vec::new();
+                    for h in hooks {
+                        before.extend(h.before_output(cx, &bytes));
+                    }
+                    before
+                });
+                if !before.is_empty() {
+                    let _ = client::write_tty(&before);
+                }
                 if let Err(e) = client::write_tty(&bytes) {
                     return Some(Err(format!("writing to the terminal: {e}")));
                 }

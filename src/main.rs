@@ -1873,7 +1873,7 @@ impl Remote {
             term: std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
             reconnect: local_option("remote-reconnect").is_none_or(|v| v == "on"),
             relink,
-            hooks: Vec::new(),
+            hooks: vec![Box::new(grofe::remote::predict_hook::PredictHook::new())],
         };
         session::attach(self.link, attach)
     }

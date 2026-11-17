@@ -3,6 +3,7 @@ pub mod connect;
 pub mod forward;
 pub mod machines;
 pub mod predict;
+pub mod predict_hook;
 pub mod proxy;
 pub mod proxy_proto;
 pub mod quic;
