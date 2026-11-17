@@ -36,6 +36,10 @@ stable-ssh-agent = true
   set by built-in defaults
 forward-browser = true
   set by built-in defaults
+remote-udp-ports = "60001-61000"
+  set by built-in defaults
+remote-quic-idle = 604800
+  set by built-in defaults
 set-clipboard = "external"
   set by built-in defaults
 focus-events = true

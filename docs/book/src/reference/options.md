@@ -1357,6 +1357,30 @@ Default:
 Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})
 ```
 
+## remote-quic-idle
+
+Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days.
+
+- **TOML key**: `remote-quic-idle` (integer)
+- **Scope**: global
+- **Values**: a whole number, at most 2147483647
+
+Default: `604800`
+
+grofe only: tmux does not have this option.
+
+## remote-udp-ports
+
+UDP ports grofe proxy --quic picks a free one from, as LOW-HIGH or one port; read on the remote when the roaming transport starts.
+
+- **TOML key**: `remote-udp-ports` (string)
+- **Scope**: global
+- **Values**: text
+
+Default: `60001-61000`
+
+grofe only: tmux does not have this option.
+
 ## renumber-windows
 
 Renumber a session's windows when one is closed, so there are no gaps.
