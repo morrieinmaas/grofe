@@ -18,8 +18,9 @@ grofe attach ssh://me@devbox:2222/work
 ```
 
 `-r` takes anything `ssh` takes, including aliases from `~/.ssh/config`; ssh does the
-authentication, `ProxyJump` and `ControlMaster`. grofe runs
-`ssh -T <host> -- grofe proxy` and speaks its own protocol over that one stream (see
+authentication, `ProxyJump` and `ControlMaster`. grofe runs `ssh -T -- <host>` with a
+short `sh -c` command that starts the remote `grofe proxy` (the versioned install below when it
+exists, else `grofe` on the remote `PATH`), and speaks its own protocol over that one stream (see
 `docs/protocol-proxy.md` in the repository). It adds `ServerAliveInterval=15` and
 `ServerAliveCountMax=2` only when your ssh config sets no value of its own.
 
@@ -39,7 +40,7 @@ grofe is not installed on devbox (linux x86_64). Install v0.3.1 to ~/.local/shar
 
 `--install` answers yes and `--no-install` no; without a terminal the answer is no. The install
 downloads the release archive for the remote's system on your machine, checks it against the
-release's `SHA256SUMS`, and copies the binary over the same ssh connection into
+release's `SHA256SUMS`, and copies the binary over ssh (separate short `ssh` runs, so your ssh config and keys apply) into
 `~/.local/share/grofe/bin/<version>/`. The copy is checked for its length and hash on the remote
 before it is moved into place. It never uses sudo and never touches the remote's config.
 

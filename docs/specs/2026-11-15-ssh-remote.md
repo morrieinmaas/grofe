@@ -33,7 +33,7 @@ flowchart LR
 
 - **`grofe proxy`** (new subcommand, runs on the remote): speaks the proxy protocol on stdin/stdout
   (or on QUIC streams), and opens channels to the local server socket (starting the server like
-  any CLI call does), to `127.0.0.1:<port>` for forwards, and to files for uploads. It holds no
+  any CLI call does), to `127.0.0.1:<port>` for forwards (then `[::1]:<port>` when nothing answers on IPv4), and to files for uploads. It holds no
   session state: losing it loses nothing.
 - **Protocol v1 does not change** its frames (§8 forbids new frame kinds). Everything the server
   must say to a remote client goes through additive v1 verbs and events on the control channel.
@@ -62,8 +62,8 @@ else `~/.local/share/grofe/bin/<version>/grofe`.
 ~/.local/share/grofe/bin/<version>/? [y/N]`. `--install` answers yes, `--no-install` no. Install
 downloads the release archive for the remote's os/arch on the local machine (the release URL is
 an option, `remote-release-url`, overridable for tests and mirrors), checks it against the
-release's `SHA256SUMS`, and copies it over the same ssh connection (an `upload` channel needs a
-proxy, so the install uses `ssh host 'mkdir -p ... && cat > ...'`). Never sudo, never touches
+release's `SHA256SUMS`, and copies it over ssh (an `upload` channel needs a proxy, so the install
+uses separate `ssh host 'mkdir -p ... && cat > ...'` runs). Never sudo, never touches
 the remote's config. `--install-from <path>` installs a local file instead (air-gapped hosts).
 
 **Drop and reconnect.** The client detects a drop by EOF, an ssh exit, or two missed pings
