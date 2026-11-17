@@ -467,16 +467,23 @@ fn pane_echo_is_sent_when_the_ptys_echo_flag_changes() {
 #[test]
 fn a_subscriber_in_place_of_one_that_went_still_gets_the_current_echo() {
     let srv = server();
-    srv.cmd(&["new-session", "-d", "-s", "main"])
+    // A fixed echo state: a shell's line editor flips the flag as it starts,
+    // which would race the snapshots compared below.
+    srv.cmd(&["new-session", "-d", "-s", "main", "stty -echo; sleep 100"])
         .expect("session");
     let pane = srv
         .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
         .expect("pane id");
     let pane = pane.trim().parse().expect("pane id");
-    let _first = srv.subscribe(&["pane-echo"]).expect("first");
+    let mut _first = srv.subscribe(&["pane-echo"]).expect("first");
+    // Wait for the pane's echo to be off before the snapshots are taken.
+    let mut off = false;
+    while !off {
+        off = _first.next(WAIT).expect("echo off") == (Event::PaneEcho { pane, echo: false });
+    }
     let mut second = srv.subscribe(&["pane-echo"]).expect("second");
     let current = second.next(WAIT).expect("current echo");
-    assert!(matches!(current, Event::PaneEcho { pane: p, .. } if p == pane));
+    assert_eq!(current, Event::PaneEcho { pane, echo: false });
     // The second goes; a third takes its place, so the count is as before.
     drop(second);
     wait_until("the server to see the second go", WAIT, || {
