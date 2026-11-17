@@ -199,3 +199,16 @@ and the landing page and the mdBook guide (both from PR #17, now on main).
   servers stay unaware of each other - cost: the client grows a small overlay renderer.
 - Ruling: predictive echo defaults to `auto` (remote, RTT 50 ms or more) - mosh's experience;
   `off` locally where it has no benefit - cost: a misprediction flashes for one frame.
+- Ruling (build, 2026-11-17): release downloads use https only, with plain http allowed for a
+  loopback host (the container end-to-end serves its release dir on 127.0.0.1) - SHA256SUMS
+  comes from the same origin as the archive, so it proves integrity only and the transport must
+  carry the authenticity - cost: a plain-http mirror on a LAN must use https or `file://`.
+- Ruling (build, 2026-11-17): `remote-quic-idle` keeps its 7-day default, and a new
+  `grofe proxy --quic` stops the older proxy of the same server instance instead (verified by
+  a lock held on its pid file, never by the pid alone) - one bearer token alive per instance -
+  cost: two clients using QUIC to the same remote instance stop each other's proxy whenever one
+  of them bootstraps again.
+- Ruling (build, 2026-11-17): the versioned install under `~/.local/share/grofe/bin/<version>/`
+  wins over a `grofe` on the remote's PATH - otherwise an incompatible PATH grofe would win every
+  time after bootstrap installed the right one - cost: upgrading the PATH grofe does not take
+  effect until the versioned one is removed.

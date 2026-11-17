@@ -25,6 +25,11 @@ side and let grofe keep track of them.
   so your scripts and plugins keep working, with a TOML config that names
   the line of a typo, a status line that never forks on redraw, and framed
   panes you can drag, dock and float.
+- **Remote sessions that feel local.** `grofe -r host` attaches to a session
+  on another machine over ssh, installs grofe there if it is missing, rides
+  out dropped links and sleep without losing output, forwards URLs, dropped
+  files, ports and the ssh agent, echoes keys locally on slow links, and puts
+  several machines and their agents in one window.
 - **Scriptable.** Luau scripts and `grofe pack` plugins run inside a time
   and memory budget, and `grofe control` speaks JSON to anything else.
 
@@ -121,6 +126,20 @@ vim-tmux-navigator) keep working, and grofe can run under the name `tmux`.
 See
 [Switching from tmux](https://termage.github.io/grofe/docs/switching-from-tmux.html)
 for the gaps.
+
+## Remote sessions
+
+```sh
+grofe -r devbox                 # attach to "main" on devbox over ssh
+grofe -r devbox agent list      # any command runs there and prints here
+grofe machine add devbox devbox # save it; then `grofe` shows every machine
+```
+
+A dropped connection shows a reconnect bar and comes back where it was; the
+remote server keeps every pane, so nothing printed meanwhile is lost. See
+[Remote sessions](https://termage.github.io/grofe/docs/remote.html) for
+installing on the remote, forwarding, predictive echo, the QUIC transport and
+the security notes.
 
 ## Scripting and plugins
 
