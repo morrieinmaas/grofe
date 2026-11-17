@@ -217,3 +217,40 @@ fn with_no_client_the_proxy_exits_after_remote_quic_idle() {
     wait_until("the idle proxy to exit", WAIT, || process_gone(proxy.pid));
     assert!(!proxy.pid_file.exists(), "pid file left behind");
 }
+
+#[test]
+fn a_new_proxy_stops_the_older_one_of_its_instance() {
+    let srv = session_server();
+    let old = start(&srv);
+    let new = start(&srv);
+    wait_until("the older proxy to stop", WAIT, || process_gone(old.pid));
+    assert!(!old.pid_file.exists(), "the older pid file is left");
+    assert!(new.pid_file.exists());
+    assert!(!process_gone(new.pid));
+    let (_link, conn) = link(&new.boot);
+    let mut chan = control(&srv, &conn);
+    let mut reader = BufReader::new(chan.clone());
+    assert!(sessions(&mut chan, &mut reader, 1).contains("roam"));
+}
+
+#[test]
+fn a_stale_pid_file_is_removed_and_its_pid_left_alone() {
+    let srv = session_server();
+    // A pid file no live proxy holds the lock on, naming a live process
+    // that is not a proxy (as after a crash and pid reuse).
+    let mut bystander = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let (_, stale) = proxy_files(&srv.log_path(), 1);
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, format!("{}\n", bystander.id())).unwrap();
+    let _proxy = start(&srv);
+    assert!(!stale.exists(), "the stale pid file is left");
+    assert!(
+        bystander.try_wait().unwrap().is_none(),
+        "an unrelated pid was signalled"
+    );
+    let _ = bystander.kill();
+    let _ = bystander.wait();
+}

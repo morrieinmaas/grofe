@@ -1009,6 +1009,9 @@ impl Drop for RawTty {
 /// and exits, a detached one serves.
 fn proxy_cmd(globals: &Globals, quic: bool) -> ExitCode {
     let (socket, own_dir) = globals.resolve();
+    // The detached QUIC proxy works from `/`, so a relative `-S` must not
+    // stay relative.
+    let socket = std::path::absolute(&socket).unwrap_or(socket);
     let target = socket.clone();
     let connect: grofe::remote::proxy::Connect =
         std::sync::Arc::new(move || connect_or_start(&target, own_dir, true));

@@ -10,6 +10,21 @@
 //! rest of that stream is the proxy protocol. The client pins the
 //! certificate by its SHA-256 (no CA) and sends the token only once the TLS
 //! handshake has proved the server holds that certificate's key.
+//!
+//! QUIC security notes. The bootstrap line is the only secret, and it
+//! travels over the ssh session that started the proxy, so only someone
+//! who can run commands as this user on the remote has it. The token is
+//! good for the life of that proxy: until it exits after
+//! `remote-quic-idle` with no client, or until a newer `grofe proxy --quic`
+//! for the same instance stops it (one proxy per instance). A peer without
+//! the line can learn that a UDP port answers QUIC and can start
+//! handshakes, which are bounded (a retry to validate its address, a
+//! capped number of unauthenticated connections, each with a small receive
+//! window and [`server`]'s token deadline), and it is closed at a wrong
+//! token without taking the slot. It cannot reach the proxy protocol, the
+//! server socket or any file. A peer that is not the pinned certificate's
+//! holder cannot pose as the proxy: the client checks the hash and the
+//! handshake signature before the token leaves it.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -48,6 +63,14 @@ pub(crate) const ALPN: &[u8] = b"grofe-proxy/1";
 /// keep-alives hold a live path well inside it.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEP_ALIVE: Duration = Duration::from_secs(5);
+/// The connection's receive window before the peer is authenticated:
+/// what an unauthenticated peer can make this end buffer.
+const PRE_AUTH_WINDOW: u32 = 64 * 1024;
+/// The connection's and the one stream's receive window once the peer is
+/// authenticated (the client: the pinned server; the server: the token).
+/// The proxy protocol multiplexes everything over the one stream, so this
+/// is the whole link's bytes in flight.
+pub(crate) const AUTHED_WINDOW: u32 = 4 * 1024 * 1024;
 
 /// Application close codes on the QUIC connection.
 pub(crate) const CLOSE_DONE: u32 = 0;
@@ -139,7 +162,7 @@ fn unhex32(s: &str) -> Result<[u8; TOKEN_LEN], String> {
     let digit = |c: u8| match c {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),
-        _ => Err(format!("not a lowercase hex digit: {:?}", c as char)),
+        _ => Err("not lowercase hex".to_string()),
     };
     let mut out = [0u8; TOKEN_LEN];
     for (i, pair) in s.as_bytes().chunks(2).enumerate() {
@@ -266,6 +289,10 @@ pub(crate) fn transport() -> Arc<TransportConfig> {
     t.max_concurrent_uni_streams(VarInt::from_u32(0));
     t.max_idle_timeout(IDLE_TIMEOUT.try_into().ok());
     t.keep_alive_interval(Some(KEEP_ALIVE));
+    t.receive_window(VarInt::from_u32(PRE_AUTH_WINDOW));
+    t.stream_receive_window(VarInt::from_u32(AUTHED_WINDOW));
+    // No unreliable datagrams: nothing here uses them.
+    t.datagram_receive_buffer_size(None);
     Arc::new(t)
 }
 
@@ -472,6 +499,7 @@ fn connect_within(host: &str, b: &Bootstrap, wait: Duration) -> io::Result<QuicL
         // now does the token leave this machine.
         let (mut send, recv) = conn.open_bi().await.map_err(connection_error)?;
         send.write_all(&token).await.map_err(write_error)?;
+        conn.set_receive_window(VarInt::from_u32(AUTHED_WINDOW));
         Ok((conn, send, recv))
     })?;
     let reader = QuicReader {
