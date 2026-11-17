@@ -282,6 +282,8 @@ fn grofe_open_in_a_remote_pane_runs_the_local_opener() {
 #[test]
 fn the_sessions_agent_link_follows_the_agent_ssh_gave_the_proxy() {
     let r = Remote::new();
+    // The agent ssh gave the proxy: a live socket.
+    let _agent = std::os::unix::net::UnixListener::bind(r.root().join("agent.sock")).unwrap();
     let h = r.attach(&[("SSH_AUTH_SOCK", "/local/agent/not/sent")]);
     let id = r
         .srv
@@ -290,5 +292,20 @@ fn the_sessions_agent_link_follows_the_agent_ssh_gave_the_proxy() {
     let n: u32 = id.trim().trim_start_matches('$').parse().unwrap();
     let link = grofe::paths::agent_link(&r.srv.socket, n);
     assert_eq!(fs::read_link(&link).unwrap(), r.root().join("agent.sock"));
+    // The first pane, made over a control channel before the attach, has
+    // the link, and through it the agent.
+    let out = r.root().join("first-agent");
+    let command = format!("printf %s \"$SSH_AUTH_SOCK\" > {}", out.display());
+    r.srv
+        .cmd(&["send-keys", "-t", "main", &command, "Enter"])
+        .unwrap();
+    wait_until("the pane's agent", WAIT, || {
+        fs::read_to_string(&out).is_ok_and(|s| !s.is_empty())
+    });
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        link.display().to_string()
+    );
+    std::os::unix::net::UnixStream::connect(&link).expect("the agent through the link");
     detach(h);
 }
