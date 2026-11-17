@@ -331,3 +331,33 @@ proptest! {
         run(&ops, "$ ").map_err(TestCaseError::fail)?;
     }
 }
+
+/// Proptest's shrunk case: an underlined wide char, backspaced over after
+/// a reverse index, then cleared to the end of the screen.
+#[test]
+fn a_repaint_after_a_wide_char_and_a_reverse_index_matches_the_mirror() {
+    let ops = [
+        Op::Server(vec!["\u{1b}[4m", "漢"], 1),
+        Op::Server(vec!["\n"], 1),
+        Op::Server(vec!["\u{1b}M"], 1),
+        Op::Server(vec!["$ "], 1),
+        Op::Server(vec!["\u{8}", "漢", "\u{8}"], 1),
+        Op::Server(vec!["\u{1b}[J"], 1),
+        Op::Input("a"),
+    ];
+    run(&ops, "$ ").unwrap();
+}
+
+/// Proptest's shrunk case: an erase in a colour from a wide char's spacer
+/// column, then a repaint.
+#[test]
+fn a_repaint_after_a_coloured_erase_from_a_spacer_matches_the_mirror() {
+    let ops = [
+        Op::Server(vec!["漢"], 1),
+        Op::Server(vec!["\u{8}", "\u{1b}[48;2;1;2;3m", "\u{1b}[K"], 1),
+        Op::Input("a"),
+        Op::Input("a"),
+        Op::Input("a"),
+    ];
+    run(&ops, "$ ").unwrap();
+}

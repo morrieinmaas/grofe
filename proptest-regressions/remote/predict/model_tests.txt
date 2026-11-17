@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4d617ff8eab101c4cff41891e27933f3dd0676e994e2044c89cf617557971a67 # shrinks to ops = [Server(["漢"], 1), Server(["\u{8}", "\u{1b}[48;2;1;2;3m", "\u{1b}[K"], 1), Input("a"), Input("a"), Input("a")]
