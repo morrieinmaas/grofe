@@ -598,7 +598,7 @@ impl Predictor {
         let mut out = cup((row, 0));
         out.extend(b"\x1b[0m");
         let mut cur = default;
-        for cell in &cells[..used] {
+        for (col, cell) in cells[..used].iter().enumerate() {
             if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
             }
@@ -607,6 +607,18 @@ impl Predictor {
                 out.extend(sgr(cell.flags, cell.fg, cell.bg).bytes());
             }
             push_cell(&mut out, cell);
+            // A wide char whose spacer the server erased (an erase from the
+            // spacer's column keeps the char): writing it made a spacer of
+            // the next cell, so erase that one the same way.
+            if cell.flags.contains(Flags::WIDE_CHAR)
+                && cells
+                    .get(col + 1)
+                    .is_some_and(|next| !next.flags.contains(Flags::WIDE_CHAR_SPACER))
+            {
+                out.extend(cup((row, col + 1)));
+                out.extend(b"\x1b[0m\x1b[X");
+                cur = default;
+            }
         }
         if used < self.cols {
             if cur != default {
