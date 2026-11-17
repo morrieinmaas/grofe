@@ -31,9 +31,25 @@ pub fn run(globals_socket: &Path, args: &[String]) -> ExitCode {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_micros() as u64);
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
     let pane = std::env::var("GROFE_PANE").ok();
+    let pane = pane.filter(|_| owns_pane(args, entrypoint.as_deref()));
     hook(globals_socket, args, pane.as_deref(), std::io::stdin(), ts);
     ExitCode::SUCCESS
+}
+
+/// Whether the hook reporting with `args` comes from its pane's agent. A
+/// `claude -p` helper run from inside the pane (entrypoint `sdk-cli`, as an
+/// SDK host starts it) inherits `GROFE_PANE`; its reports would take over
+/// the pane's record and resume with the helper's session. Other kinds
+/// report whatever the entrypoint says.
+fn owns_pane(args: &[String], entrypoint: Option<&str>) -> bool {
+    let claude = args
+        .iter()
+        .position(|a| a == "--hook")
+        .and_then(|i| args.get(i + 1))
+        .is_some_and(|k| k == "claude");
+    !(claude && entrypoint.is_some_and(|e| e.starts_with("sdk")))
 }
 
 fn hook<R: Read + Send + 'static>(
@@ -173,6 +189,7 @@ fn message(v: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use std::os::unix::net::UnixListener;
     use std::time::Instant;
@@ -267,6 +284,34 @@ mod tests {
         let args = strs(&["agent", "report", "done", "--hook", "claude"]);
         hook(&sock, &args, None, &b""[..], 1);
         assert!(l.accept().is_err(), "no connection without a pane");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_sdk_launched_claude_does_not_own_its_pane() {
+        let claude = strs(&["agent", "report", "done", "--hook", "claude"]);
+        let codex = strs(&["agent", "report", "done", "--hook", "codex"]);
+        assert!(owns_pane(&claude, None));
+        assert!(owns_pane(&claude, Some("cli")));
+        assert!(owns_pane(&claude, Some("claude-vscode")));
+        assert!(!owns_pane(&claude, Some("sdk-cli")));
+        assert!(!owns_pane(&claude, Some("sdk-ts")));
+        // Only a Claude hook is judged by Claude's entrypoint.
+        assert!(owns_pane(&codex, Some("sdk-cli")));
+    }
+
+    /// With no pane (an SDK helper's report, see [`owns_pane`]) the hook
+    /// sends nothing.
+    #[test]
+    fn a_hook_with_no_pane_sends_nothing() {
+        let dir = tempfile_dir("nopane");
+        let sock = dir.join("s.sock");
+        let l = UnixListener::bind(&sock).unwrap();
+        l.set_nonblocking(true).unwrap();
+        let args = strs(&["agent", "report", "done", "--hook", "claude"]);
+        hook(&sock, &args, None, &b"{}"[..], 1);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(l.accept().is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 

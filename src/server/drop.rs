@@ -6,7 +6,7 @@
 //! | Released over | Result |
 //! |---|---|
 //! | the middle of `T` | the two swap places, as `swap-pane` |
-//! | the thin band along one of `T`'s sides | `T` is split and the pane takes the half on that side; the space it left is filled as `kill-pane` fills it |
+//! | the outer quarter towards one of `T`'s sides | `T` is split and the pane takes the half on that side; the space it left is filled as `kill-pane` fills it |
 //! | the pane itself | nothing |
 //! | no tile (a gap, off the window), a tiled pane | the nearest tile, as if the pointer were at its closest cell |
 //! | no tile, a floating pane | it floats where it was dropped ([`float_at`]) |
@@ -54,10 +54,11 @@ pub struct Drop {
     pub swap: bool,
 }
 
-/// The width of an edge band along a side `len` cells long: a sixth of it,
-/// 1 to 5 cells, so most of a pane is its middle.
+/// The width of an edge band along a side `len` cells long: a quarter of
+/// it, at least one cell, so the middle is the central half on each axis
+/// and a wide pane's side is as easy to hit as a tall pane's top.
 fn band(len: u32) -> u32 {
-    (len / 6).clamp(1, 5)
+    (len / 4).max(1)
 }
 
 /// The zone of rect `r` that window cell `(x, y)`, inside it, is in: the
@@ -370,21 +371,22 @@ mod tests {
     }
 
     #[test]
-    fn the_middle_is_most_of_a_pane_and_an_edge_a_thin_band() {
+    fn the_middle_is_the_central_half_and_an_edge_a_quarter() {
         let r = rect(10, 0, 40, 20);
-        // 40 columns: a band of 5 (a sixth, at most 5); 20 rows: 3.
-        assert_eq!(zone(r, (14, 10)), Zone::Edge(Side::Left));
-        assert_eq!(zone(r, (15, 10)), Zone::Middle);
-        assert_eq!(zone(r, (44, 10)), Zone::Middle);
-        assert_eq!(zone(r, (45, 10)), Zone::Edge(Side::Right));
-        assert_eq!(zone(r, (30, 2)), Zone::Edge(Side::Top));
-        assert_eq!(zone(r, (30, 3)), Zone::Middle);
+        // 40 columns: a band of 10 (a quarter); 20 rows: 5.
+        assert_eq!(zone(r, (19, 10)), Zone::Edge(Side::Left));
+        assert_eq!(zone(r, (20, 10)), Zone::Middle);
+        assert_eq!(zone(r, (39, 10)), Zone::Middle);
+        assert_eq!(zone(r, (40, 10)), Zone::Edge(Side::Right));
+        assert_eq!(zone(r, (30, 4)), Zone::Edge(Side::Top));
+        assert_eq!(zone(r, (30, 5)), Zone::Middle);
         // A corner goes to the nearer edge for the side's length.
         assert_eq!(zone(r, (11, 2)), Zone::Edge(Side::Left));
         assert_eq!(zone(r, (13, 0)), Zone::Edge(Side::Top));
-        // A wide pane's band stops at 5 cells.
+        // A wide pane's side band grows with it: a quarter of 200.
         let wide = rect(0, 0, 200, 50);
-        assert_eq!(zone(wide, (5, 25)), Zone::Middle);
+        assert_eq!(zone(wide, (49, 25)), Zone::Edge(Side::Left));
+        assert_eq!(zone(wide, (50, 25)), Zone::Middle);
         // A tiny pane still has a one-cell edge.
         let tiny = rect(0, 0, 4, 4);
         assert_eq!(zone(tiny, (0, 2)), Zone::Edge(Side::Left));
@@ -451,6 +453,37 @@ mod tests {
         let gap_col = u32::from(gap.x + gap.cols + 1);
         assert!(plan(&w, PaneId(0), (gap_col, 10)).is_none());
         assert!(plan(&w, PaneId(0), (0, 10)).is_none());
+    }
+
+    #[test]
+    fn a_stacked_pane_dropped_on_a_side_edge_goes_side_by_side() {
+        for framed in [false, true] {
+            let mut w = window(framed);
+            let mut layout = LayoutTree::new(PaneId(0));
+            layout.set_pad(w.layout.pad());
+            layout
+                .split(
+                    w.area(),
+                    PaneId(0),
+                    Dir::Vertical,
+                    PaneId(1),
+                    SplitSize::Half,
+                )
+                .unwrap();
+            w.layout = layout;
+            let top = rects(&w.layout, &w)[0].1;
+            let mid_y = u32::from(top.y + top.rows / 2);
+            for x in [u32::from(top.x), u32::from(top.x + top.cols - 1)] {
+                let d = plan(&w, PaneId(1), (x, mid_y))
+                    .unwrap_or_else(|| panic!("framed {framed} x {x}: no drop"));
+                assert!(!d.swap, "framed {framed} x {x}: {d:?}");
+                let after = rects(&d.layout, &w);
+                assert_eq!(
+                    after[0].1.y, after[1].1.y,
+                    "framed {framed} x {x}: {after:?}"
+                );
+            }
+        }
     }
 
     #[test]

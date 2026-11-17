@@ -1070,15 +1070,51 @@ pub(super) fn set_message(
     }
 }
 
-/// The ends a message or prompt pill takes (`pane-frame-tab-ends`) while
-/// `message-pill` is on for `chain`; `None` draws tmux's full-width bar.
-pub(crate) fn pill_ends<'a>(model: &'a Model, chain: &[Owner]) -> Option<&'a str> {
-    (model.options.lookup("message-pill", chain) != Some("off")).then(|| {
-        model
-            .options
-            .lookup("pane-frame-tab-ends", chain)
-            .unwrap_or("()")
+/// Nerd Font round caps, a pill's ends when neither `message-pill-ends`
+/// nor the theme's `@pill_l` and `@pill_r` give them.
+const ROUND_ENDS: &str = "\u{e0b6}\u{e0b4}";
+
+/// How a `level` message or prompt pill is drawn while `message-pill` is on
+/// for `chain`; `None` draws tmux's full-width bar. The colour is the
+/// theme's (`@theme_blue`, `@theme_yellow`, `@theme_red`, text in
+/// `@theme_bg`), else a named one; the ends are `message-pill-ends`, else
+/// the theme's `@pill_l` and `@pill_r`, else round caps.
+pub(crate) fn pill_look(
+    model: &Model,
+    chain: &[Owner],
+    level: render::Level,
+) -> Option<render::PillLook> {
+    let get = |name: &str| model.options.lookup(name, chain).filter(|v| !v.is_empty());
+    if get("message-pill") == Some("off") {
+        return None;
+    }
+    let ends = get("message-pill-ends")
+        .map(str::to_string)
+        .or_else(|| Some(format!("{}{}", get("@pill_l")?, get("@pill_r")?)))
+        .unwrap_or_else(|| ROUND_ENDS.to_string());
+    let (theme, _, _, _) = level.look();
+    let named = render::PillLook::named(level, &ends);
+    Some(match (get(theme), get("@theme_bg")) {
+        (Some(colour), Some(text)) => render::PillLook {
+            colour: colour.to_string(),
+            text: text.to_string(),
+            ends,
+        },
+        _ => named,
     })
+}
+
+/// How many columns of status line `line` a pill covers: up to where
+/// `status-right` starts, so the right side stays; the whole row when the
+/// line has no `status-right`.
+pub(crate) fn pill_span(rows: &[StatusRow], line: usize, cols: u16) -> usize {
+    let right = rows.get(line).and_then(|row| {
+        row.ranges
+            .iter()
+            .find(|r| r.kind == RangeKind::Right && r.end > r.start)
+            .map(|r| r.start)
+    });
+    usize::from(right.unwrap_or(cols).min(cols))
 }
 
 /// The session's `display-time`, or tmux's default; 0 means until a key.

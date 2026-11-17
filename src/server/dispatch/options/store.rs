@@ -86,7 +86,7 @@ impl Options {
 
     /// Under tmux identity (spec D12 ruling, FE.1): the built-in defaults
     /// where grofe's differ from tmux 3.7b's become tmux's
-    /// ([`TMUX_DEFAULTS`]), so a script sees what tmux would. `editor` is
+    /// (the `tmux_default` column), so a script sees what tmux would. `editor` is
     /// the server's `$VISUAL`, else `$EDITOR`: tmux makes `status-keys`
     /// and `mode-keys` `vi` when its basename holds `vi` (recorded).
     /// A value the config set keeps winning, and falls back to tmux's on
@@ -117,9 +117,9 @@ impl Options {
             Some(e) if e.contains("vi") => "vi",
             _ => "emacs",
         };
-        let defaults = TMUX_DEFAULTS
+        let defaults = BUILTINS
             .iter()
-            .map(|(n, v)| (*n, v.to_string()))
+            .filter_map(|b| Some((b.name, b.tmux_default?.to_string())))
             .chain([
                 ("mode-keys", keys.to_string()),
                 ("status-keys", keys.to_string()),

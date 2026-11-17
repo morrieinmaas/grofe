@@ -25,11 +25,10 @@ fn options_reference_matches_the_table() {
 /// each option once.
 #[test]
 fn every_option_is_documented_once() {
-    use grofe::config::{LIST_NAMES, OPTION_NAMES};
-    let mut keys: Vec<&str> = OPTION_NAMES
-        .iter()
-        .chain(LIST_NAMES)
-        .map(|(k, _)| *k)
+    use grofe::config::{LIST_NAMES, option_names};
+    let mut keys: Vec<&str> = option_names()
+        .chain(LIST_NAMES.iter().copied())
+        .map(|(k, _)| k)
         .collect();
     let total = keys.len();
     keys.sort();

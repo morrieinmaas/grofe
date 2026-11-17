@@ -453,7 +453,7 @@ pub(super) fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Op
         Some((
             text,
             *level,
-            pill_ends(model, &options::chain(model, w.active))?,
+            pill_look(model, &options::chain(model, w.active), *level)?,
         ))
     });
     let mut lines: Vec<StyledLine> = rows.iter().map(|r| r.line.clone()).collect();
@@ -480,12 +480,15 @@ pub(super) fn compose_client(state: &State, id: ClientId, c: &ClientEntry) -> Op
     };
     let cx = overlay_ctx_at(model, id, c, viewport);
     screenimg::mark_covered(&mut screen, 0);
-    if let Some((text, level, ends)) = pill {
-        let row = match &message {
-            Some((line, _)) if geom.lines > 0 => geom.first_row + *line as u16,
-            _ => screen.rows.saturating_sub(1),
+    if let Some((text, level, look)) = pill {
+        let (row, span) = match &message {
+            Some((line, _)) if geom.lines > 0 => (
+                geom.first_row + *line as u16,
+                pill_span(&rows, *line, screen.cols),
+            ),
+            _ => (screen.rows.saturating_sub(1), usize::from(screen.cols)),
         };
-        render::draw_message_pill(&mut screen, row, text, level, ends);
+        render::draw_message_pill(&mut screen, row, span, text, level, &look);
     }
     for overlay in state.registry.overlays.iter().rev() {
         overlay.draw(state, id, &cx, &mut screen);

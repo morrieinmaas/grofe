@@ -1,7 +1,8 @@
 # Getting started
 
-Running `grofe` on its own starts a session and attaches to it. To see the
-pieces one at a time, start a session in the background, check it is there
+Running `grofe` on its own attaches to your most recent session, or starts
+one when there is none. (Run as `tmux`, it makes a new session every time, as
+tmux does.) To see the pieces one at a time, start a session in the background, check it is there
 and attach:
 
 ```sh

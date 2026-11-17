@@ -1,0 +1,392 @@
+prefix = "C-a"
+  set by ~/.config/grofe/config.toml
+base-index = 1
+  set by built-in defaults
+pane-base-index = 1
+  set by built-in defaults
+escape-time-ms = 25
+  set by built-in defaults
+repeat-time-ms = 500
+  set by built-in defaults
+history-limit = 1234
+  set by ~/.config/grofe/config.toml
+mouse = false
+  set by ~/.config/grofe/config.toml
+remain-on-exit = false
+  set by built-in defaults
+restore-on-start = true
+  set by built-in defaults
+restore-stagger-ms = 1000
+  set by built-in defaults
+start-from-tmux = false
+  set by built-in defaults
+resurrect-dir = ""
+  set by built-in defaults
+automatic-rename = true
+  set by built-in defaults
+automatic-rename-format = "#{b:pane_current_path}"
+  set by built-in defaults
+allow-rename = false
+  set by built-in defaults
+set-titles = false
+  set by built-in defaults
+set-titles-string = '#{session_name}:#{window_index}:#{window_name} - "#{pane_title}" #{session_alerts}'
+  set by built-in defaults
+set-clipboard = "external"
+  set by built-in defaults
+focus-events = true
+  set by built-in defaults
+aggressive-resize = false  (no effect)
+  set by built-in defaults
+default-command = ""
+  set by built-in defaults
+default-shell = "/bin/sh"
+  set by built-in defaults
+default-terminal = "tmux-256color"
+  set by built-in defaults
+extended-keys = "on"  (no effect)
+  set by built-in defaults
+extended-keys-format = "xterm"  (no effect)
+  set by built-in defaults
+mode-keys = "vi"
+  set by built-in defaults
+renumber-windows = true
+  set by built-in defaults
+synchronize-panes = false
+  set by built-in defaults
+window-style = "default"
+  set by built-in defaults
+window-active-style = "default"
+  set by built-in defaults
+prefix2 = "None"
+  set by built-in defaults
+status-bg = "default"
+  set by built-in defaults
+status-fg = "default"
+  set by built-in defaults
+window-status-activity-style = "reverse"
+  set by built-in defaults
+focus-follows-mouse = false
+  set by built-in defaults
+default-size = "80x24"
+  set by built-in defaults
+exit-empty = true
+  set by built-in defaults
+detach-on-destroy = "on"
+  set by built-in defaults
+main-pane-width = "80"
+  set by built-in defaults
+main-pane-height = "24"
+  set by built-in defaults
+window-size = "latest"
+  set by built-in defaults
+pane-frames = true
+  set by built-in defaults
+pane-gap = 1
+  set by built-in defaults
+scratchpad-history = 10
+  set by built-in defaults
+pane-frame-title = true
+  set by built-in defaults
+pane-frame-tab-ends = "()"
+  set by built-in defaults
+agent-glyph-blocked = "⏸"
+  set by built-in defaults
+agent-glyph-error = "✗"
+  set by built-in defaults
+agent-glyph-unseen = "✓"
+  set by built-in defaults
+agent-glyph-working = "●"
+  set by built-in defaults
+notify-muted-glyph = "🔕"
+  set by built-in defaults
+agent-blocked-border-style = "fg=yellow"
+  set by built-in defaults
+prompt-position = "status"
+  set by built-in defaults
+status.lines = 2
+  set by ~/.config/grofe/config.toml
+status.position = "bottom"
+  set by built-in defaults
+status.style = "bg=green,fg=black"
+  set by built-in defaults
+status.left = "[#{session_name}] "
+  set by built-in defaults
+status.right = "hi"
+  set by ~/.config/grofe/config.toml
+status.left-length = 10
+  set by built-in defaults
+status.right-length = 40
+  set by built-in defaults
+status.interval = 15
+  set by built-in defaults
+status.window.format = "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}"
+  set by built-in defaults
+status.window.current-format = "#{window_index}:#{window_name}#{?window_flags,#{window_flags}, }#{?#{==:#{window_agent_state},blocked},#{agent-glyph-blocked},#{?#{==:#{window_agent_state},error},#{agent-glyph-error},#{?#{==:#{window_agent_state},unseen},#{agent-glyph-unseen},#{?#{==:#{window_agent_state},working},#{agent-glyph-working},}}}}"
+  set by built-in defaults
+status.justify = "left"
+  set by built-in defaults
+status.left-style = "default"
+  set by built-in defaults
+status.right-style = "default"
+  set by built-in defaults
+status.window.separator = " "
+  set by built-in defaults
+status.window.style = "default"
+  set by built-in defaults
+status.window.current-style = "default"
+  set by built-in defaults
+status.window.last-style = "default"
+  set by built-in defaults
+status.window.bell-style = "reverse"
+  set by built-in defaults
+message.style = "bg=yellow,fg=black,fill=yellow"
+  set by built-in defaults
+message.display-time-ms = 750
+  set by built-in defaults
+message.pill = true
+  set by ~/.config/grofe/config.toml
+message.pill-ends = ""
+  set by built-in defaults
+pane-border.style = "fg=red"
+  set by ~/.config/grofe/config.toml
+pane-border.active-style = "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}"
+  set by built-in defaults
+pane-border.format = '#{?pane_active,#[reverse],}#{pane_index}#[default] "#{pane_title}"#{?#{mouse},#[align=right]#[range=control|8][#{?#{window_zoomed_flag},u,z}]#[norange]#[range=control|9][x]#[norange],}'
+  set by built-in defaults
+pane-border.status = "off"
+  set by built-in defaults
+pane-border.lines = "rounded"
+  set by built-in defaults
+pane-border.indicators = "colour"
+  set by built-in defaults
+status.keys = "emacs"
+  set by built-in defaults
+compat-identity = "auto"
+  set by built-in defaults
+graphics = false
+  set by built-in defaults
+allow-passthrough = "off"
+  set by built-in defaults
+monitor-bell = true
+  set by built-in defaults
+monitor-activity = false
+  set by built-in defaults
+monitor-silence = 0
+  set by built-in defaults
+bell-action = "any"
+  set by built-in defaults
+activity-action = "other"
+  set by built-in defaults
+silence-action = "other"
+  set by built-in defaults
+visual-bell = "off"
+  set by built-in defaults
+visual-activity = "off"
+  set by built-in defaults
+visual-silence = "off"
+  set by built-in defaults
+buffer-limit = 50
+  set by built-in defaults
+clock-mode-colour = "blue"
+  set by built-in defaults
+clock-mode-style = "24"
+  set by built-in defaults
+word-separators = '''!"#$%&'()*+,-./:;<=>?@[\]^`{|}~'''
+  set by built-in defaults
+wrap-search = true
+  set by built-in defaults
+copy-command = ""
+  set by built-in defaults
+mode-style = "noattr,bg=yellow,fg=black"
+  set by built-in defaults
+copy-mode.match-style = "bg=cyan,fg=black"
+  set by built-in defaults
+copy-mode.current-match-style = "bg=magenta,fg=black"
+  set by built-in defaults
+prefix-timeout = 0
+  set by built-in defaults
+assume-paste-time = 1  (no effect)
+  set by built-in defaults
+destroy-unattached = "off"
+  set by built-in defaults
+display-panes-active-colour = "red"
+  set by built-in defaults
+display-panes-colour = "blue"
+  set by built-in defaults
+display-panes-time = 1000
+  set by built-in defaults
+initial-repeat-time = 0
+  set by built-in defaults
+key-table = "root"  (no effect)
+  set by built-in defaults
+lock-after-time = 0  (no effect)
+  set by built-in defaults
+lock-command = "lock -np"  (no effect)
+  set by built-in defaults
+message-command-style = "bg=black,fg=yellow,fill=black"
+  set by built-in defaults
+message-format = "#[#{?#{command_prompt},#{E:message-command-style},#{E:message-style}}]#{message}"
+  set by built-in defaults
+message-line = "0"
+  set by built-in defaults
+prompt-cursor-colour = "none"  (no effect)
+  set by built-in defaults
+prompt-cursor-style = "default"  (no effect)
+  set by built-in defaults
+prompt-command-cursor-style = "default"  (no effect)
+  set by built-in defaults
+cursor-colour = "none"  (no effect)
+  set by built-in defaults
+cursor-style = "default"  (no effect)
+  set by built-in defaults
+menu-style = "default"
+  set by built-in defaults
+menu-selected-style = "bg=yellow,fg=black"
+  set by built-in defaults
+menu-border-style = "default"
+  set by built-in defaults
+menu-border-lines = "single"
+  set by built-in defaults
+pane-status-current-style = "default"
+  set by built-in defaults
+pane-status-style = "default"
+  set by built-in defaults
+session-status-current-style = "default"
+  set by built-in defaults
+session-status-style = "default"
+  set by built-in defaults
+allow-set-title = true
+  set by built-in defaults
+alternate-screen = true  (no effect)
+  set by built-in defaults
+copy-mode-mark-style = "bg=red,fg=black"  (no effect)
+  set by built-in defaults
+copy-mode-position-format = "#[align=right]#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}[#{copy_position}/#{copy_position_limit}]#{?search_timed_out, (timed out),#{?search_count, (#{search_count}#{?search_count_partial,+,} results),}}"
+  set by built-in defaults
+copy-mode-position-style = "#{E:mode-style}"
+  set by built-in defaults
+copy-mode-selection-style = "#{E:mode-style}"  (no effect)
+  set by built-in defaults
+copy-mode-current-line-number-style = "fg=yellow"  (no effect)
+  set by built-in defaults
+copy-mode-line-number-style = "fg=white,dim"  (no effect)
+  set by built-in defaults
+copy-mode-line-numbers = "off"  (no effect)
+  set by built-in defaults
+fill-character = ""
+  set by built-in defaults
+other-pane-height = "0"
+  set by built-in defaults
+other-pane-width = "0"
+  set by built-in defaults
+pane-scrollbars = "off"  (no effect)
+  set by built-in defaults
+pane-scrollbars-style = "bg=black,fg=white,width=1,pad=0"  (no effect)
+  set by built-in defaults
+pane-scrollbars-position = "right"  (no effect)
+  set by built-in defaults
+popup-style = "default"
+  set by built-in defaults
+popup-border-style = "default"
+  set by built-in defaults
+popup-border-lines = "single"
+  set by built-in defaults
+remain-on-exit-format = "Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})"
+  set by built-in defaults
+scroll-on-clear = true  (no effect)
+  set by built-in defaults
+tiled-layout-max-columns = 0
+  set by built-in defaults
+tree-mode-preview-format = "#{?pane_format,#{pane_index}:#{pane_title},#{window_index}:#{window_name}}"
+  set by built-in defaults
+tree-mode-preview-style = "fg=#{?#{||:#{&&:#{pane_format},#{pane_active}},#{&&:#{window_format},#{window_active}}},#{display-panes-active-colour},#{display-panes-colour}}"
+  set by built-in defaults
+window-pane-current-status-format = "#P:[#T]#{?pane_flags,#{pane_flags}, }"
+  set by built-in defaults
+window-pane-status-format = "#P:[#T]#{?pane_flags,#{pane_flags}, }"
+  set by built-in defaults
+xterm-keys = true  (no effect)
+  set by built-in defaults
+backspace = "C-?"  (no effect)
+  set by built-in defaults
+default-client-command = "new-session"  (no effect)
+  set by built-in defaults
+editor = "/usr/bin/vi"  (no effect)
+  set by built-in defaults
+exit-unattached = false
+  set by built-in defaults
+get-clipboard = "buffer"
+  set by built-in defaults
+history-file = ""  (no effect)
+  set by built-in defaults
+input-buffer-size = 1048576  (no effect)
+  set by built-in defaults
+message-limit = 1000
+  set by built-in defaults
+prompt-history-limit = 100  (no effect)
+  set by built-in defaults
+variation-selector-always-wide = true  (no effect)
+  set by built-in defaults
+status.rows = ["", "#[align=left]#{R: ,#{n:#{session_name}}}P: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{P:#[range=pane|#{pane_id} #{E:pane-status-style}]#[push-default]#{T:window-pane-status-format}#[pop-default]#[norange list=on default]  ,#[range=pane|#{pane_id} list=focus #{?#{!=:#{E:pane-status-current-style},default},#{E:pane-status-current-style},#{E:pane-status-style}}]#[push-default]#{T:window-pane-current-status-format}#[pop-default]#[norange list=on default] }", "#[align=left]#{R: ,#{n:#{session_name}}}S: #[norange default]#[list=on align=#{status-justify}]#[list=left-marker]<#[list=right-marker]>#[list=on]#{S:#[range=session|#{session_id} #{E:session-status-style}]#[push-default]#{session_name}#{session_alert}#[pop-default]#[norange list=on default]  ,#[range=session|#{session_id} list=focus #{?#{!=:#{E:session-status-current-style},default},#{E:session-status-current-style},#{E:session-status-style}}]#[push-default]#{session_name}*#{session_alert}#[pop-default]#[norange list=on default] }"]
+  set by built-in defaults
+command-alias = []
+  set by built-in defaults
+update-environment = ["DISPLAY", "KRB5CCNAME", "MSYSTEM", "SSH_ASKPASS", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_CONNECTION", "WAYLAND_DISPLAY", "WINDOWID", "XAUTHORITY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "XDG_SESSION_TYPE"]
+  set by built-in defaults
+terminal-features = ["xterm*:clipboard:ccolour:cstyle:focus:title", "screen*:title", "rxvt*:ignorefkeys"]
+  set by built-in defaults
+terminal-overrides = ["linux*:AX@"]
+  set by built-in defaults
+codepoint-widths = []
+  set by built-in defaults
+pane-colours = []
+  set by built-in defaults
+user-keys = []
+  set by built-in defaults
+copy-hint-patterns = ['''(?:https?|ftp|file|ssh|git)://[^\s<>"'`()\[\]{}]*[^\s<>"'`()\[\]{}.,;:!?]''', '''(?:^|[\s"'(=:])((?:~|\.{1,2})?(?:/[\w.@%+~-]+)+/?)''', '''(?:^|[\s"'(=])((?:[\w.@%+~-]+/)+[\w.@%+~-]+/?)''', '(?:^|[\s\[(])((?:(?:[0-9a-fA-F]{1,4}:){1,6}|:):[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5}|(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4})\b', '\b\d{1,3}(?:\.\d{1,3}){3}\b', '\b[0-9a-f]{7,40}\b', '\b\d{4,}\b']
+  set by built-in defaults
+agents.enabled = true
+  set by built-in defaults
+agents.scan-interval = "1s"
+  set by built-in defaults
+agents.sidebar.width = 32
+  set by built-in defaults
+agents.sidebar.show-on-attach = false
+  set by built-in defaults
+agents.sidebar.min-client-width = 120
+  set by built-in defaults
+agents.grid.tile-width = 60
+  set by built-in defaults
+agents.grid.preview-lines = 12
+  set by built-in defaults
+agents.picker.width = "80%"
+  set by built-in defaults
+agents.picker.height = "70%"
+  set by built-in defaults
+agents.new.worktree = "never"
+  set by built-in defaults
+agents.new.worktree-command = ["git", "-C", "{dir}", "worktree", "add", "-b", "{branch}", "{path}"]
+  set by built-in defaults
+notify.enabled = true
+  set by built-in defaults
+notify.on = ["blocked", "error", "done"]
+  set by built-in defaults
+notify.toast = ["blocked"]
+  set by built-in defaults
+notify.desktop = ["blocked", "error", "done"]
+  set by built-in defaults
+notify.history = 10
+  set by built-in defaults
+notify.skip-when-seen = true
+  set by built-in defaults
+notify.done-min-work = "30s"
+  set by built-in defaults
+notify.min-interval = "10s"
+  set by built-in defaults
+notify.toast-time = "5s"
+  set by built-in defaults
+notify.delivery = "auto"
+  set by built-in defaults
+notify.sound = false
+  set by built-in defaults

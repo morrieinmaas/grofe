@@ -337,10 +337,10 @@ fn requires_operators_compare_with_this_version() {
     for (req, met) in [
         (format!("grofe >= {mm}"), true),
         (format!("grofe > {v}"), false),
-        (format!("grofe <= {mm}"), true),
+        (format!("grofe <= {v}"), true),
         (format!("grofe < {mm}"), false),
         (format!("grofe = {v}"), true),
-        (format!("grofe={mm}"), true),
+        (format!("grofe={v}"), true),
         ("grofe < 99.0".to_string(), true),
     ] {
         s.write(

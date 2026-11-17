@@ -149,7 +149,8 @@ fn main() -> ExitCode {
             }
         }
     };
-    // Bare `grofe`, like bare `tmux`, means `new-session`.
+    // Bare `grofe`, like bare `tmux`, means `new-session` (but see
+    // `new_and_attach`: bare `grofe` reattaches when sessions exist).
     let bare = rest.is_empty();
     let rest = if bare {
         vec!["new-session".to_string()]
@@ -184,19 +185,24 @@ fn main() -> ExitCode {
             if restore {
                 if let Ok(stream) = UnixStream::connect(&socket) {
                     let argv = ["list-sessions", "-F", "#{session_name}"].map(String::from);
-                    return match request(stream, &socket, &argv) {
+                    match request(stream, &socket, &argv) {
                         Ok(Reply::Ok { out, .. }) if !out.trim().is_empty() => {
-                            fail(server::restore::NOT_EMPTY)
+                            return fail(server::restore::NOT_EMPTY);
                         }
+                        // A server exiting as it was asked: none runs, so
+                        // this command starts one, as below.
+                        Err(e) if server_left(&e) && server_gone(&socket) => {}
                         // ponytail: an empty running server cannot be asked
                         // to restore (no verb for it); the restore runs
                         // only in a server this command starts.
-                        Ok(_) => fail(&format!(
-                            "a server is already running on {}: restore runs only at server start",
-                            socket.display()
-                        )),
-                        Err(e) => fail(&e),
-                    };
+                        Ok(_) => {
+                            return fail(&format!(
+                                "a server is already running on {}: restore runs only at server start",
+                                socket.display()
+                            ));
+                        }
+                        Err(e) => return fail(&e),
+                    }
                 }
                 let snapshot = paths::snapshot_path(&Env::from_process(), &socket);
                 if snapshot.exists() {
@@ -699,6 +705,9 @@ fn attaches(argv: &[String]) -> bool {
     )
 }
 
+/// What bare `grofe`'s request prints when it made no session.
+const REATTACH: &str = "grofe:reattach";
+
 /// `new-session` without `-d`, as tmux 3.7b: without a terminal it fails
 /// before creating anything; otherwise the session is created detached,
 /// its id read back in the same request, and the client attaches to it
@@ -709,9 +718,9 @@ fn attaches(argv: &[String]) -> bool {
 /// (the one with the latest activity) rather than the pane's; the new
 /// session's cwd is then the CLI's own, as in tmux.
 ///
-/// `bare` (`grofe` with no arguments) that starts the server makes no
-/// session when the server restored some at start: it attaches to the
-/// restored one used last, as tmux-resurrect leaves no extra session.
+/// `bare` (`grofe` with no arguments) makes no session when the server has
+/// some, including ones a server it starts restored: it attaches to the one
+/// used last, as an `attach-session` that fires `client-attached`.
 fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     if !io::stdin().is_terminal() {
         return fail("open terminal failed: not a terminal");
@@ -719,10 +728,19 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     let (socket, own_dir) = globals.resolve();
     let mut new_cmd = vec![argv[0].clone(), "-d".to_string()];
     new_cmd.extend(argv[1..].iter().cloned());
-    let mut create = if bare && UnixStream::connect(&socket).is_err() {
-        ["if-shell", "-F", "#{server_sessions}", "", "new-session -d"]
-            .map(String::from)
-            .to_vec()
+    // Bare `tmux` never gets here as `bare`: the tmux front end rewrites an
+    // empty argv to `new-session`, as tmux does.
+    let mut create = if bare {
+        let reattach = format!("display-message -p {REATTACH}");
+        [
+            "if-shell",
+            "-F",
+            "#{server_sessions}",
+            &reattach,
+            "new-session -d",
+        ]
+        .map(String::from)
+        .to_vec()
     } else {
         new_cmd.clone()
     };
@@ -731,13 +749,16 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
         Ok(h) => h,
         Err(e) => return fail(&e),
     };
-    let id = match connect_or_start(&socket, own_dir, true)
+    let (id, created) = match connect_or_start(&socket, own_dir, true)
         .and_then(|stream| request_with(stream, &hello, &create))
     {
         // The id is the last line; `-P`'s output comes before it.
         // ponytail: tmux 3.7b shows `-P`'s output in view mode over the new
         // pane (recorded); grofe has no view mode and drops it.
-        Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
+        Ok(Reply::Ok { out, .. }) => (
+            out.lines().last().unwrap_or_default().trim().to_string(),
+            !(bare && out.lines().any(|l| l.trim() == REATTACH)),
+        ),
         Ok(Reply::Err { err, .. }) => return fail(&err),
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),
@@ -747,7 +768,7 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&new_cmd) {
         argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
     }
-    match attach_to(&socket, &argv, true) {
+    match attach_to(&socket, &argv, created) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -772,6 +793,20 @@ fn session_gone(err: &str) -> bool {
         || err.contains("Broken pipe")
         || err.contains("Connection reset")
         || err.starts_with("server closed the connection")
+}
+
+/// Whether a request error means the server went away before replying: a
+/// connection queued on an exiting server's listener ends as EOF on macOS
+/// and as a reset on Linux once the listener closes.
+fn server_left(err: &str) -> bool {
+    err.starts_with("sending request: ")
+        || err.starts_with("server closed the connection")
+        || (err.starts_with("reading reply: ") && err.contains("Connection reset"))
+}
+
+/// Whether no server answers on `socket` any more ([`connect`], [`no_server`]).
+fn server_gone(socket: &Path) -> bool {
+    connect(socket).is_err_and(|e| no_server(&e))
 }
 
 /// Sends `argv` as one control-mode request and exits with its status.
@@ -799,15 +834,10 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
     // there any more, say so as for any other command; the request is
     // never sent again, so it cannot run twice.
     let reply = match request(stream, socket, argv) {
-        Err(e)
-            if e.starts_with("sending request: ")
-                || e.starts_with("server closed the connection") =>
-        {
-            match connect(socket) {
-                Err(gone) if no_server(&gone) => return fail(&gone),
-                _ => Err(e),
-            }
-        }
+        Err(e) if server_left(&e) => match connect(socket) {
+            Err(gone) if no_server(&gone) => return fail(&gone),
+            _ => Err(e),
+        },
         reply => reply,
     };
     match reply {
@@ -1165,6 +1195,8 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
         Ok(Reply::Ok { .. }) => {}
         Ok(Reply::Err { err, .. }) => return Err(err),
         Ok(Reply::Event(_)) => return Err("unexpected event reply".to_string()),
+        // The server exited as it was asked: as if none ran.
+        Err(e) if server_left(&e) && server_gone(socket) => return Err("no sessions".to_string()),
         Err(e) => return Err(e),
     }
     let stream = connect_attach()?;
@@ -1603,6 +1635,29 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_server_is_gone_only_when_nothing_listens() {
+        let dir = std::env::temp_dir().join(format!("grofe-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        assert!(server_gone(&sock));
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(!server_gone(&sock));
+        drop(listener);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_reset_reply_from_an_exiting_server_counts_as_it_leaving() {
+        assert!(server_left(
+            "reading reply: Connection reset by peer (os error 104)"
+        ));
+        assert!(server_left("server closed the connection without replying"));
+        assert!(server_left("sending request: Broken pipe (os error 32)"));
+        assert!(!server_left("reading reply: Interrupted system call"));
+        assert!(!server_left("bad reply from server: EOF"));
     }
 
     #[test]
