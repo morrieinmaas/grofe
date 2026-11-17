@@ -976,20 +976,24 @@ fn handle(state: &mut State, msg: ServerMsg) {
             reply,
             tx,
         } => {
+            let mut polled = false;
             let result = match cmd::parse(&req.argv) {
-                Ok(Command::Subscribe(c)) => c
-                    .target
-                    .map(|t| events::Scope::resolve(&state.model, &ctx, &t))
-                    .transpose()
-                    .and_then(|scope| state.events.subscribe(c.events, scope, tx))
-                    .map(|()| String::new()),
+                Ok(Command::Subscribe(c)) => {
+                    polled = remote::wants_poll(&c.events);
+                    c.target
+                        .map(|t| events::Scope::resolve(&state.model, &ctx, &t))
+                        .transpose()
+                        .and_then(|scope| state.events.subscribe(c.events, scope, tx))
+                        .map(|()| String::new())
+                }
                 // The connection sends only a `subscribe` verb here.
                 Ok(_) => Err("not a subscribe command".to_string()),
                 Err(e) => Err(e.to_string()),
             };
             state.deferred_reply = None;
+            let subscribed = result.is_ok();
             finish(state, req.id, result, reply);
-            remote::ensure_poller(state);
+            remote::ensure_poller(state, subscribed && polled);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
         ServerMsg::Closed { observer } => {

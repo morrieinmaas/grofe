@@ -465,6 +465,32 @@ fn pane_echo_is_sent_when_the_ptys_echo_flag_changes() {
 }
 
 #[test]
+fn a_subscriber_in_place_of_one_that_went_still_gets_the_current_echo() {
+    let srv = server();
+    srv.cmd(&["new-session", "-d", "-s", "main"])
+        .expect("session");
+    let pane = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .expect("pane id");
+    let pane = pane.trim().parse().expect("pane id");
+    let _first = srv.subscribe(&["pane-echo"]).expect("first");
+    let mut second = srv.subscribe(&["pane-echo"]).expect("second");
+    let current = second.next(WAIT).expect("current echo");
+    assert!(matches!(current, Event::PaneEcho { pane: p, .. } if p == pane));
+    // The second goes; a third takes its place, so the count is as before.
+    drop(second);
+    wait_until("the server to see the second go", WAIT, || {
+        srv.cmd(&["list-clients"]).is_ok()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let mut third = srv.subscribe(&["pane-echo"]).expect("third");
+    assert_eq!(
+        third.next(WAIT).expect("current echo for the third too"),
+        current
+    );
+}
+
+#[test]
 fn nothing_polls_without_a_subscriber() {
     let srv = server();
     let _ = listening_pane(&srv);

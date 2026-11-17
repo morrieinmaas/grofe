@@ -42,9 +42,6 @@ pub const POLL: Duration = Duration::from_secs(2);
 #[derive(Default)]
 pub struct Remote {
     running: bool,
-    /// How many subscriptions named `ports-changed` or `pane-echo` at the
-    /// last look; a rise means someone new needs the current state.
-    subs: usize,
     /// Set by a new subscription: the next echo poll reports every pane.
     snapshot: bool,
     ports: BTreeMap<PaneId, Vec<u16>>,
@@ -265,15 +262,21 @@ fn wanted(state: &State) -> bool {
     state.events.named("ports-changed") || state.events.named("pane-echo")
 }
 
+/// Whether a subscription to `events` needs the poller.
+pub fn wants_poll(events: &[String]) -> bool {
+    events
+        .iter()
+        .any(|e| e == "ports-changed" || e == "pane-echo")
+}
+
 /// After a `subscribe`: starts the poller if the subscription needs it.
-pub fn ensure_poller(state: &mut State) {
-    let subs = state.events.named_count("ports-changed") + state.events.named_count("pane-echo");
-    let grew = subs > state.remote.subs;
-    state.remote.subs = subs;
+/// `fresh` is a new subscription to one of its events, which is owed the
+/// state of every pane however many others there are.
+pub fn ensure_poller(state: &mut State, fresh: bool) {
     if !wanted(state) {
         return;
     }
-    if grew {
+    if fresh {
         // A new subscriber gets the state of every pane once: forget what
         // was told, so the next poll reports it all (older subscribers see
         // the same whole-state events again, which is harmless).
