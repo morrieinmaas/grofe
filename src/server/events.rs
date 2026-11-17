@@ -144,10 +144,12 @@ impl Scope {
         match self {
             Scope::Pane(p) => at.pane == Some(p),
             Scope::Window(w) => at.window == Some(w),
+            // An `open-url` must come from a pane of the client's session: one
+            // from no pane (cron, another login) is not this client's to open.
             Scope::Client { .. }
                 if at.pane.is_none() && at.window.is_none() && at.session.is_none() =>
             {
-                true
+                !matches!(event, Event::OpenUrl { .. })
             }
             Scope::Session(s) | Scope::Client { session: s, .. } => {
                 at.session == Some(s) || windowed && at.window.is_some_and(|w| model.has_link(s, w))
@@ -683,6 +685,12 @@ mod tests {
             value: None,
         };
         assert!(scope.passes(&global, Place::default(), &model));
+        // An open-url from no pane is not the client's.
+        let paneless = Event::OpenUrl {
+            url: "https://a/".into(),
+            pane: None,
+        };
+        assert!(!scope.passes(&paneless, Place::default(), &model));
         events.emit_at(exited(1), place(1));
         events.emit_at(exited(2), place(2));
         events.flush(&model);
