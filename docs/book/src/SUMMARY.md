@@ -11,6 +11,7 @@
 - [Framed panes](framed-panes.md)
 - [Scratchpads](scratchpads.md)
 - [Agent sessions](agents.md)
+- [Remote sessions](remote.md)
 - [Messages and the prompt](messages.md)
 - [Lua scripting and packs](lua.md)
 - [Plugins](plugins.md)

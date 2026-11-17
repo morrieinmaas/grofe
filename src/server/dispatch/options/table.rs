@@ -409,7 +409,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "remote-release-url",
-        doc: "Where grofe -r downloads the release it installs on a remote without grofe: a URL or directory holding v<version>/ with the archives and SHA256SUMS.",
+        doc: "Where grofe -r downloads the release it installs on a remote without grofe: an https or file URL, or a directory, holding one v-prefixed directory per version with the archives and SHA256SUMS.",
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "https://github.com/termage/grofe/releases/download",
