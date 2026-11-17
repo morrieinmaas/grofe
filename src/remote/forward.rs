@@ -5,7 +5,7 @@
 //! [`Forwarding`] is the pure part: it takes [`Input`]s (keys bound for the
 //! server, control events, prompt answers, I/O results, time) and returns
 //! [`Action`]s. The client does the screen actions ([`Action::Send`],
-//! [`Action::Prompt`], [`Action::ClearPrompt`], [`Action::Message`]);
+//! [`Action::Prompt`], [`Action::Offer`], [`Action::ClearPrompt`], [`Action::Message`]);
 //! [`Executor`] does the I/O ones over the proxy connection and answers
 //! with the [`Input`] to feed back.
 
@@ -181,6 +181,10 @@ pub enum Action {
     /// Show this one-line prompt; its answer comes back as
     /// [`Input::Answer`]. Replaces any prompt on screen.
     Prompt(String),
+    /// As [`Action::Prompt`], for a question the remote raised (a port, a
+    /// file to open) rather than the user: it may come up mid-typing, so
+    /// the client must not take keys typed into the pane as its answer.
+    Offer(String),
     /// Take the prompt on screen away, unanswered.
     ClearPrompt,
     /// Show this one-line message.
@@ -485,7 +489,11 @@ impl Forwarding {
 
     fn show_next(&self, out: &mut Vec<Action>) {
         if let Some(ask) = self.asks.front() {
-            out.push(Action::Prompt(self.prompt(ask)));
+            let text = self.prompt(ask);
+            out.push(match ask {
+                Ask::Upload(..) => Action::Prompt(text),
+                Ask::Forward(_) | Ask::Open(_) => Action::Offer(text),
+            });
         }
     }
 

@@ -1,15 +1,14 @@
 //! [`ForwardHook`]: forwarding plugged into the remote attach loop
 //! ([`session::Hook`](crate::remote::session::Hook)). Keys, events and ticks
 //! go into [`Forwarding`]; prompts go through the client's prompt; slow
-//! actions (uploads, the upload directory, opening a URL, messages) and
-//! every control round trip run on a worker thread whose results come back
-//! on the next tick; forwards run on the input thread (a bind is quick)
+//! actions (the upload directory, opening a URL, messages) and every control
+//! round trip run on a worker thread, each upload on a thread of its own,
+//! with results that come back on the next tick; forwards run on the input thread (a bind is quick)
 //! over whatever link is current.
 //!
-//! Events carry no session and reach every remote client of the server, so
-//! the worker passes on only those of a pane in this client's attached
-//! session, and reads that session's ports again on a connect and on a
-//! session switch. The options that grant consent (uploads, ports) come
+//! The client subscribes with `-c` (its own name), so the server sends only
+//! events of its attached session, following a switch; the worker reads
+//! that session's ports again on a connect and on a switch. The options that grant consent (uploads, ports) come
 //! from this machine's config, never from the remote.
 
 use std::collections::VecDeque;
@@ -55,7 +54,7 @@ struct Core {
 
 /// Work for the worker thread.
 enum Job {
-    /// Pass the event on if it concerns the attached session.
+    /// Pass the event on, in order with a resync.
     Event(Event),
     /// Read the attached session's listening ports ([`Input::Resync`]).
     Resync,
@@ -142,6 +141,13 @@ impl Core {
                     text,
                     line: String::new(),
                     core: Arc::clone(me),
+                    grace: None,
+                })),
+                Action::Offer(text) => cx.prompt(Box::new(Answer {
+                    text,
+                    line: String::new(),
+                    core: Arc::clone(me),
+                    grace: Some(Grace::new(Instant::now())),
                 })),
                 Action::ClearPrompt => cx.close_prompt(),
                 Action::Message(text) => {
@@ -179,10 +185,9 @@ impl Hook for ForwardHook {
         let mut core = self.lock();
         core.connected(cx.link());
         let jobs = match event {
-            // ponytail: any client's switch rereads ours; the event names the
-            // client by a name this client does not know for itself.
+            // Ours: the subscription follows this client.
             Event::ClientSessionChanged { .. } => vec![Job::Resync],
-            // Through the worker, so events keep their order with its checks.
+            // Through the worker, so events keep their order with a resync.
             event => vec![Job::Event(event)],
         };
         for job in jobs {
@@ -211,6 +216,37 @@ struct Answer {
     text: String,
     line: String,
     core: Arc<Mutex<Core>>,
+    /// For a question the remote raised: keys still go to the pane while
+    /// the user is typing.
+    grace: Option<Grace>,
+}
+
+/// How long the keyboard must rest before a remote-raised prompt takes a
+/// key, counted from when it came up and from each key since.
+const GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// A prompt the remote raised (a port, a file to open) can come up while
+/// the user is typing in the pane. Keys keep going to the pane until the
+/// keyboard has rested [`GRACE`]: so typing is never swallowed, and a
+/// prompt timed to land mid-typing cannot take a `y` meant for the pane.
+/// The answer needs a fresh keypress after a pause.
+struct Grace {
+    last: Instant,
+}
+
+impl Grace {
+    fn new(now: Instant) -> Grace {
+        Grace { last: now }
+    }
+
+    /// Whether a key at `now` still goes to the pane (it restarts the wait).
+    fn passes(&mut self, now: Instant) -> bool {
+        let typing = now.duration_since(self.last) < GRACE;
+        if typing {
+            self.last = now;
+        }
+        typing
+    }
 }
 
 impl Prompt for Answer {
@@ -222,6 +258,12 @@ impl Prompt for Answer {
     }
 
     fn key(&mut self, cx: &mut HookCtx<'_>, bytes: &[u8]) -> Option<session::Input> {
+        if let Some(grace) = &mut self.grace
+            && grace.passes(Instant::now())
+        {
+            cx.send(bytes.to_vec());
+            return None;
+        }
         let answer = match bytes {
             // A lone escape or C-c: no.
             [0x1b] | [0x03] => Some(String::new()),
@@ -247,19 +289,23 @@ impl Prompt for Answer {
 }
 
 fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input>) {
+    // The attached session, read on a connect and a switch (both send a
+    // `Resync`), not per event.
+    let mut session: Option<String> = None;
     for job in jobs {
         let Some(link) = link.get() else { continue };
         let reply = match job {
-            Job::Event(event) => {
-                if !in_session(&link, &hello, &event) {
-                    continue;
+            // The server sends only this client's session's events
+            // (`subscribe -c`); through here they keep their order with a
+            // resync.
+            Job::Event(event) => Input::Event(event),
+            Job::Resync => {
+                session = attached_session(&link, &hello);
+                match &session {
+                    Some(s) => Input::Resync(session_ports(&link, &hello, s)),
+                    None => continue,
                 }
-                Input::Event(event)
             }
-            Job::Resync => match attached_session(&link, &hello) {
-                Some(s) => Input::Resync(session_ports(&link, &hello, &s)),
-                None => continue,
-            },
             Job::Message(text) => {
                 // `#` starts a format in a message; `##` is a plain one.
                 let argv = ["display-message", "-c", session::client_tty()]
@@ -270,9 +316,22 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input
                 let _ = link.request(&hello, &argv);
                 continue;
             }
+            // An upload on a thread of its own: a big one must not hold up
+            // the events behind it.
+            Job::Slow(action @ Action::Upload { .. }) => {
+                let done = done.clone();
+                std::thread::spawn(move || {
+                    if let Some(input) = run_slow(&link, None, action) {
+                        let _ = done.send(input);
+                    }
+                });
+                continue;
+            }
             Job::Slow(action) => {
-                let target = attached_session(&link, &hello);
-                match run_slow(&link, target.as_deref(), action) {
+                if session.is_none() {
+                    session = attached_session(&link, &hello);
+                }
+                match run_slow(&link, session.as_deref(), action) {
                     Some(input) => input,
                     None => continue,
                 }
@@ -282,27 +341,6 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input
             return;
         }
     }
-}
-
-/// Whether `event` concerns this client: one of a pane in its attached
-/// session. A pane exiting, or an `open-url` from no pane (a CLI outside
-/// grofe), always does.
-fn in_session(link: &Link, hello: &str, event: &Event) -> bool {
-    let pane = match event {
-        Event::OpenUrl { pane: Some(p), .. } | Event::PortsChanged { pane: p, .. } => *p,
-        _ => return true,
-    };
-    let argv = [
-        "display-message".to_string(),
-        "-p".to_string(),
-        "-t".to_string(),
-        pane.to_string(),
-        "#{session_id}".to_string(),
-    ];
-    let Ok(theirs) = link.request(hello, &argv) else {
-        return false;
-    };
-    attached_session(link, hello).is_some_and(|ours| ours == theirs.trim())
 }
 
 /// Each pane of `session` and the ports it listens on.
@@ -343,4 +381,24 @@ fn attached_session(link: &Link, hello: &str) -> Option<String> {
         .filter_map(|l| l.rsplit_once(' '))
         .find(|(tty, _)| *tty == session::client_tty())
         .map(|(_, id)| id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn a_remote_prompt_takes_a_key_only_after_the_keyboard_rests() {
+        let t0 = Instant::now();
+        let mut g = Grace::new(t0);
+        let ms = |n| t0 + Duration::from_millis(n);
+        // Keys while typing go on to the pane, each one restarting the wait.
+        assert!(g.passes(ms(100)));
+        assert!(g.passes(ms(500)));
+        assert!(g.passes(ms(900)));
+        // A pause of the grace, then a fresh key: the prompt takes it.
+        assert!(!g.passes(ms(1400)));
+        assert!(!g.passes(ms(1450)));
+    }
 }

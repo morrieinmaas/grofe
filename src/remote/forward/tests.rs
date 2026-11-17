@@ -270,7 +270,7 @@ fn ports_ask_and_a_yes_forwards() {
     let now = Instant::now();
     assert_eq!(
         f.handle(ports(1, &[5173]), now),
-        [Action::Prompt(forward_prompt("host", 5173))]
+        [Action::Offer(forward_prompt("host", 5173))]
     );
     assert_eq!(
         f.handle(Input::Answer("y".into()), now),
@@ -302,7 +302,7 @@ fn ports_queue_their_prompts_and_always_switches_to_auto() {
     let now = Instant::now();
     assert_eq!(
         f.handle(ports(1, &[3000, 4000]), now),
-        [Action::Prompt(forward_prompt("host", 3000))]
+        [Action::Offer(forward_prompt("host", 3000))]
     );
     assert_eq!(
         f.handle(Input::Answer("always".into()), now),
@@ -326,7 +326,7 @@ fn a_no_is_remembered_until_the_port_closes() {
     f.handle(ports(2, &[]), now);
     assert_eq!(
         f.handle(ports(1, &[8080]), now),
-        [Action::Prompt(forward_prompt("host", 8080))]
+        [Action::Offer(forward_prompt("host", 8080))]
     );
 }
 
@@ -339,7 +339,7 @@ fn a_port_closing_while_asked_takes_its_prompt_away() {
         f.handle(ports(1, &[2]), now),
         [
             Action::ClearPrompt,
-            Action::Prompt(forward_prompt("host", 2))
+            Action::Offer(forward_prompt("host", 2))
         ]
     );
     // A pane exiting closes its ports.
@@ -406,7 +406,7 @@ fn a_file_url_from_the_remote_asks_first_and_a_runnable_one_is_refused() {
     let now = Instant::now();
     assert_eq!(
         f.handle(open(url(&doc)), now),
-        [Action::Prompt(format!("open {}? [y/N]", url(&doc)))]
+        [Action::Offer(format!("open {}? [y/N]", url(&doc)))]
     );
     assert_eq!(
         f.handle(Input::Answer("y".into()), now),
