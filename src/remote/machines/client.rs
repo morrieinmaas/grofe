@@ -6,7 +6,7 @@
 //! channel: [`MachinesHook`] opens the picker on `machine-key` and switches
 //! the attach ([`HookCtx::switch`]) to the row chosen.
 
-use std::io::BufRead;
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -18,7 +18,8 @@ use super::{LOCAL, Link as LinkState, Machine, MachineView, Picker, PickerOutcom
 use super::{client_machines, last_known, render_picker, save_last_known};
 use crate::client::AttachOptions;
 use crate::protocol::ClientCtx;
-use crate::remote::connect::{Link, request_on};
+use crate::protocol::{Reply, Request};
+use crate::remote::connect::{Link, read_reply};
 use crate::remote::session::{self, Hook, HookCtx, Input, Prompt, RemoteAttach, Switch};
 
 /// How often a connected machine's view is read again without an event
@@ -232,21 +233,7 @@ fn watch(
         let (tx, rx) = mpsc::channel();
         if let Ok(chan) = link.open_control() {
             let hello = hello.to_string();
-            std::thread::spawn(move || {
-                let mut argv = vec!["subscribe".to_string()];
-                argv.extend(EVENTS.iter().map(|e| e.to_string()));
-                if request_on(chan.clone(), &hello, &argv).is_err() {
-                    return;
-                }
-                let mut reader = std::io::BufReader::new(chan);
-                let mut line = String::new();
-                while matches!(reader.read_line(&mut line), Ok(n) if n > 0) {
-                    line.clear();
-                    if tx.send(()).is_err() {
-                        return;
-                    }
-                }
-            });
+            std::thread::spawn(move || subscribe(chan, &hello, EVENTS, || tx.send(()).is_ok()));
         }
         while link.dropped().is_none() {
             refresh(&shared, i, &link, hello, state_dir);
@@ -262,6 +249,44 @@ fn watch(
             entries[i].view.link = LinkState::Offline;
         }
         std::thread::sleep(RETRY);
+    }
+}
+
+/// Subscribes to `events` on `chan` and calls `seen` for every event line
+/// after the reply, until it returns false or the channel ends. One reader
+/// serves the reply and the events, so events that arrive with the reply
+/// are not lost.
+fn subscribe<S: Read + Write>(
+    mut chan: S,
+    hello: &str,
+    events: &[&str],
+    mut seen: impl FnMut() -> bool,
+) {
+    let mut argv = vec!["subscribe".to_string()];
+    argv.extend(events.iter().map(|e| e.to_string()));
+    let Ok(req) = serde_json::to_string(&Request {
+        id: 1,
+        argv,
+        ..Default::default()
+    }) else {
+        return;
+    };
+    if chan
+        .write_all(format!("{hello}\n{req}\n").as_bytes())
+        .is_err()
+    {
+        return;
+    }
+    let mut reader = std::io::BufReader::new(chan);
+    if !matches!(read_reply(&mut reader), Ok(Reply::Ok { .. })) {
+        return;
+    }
+    let mut line = String::new();
+    while matches!(reader.read_line(&mut line), Ok(n) if n > 0) {
+        line.clear();
+        if !seen() {
+            return;
+        }
     }
 }
 
@@ -415,6 +440,36 @@ mod tests {
                 "local a!"
             ]
         );
+    }
+
+    /// An event the server writes in the same packet as the subscribe
+    /// reply still counts.
+    #[test]
+    fn an_event_sent_with_the_reply_is_seen() {
+        let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while got.iter().filter(|b| **b == b'\n').count() < 2 {
+                let n = theirs.read(&mut buf).unwrap();
+                got.extend_from_slice(&buf[..n]);
+            }
+            theirs
+                .write_all(b"{\"id\":1,\"ok\":true,\"out\":\"\"}\n{\"event\":\"agent-changed\"}\n")
+                .unwrap();
+            String::from_utf8(got).unwrap()
+        });
+        let mut seen = 0;
+        subscribe(ours, "HELLO", &["agent-changed"], || {
+            seen += 1;
+            true
+        });
+        let sent = server.join().unwrap();
+        assert!(
+            sent.starts_with("HELLO\n") && sent.contains("agent-changed"),
+            "{sent}"
+        );
+        assert_eq!(seen, 1);
     }
 
     #[test]
