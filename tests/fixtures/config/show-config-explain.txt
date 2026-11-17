@@ -44,6 +44,12 @@ remote-upload-max = 100
   set by built-in defaults
 remote-forward-ports = "ask"
   set by built-in defaults
+remote-reconnect = true
+  set by built-in defaults
+remote-release-url = "https://github.com/termage/grofe/releases/download"
+  set by built-in defaults
+remote-transport = "ssh"
+  set by built-in defaults
 set-clipboard = "external"
   set by built-in defaults
 focus-events = true

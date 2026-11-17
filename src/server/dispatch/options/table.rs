@@ -105,6 +105,9 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "remote-upload-paste",
     "remote-upload-max",
     "remote-forward-ports",
+    "remote-reconnect",
+    "remote-release-url",
+    "remote-transport",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -392,6 +395,30 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Choice(&["ask", "auto", "off"]),
         scope: OptionScope::Session,
         default: "ask",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-reconnect",
+        doc: "Keep a remote attach (grofe -r) alive across a dropped connection: show a reconnect bar and attach again, instead of exiting.",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-release-url",
+        doc: "Where grofe -r downloads the release it installs on a remote without grofe: a URL or directory holding v<version>/ with the archives and SHA256SUMS.",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "https://github.com/termage/grofe/releases/download",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-transport",
+        doc: "How grofe -r reaches the remote proxy: ssh, or quic (a roaming UDP link set up over ssh).",
+        kind: Kind::Choice(&["ssh", "quic"]),
+        scope: OptionScope::Global,
+        default: "ssh",
         ..Builtin::PLAIN
     },
     Builtin {

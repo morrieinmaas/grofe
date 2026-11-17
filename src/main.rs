@@ -21,6 +21,9 @@ mod layout_glue;
 use grofe::client;
 use grofe::paths::{self, Env};
 use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
+use grofe::remote::bootstrap::Install;
+use grofe::remote::session;
+use grofe::remote::ssh::Target;
 use grofe::server;
 use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -36,6 +39,10 @@ usage: grofe [-L socket-name] [-S socket-path] <command> [args...]
 Options:
   -L socket-name   use the named server socket in grofe's socket directory
   -S socket-path   use the server socket at this path
+  -r host          run the command on host over ssh (default: new-session -A -s main)
+  --install        install grofe on the remote host if it has none (--no-install: never)
+  --install-from p install the local binary p there instead of downloading a release
+  --transport t    reach the remote over ssh (default) or quic
   -V, --version    print grofe's version and exit
   -h, --help       print this help and exit
 
@@ -106,6 +113,7 @@ fn main() -> ExitCode {
                     name: cli.name,
                     version: false,
                     help: false,
+                    remote: RemoteFlags::default(),
                 };
                 // Never a socket in tmux's own directory (spec D12).
                 let dirs = grofe::compat::tmux_socket_dirs(
@@ -149,6 +157,9 @@ fn main() -> ExitCode {
             }
         }
     };
+    if let Some(code) = remote_route(&globals, &rest) {
+        return code;
+    }
     // Bare `grofe`, like bare `tmux`, means `new-session` (but see
     // `new_and_attach`: bare `grofe` reattaches when sessions exist).
     let bare = rest.is_empty();
@@ -462,6 +473,17 @@ struct Globals {
     version: bool,
     /// `-h` / `--help` among the global options.
     help: bool,
+    /// `-r <host>` and the flags that go with it.
+    remote: RemoteFlags,
+}
+
+/// `-r <host>`, `--install`, `--no-install`, `--install-from <path>`,
+/// `--transport <t>`: a call that runs on a remote host (spec ssh-remote §2).
+#[derive(Default)]
+struct RemoteFlags {
+    host: Option<String>,
+    install: Install,
+    transport: Option<String>,
 }
 
 impl Globals {
@@ -511,6 +533,7 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
         name: None,
         version: false,
         help: false,
+        remote: RemoteFlags::default(),
     };
     let mut i = 0;
     while let Some(arg) = args.get(i) {
@@ -525,6 +548,27 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
                     globals.name = Some(value.clone());
                 }
                 i += 2;
+            }
+            "-r" | "--install-from" | "--transport" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| format!("option {arg} requires an argument"))?;
+                match arg.as_str() {
+                    "-r" => globals.remote.host = Some(value.clone()),
+                    "--install-from" => {
+                        globals.remote.install = Install::From(PathBuf::from(value))
+                    }
+                    _ => globals.remote.transport = Some(value.clone()),
+                }
+                i += 2;
+            }
+            "--install" => {
+                globals.remote.install = Install::Yes;
+                i += 1;
+            }
+            "--no-install" => {
+                globals.remote.install = Install::No;
+                i += 1;
             }
             "--" => {
                 i += 1;
@@ -679,26 +723,30 @@ fn attach_existing(socket: &Path, argv: &[String]) -> ExitCode {
         return fail("open terminal failed: not a terminal");
     }
     match existing_for_a(socket, argv) {
-        Some(id) => {
-            let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
-            // `new-session -A` attaches as `attach-session` does, with
-            // `-D`, `-X`, `-E`, `-c` and `-f` as it takes them.
-            if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv_of_new) {
-                if c.kill_parent {
-                    argv.push("-x".to_string());
-                } else if c.detach_others {
-                    argv.push("-d".to_string());
-                }
-                if c.no_env {
-                    argv.push("-E".to_string());
-                }
-                argv.extend(c.cwd.into_iter().flat_map(|d| ["-c".to_string(), d]));
-                argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
-            }
-            attach(socket, &argv)
-        }
+        Some(id) => attach(socket, &attach_argv_for_existing(argv_of_new, id)),
         None => fail("no sessions"),
     }
+}
+
+/// The `attach-session` argv that `new-session -A` (`argv_of_new`) runs
+/// for the existing session `id`.
+fn attach_argv_for_existing(argv_of_new: &[String], id: String) -> Vec<String> {
+    let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
+    // `new-session -A` attaches as `attach-session` does, with
+    // `-D`, `-X`, `-E`, `-c` and `-f` as it takes them.
+    if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv_of_new) {
+        if c.kill_parent {
+            argv.push("-x".to_string());
+        } else if c.detach_others {
+            argv.push("-d".to_string());
+        }
+        if c.no_env {
+            argv.push("-E".to_string());
+        }
+        argv.extend(c.cwd.into_iter().flat_map(|d| ["-c".to_string(), d]));
+        argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
+    }
+    argv
 }
 
 /// Whether `argv` is a `new-session` that attaches (no `-d`). One that does
@@ -846,15 +894,23 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         reply => reply,
     };
     match reply {
-        Ok(Reply::Ok { out, .. }) => {
+        Ok(reply) => print_reply(reply),
+        Err(e) => fail(&e),
+    }
+}
+
+/// Prints a request's reply as the CLI does; the exit status it gives.
+fn print_reply(reply: Reply) -> ExitCode {
+    match reply {
+        Reply::Ok { out, .. } => {
             let mut stdout = io::stdout().lock();
             let _ = stdout.write_all(out.as_bytes());
             let _ = stdout.flush();
             ExitCode::SUCCESS
         }
-        Ok(Reply::Err {
+        Reply::Err {
             err, out, status, ..
-        }) => {
+        } => {
             // A failing `run-shell` prints its output (and tmux's message)
             // on stdout and exits with its own status, as tmux 3.7b (D20).
             let mut stdout = io::stdout().lock();
@@ -868,8 +924,7 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
             let status = status.map_or(1, |s| u8::try_from(s).unwrap_or(1));
             ExitCode::from(status)
         }
-        Ok(Reply::Event(_)) => fail("unexpected event reply"),
-        Err(e) => fail(&e),
+        Reply::Event(_) => fail("unexpected event reply"),
     }
 }
 
@@ -1497,8 +1552,13 @@ fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, 
     request_with(stream, &control_hello(target)?, argv)
 }
 
-/// Sends `hello` and one request, and reads until its reply.
-fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Reply, String> {
+/// Sends `hello` and one request on `stream` (a socket or a remote
+/// control channel), and reads until its reply.
+fn request_with<S: Read + Write>(
+    mut stream: S,
+    hello: &str,
+    argv: &[String],
+) -> Result<Reply, String> {
     let req = serde_json::to_string(&Request {
         id: 1,
         argv: argv.to_vec(),
@@ -1506,11 +1566,10 @@ fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Repl
         umask: Some(cli_umask()),
     })
     .map_err(|e| e.to_string())?;
-    let mut writer = &stream;
-    writer
+    stream
         .write_all(format!("{hello}\n{req}\n").as_bytes())
         .map_err(|e| format!("sending request: {e}"))?;
-    read_reply(&stream)
+    grofe::remote::connect::read_reply(BufReader::new(stream))
 }
 
 /// Most bytes of stdin a `load-buffer -` sends: its base64 has to fit one
@@ -1566,23 +1625,251 @@ fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
     };
     encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
 }
+// ------------------------------------------------------------------ remote
 
-/// Reads until the reply to the one request sent on `stream`.
-fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => return Err("server closed the connection without replying".to_string()),
-            Ok(_) => {}
-            Err(e) => return Err(format!("reading reply: {e}")),
+/// A call for a remote host: `-r <host> [command...]`, or `attach
+/// ssh://[user@]host[:port][/session]` (spec ssh-remote §2).
+fn remote_route(globals: &Globals, rest: &[String]) -> Option<ExitCode> {
+    let url = rest
+        .first()
+        .filter(|v| grofe::cmd::parse::canonical_name(v) == "attach-session")
+        .and_then(|_| rest[1..].iter().position(|a| a.starts_with("ssh://")))
+        .map(|i| i + 1);
+    match (&globals.remote.host, url) {
+        (None, None) => None,
+        (Some(_), Some(_)) => Some(fail("grofe: -r and an ssh:// target cannot go together")),
+        (Some(host), None) => {
+            // Without a command, `-r host` means `new-session -A -s main`.
+            let argv = if rest.is_empty() {
+                ["new-session", "-A", "-s", "main"]
+                    .map(String::from)
+                    .to_vec()
+            } else {
+                rest.to_vec()
+            };
+            Some(remote_main(&Target::host(host), &globals.remote, &argv))
         }
-        match serde_json::from_str::<Reply>(&line) {
-            Ok(Reply::Event(_)) => continue,
-            Ok(reply) => return Ok(reply),
-            Err(e) => return Err(format!("bad reply from server: {e}")),
+        (None, Some(i)) => {
+            let target = match grofe::remote::ssh::parse_url(&rest[i]) {
+                Ok(t) => t,
+                Err(e) => return Some(fail(&e)),
+            };
+            let mut argv: Vec<String> = rest
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, a)| a.clone())
+                .collect();
+            if let Some(session) = &target.session {
+                argv.extend(["-t".to_string(), session.clone()]);
+            }
+            Some(remote_main(&target, &globals.remote, &argv))
         }
+    }
+}
+
+/// The local config's value of option `name`, or its default.
+fn local_option(name: &str) -> Option<String> {
+    grofe::config::load(&grofe::config::Env::from_process())
+        .ok()
+        .and_then(|r| r.options.get(name).cloned())
+}
+
+/// Runs `argv` on the remote: attach-type commands attach through an
+/// attach channel, everything else is one control request printed as the
+/// local CLI prints it.
+fn remote_main(target: &Target, flags: &RemoteFlags, argv: &[String]) -> ExitCode {
+    let transport = flags
+        .transport
+        .clone()
+        .or_else(|| local_option("remote-transport"))
+        .unwrap_or_else(|| "ssh".to_string());
+    match transport.as_str() {
+        "ssh" => {}
+        "quic" => return fail("grofe: quic transport not built"),
+        other => return fail(&format!("grofe: unknown transport {other:?} (ssh or quic)")),
+    }
+    let release_url = grofe::remote::bootstrap::release_url(local_option("remote-release-url"));
+    let link = match grofe::remote::bootstrap::connect(target, &flags.install, &release_url) {
+        Ok(link) => link,
+        Err(e) => return fail(&format!("grofe: {e}")),
+    };
+    let hello = match remote_hello() {
+        Ok(h) => h,
+        Err(e) => return fail(&e),
+    };
+    let remote = Remote {
+        link,
+        target: target.clone(),
+        hello,
+    };
+    match grofe::cmd::parse::canonical_name(&argv[0]) {
+        "attach-session" => print_attach(remote.attach(argv, false)),
+        "new-session" => remote.new_session(argv),
+        _ => match remote
+            .link
+            .open_control()
+            .map_err(|e| e.to_string())
+            .and_then(|chan| request_with(chan, &remote.hello, argv))
+        {
+            Ok(reply) => print_reply(reply),
+            Err(e) => fail(&e),
+        },
+    }
+}
+
+/// The control hello for a remote server. Nothing local that is
+/// meaningless there goes: no pane, no cwd (the server falls back to the
+/// remote `$HOME`), and only the terminal's and locale's variables.
+// Ruling: the remote sees TERM, COLORTERM, LANG and LC_* only. Cost:
+// another variable a remote program wants must be set there.
+fn remote_hello() -> Result<String, String> {
+    encode_hello(&Hello::Control(remote_ctx())).map_err(|e| e.to_string())
+}
+
+fn remote_ctx() -> ClientCtx {
+    ClientCtx {
+        cwd: PathBuf::new(),
+        pane: None,
+        env: std::env::vars()
+            .filter(|(k, _)| {
+                matches!(k.as_str(), "TERM" | "COLORTERM" | "LANG") || k.starts_with("LC_")
+            })
+            .collect(),
+        client: None,
+        dialect: dialect(),
+        request: Default::default(),
+    }
+}
+
+/// A connected remote host.
+struct Remote {
+    link: grofe::remote::connect::Link,
+    target: Target,
+    hello: String,
+}
+
+impl Remote {
+    fn request(&self, argv: &[String]) -> Result<Reply, String> {
+        let chan = self.link.open_control().map_err(|e| e.to_string())?;
+        request_with(chan, &self.hello, argv)
+    }
+
+    /// `new-session` there: `-A` for an existing session attaches, one
+    /// that attaches creates the session detached and attaches to it, and
+    /// `-d` is one request.
+    fn new_session(self, argv: &[String]) -> ExitCode {
+        if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv)
+            && let Some(name) = c.name.filter(|_| c.attach)
+        {
+            let list = ["list-sessions", "-F", "#{session_id} #{session_name}"].map(String::from);
+            if let Ok(Reply::Ok { out, .. }) = self.request(&list)
+                && let Some((id, _)) = out
+                    .lines()
+                    .filter_map(|l| l.split_once(' '))
+                    .find(|(_, n)| *n == name)
+            {
+                if !io::stdin().is_terminal() {
+                    return fail("open terminal failed: not a terminal");
+                }
+                let argv = attach_argv_for_existing(argv, id.to_string());
+                return print_attach(self.attach(&argv, false));
+            }
+        }
+        if !attaches(argv) {
+            return match self.request(argv) {
+                Ok(reply) => print_reply(reply),
+                Err(e) => fail(&e),
+            };
+        }
+        if !io::stdin().is_terminal() {
+            return fail("open terminal failed: not a terminal");
+        }
+        let mut create = vec![argv[0].clone(), "-d".to_string()];
+        create.extend(argv[1..].iter().cloned());
+        let flags = match grofe::cmd::parse(&create) {
+            Ok(grofe::cmd::Command::NewSession(c)) => c.flags,
+            _ => None,
+        };
+        create.extend([";", "display-message", "-p", "#{session_id}"].map(String::from));
+        let id = match self.request(&create) {
+            Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
+            Ok(Reply::Err { err, .. }) => return fail(&err),
+            Ok(Reply::Event(_)) => return fail("unexpected event reply"),
+            Err(e) => return fail(&e),
+        };
+        let mut attach = vec!["attach-session".to_string(), "-t".to_string(), id];
+        attach.extend(flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
+        match self.attach(&attach, true) {
+            Err(e) if session_gone(&e) => {
+                println!("[exited]");
+                ExitCode::SUCCESS
+            }
+            other => print_attach(other),
+        }
+    }
+
+    /// `attach-session` there: the attach check over a control channel,
+    /// then the remote attach client.
+    fn attach(self, argv: &[String], created: bool) -> Result<String, String> {
+        let parsed = match grofe::cmd::parse(argv) {
+            Ok(grofe::cmd::Command::AttachSession(a)) => a,
+            Ok(_) => return Err("attach-session: unexpected command".to_string()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let check: Vec<String> = [ATTACH_CHECK.to_string(), session::client_tty().to_string()]
+            .into_iter()
+            .chain(argv[1..].iter().cloned())
+            .collect();
+        match self.request(&check)? {
+            Reply::Ok { .. } => {}
+            Reply::Err { err, .. } => return Err(err),
+            Reply::Event(_) => return Err("unexpected event reply".to_string()),
+        }
+        let opts = client::AttachOptions {
+            target: client::raw_target(&argv[1..]),
+            detach_others: parsed.detach_others,
+            nest: parsed.nest,
+            created,
+            features: FEATURES.get().cloned().unwrap_or_default(),
+            extras: grofe::protocol::AttachExtras {
+                cwd: parsed.cwd.clone(),
+                read_only: parsed.read_only,
+                flags: parsed.flags.clone(),
+                no_env: parsed.no_env,
+                kill_parent: parsed.kill_parent,
+            },
+        };
+        let target = self.target.clone();
+        let relink = std::sync::Arc::new(move || {
+            grofe::remote::connect::Link::connect(
+                &grofe::remote::connect::Transport::Ssh(target.clone()),
+                grofe::remote::connect::ConnectOpts { batch: true },
+            )
+            .map_err(|e| e.to_string())
+        });
+        let attach = session::RemoteAttach {
+            host: self.target.host_name().to_string(),
+            control_hello: self.hello,
+            ctx: remote_ctx(),
+            opts,
+            term: std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
+            reconnect: local_option("remote-reconnect").is_none_or(|v| v == "on"),
+            relink,
+            hooks: Vec::new(),
+        };
+        session::attach(self.link, attach)
+    }
+}
+
+/// How an attach client's end is reported: `[reason]`, or the error.
+fn print_attach(result: Result<String, String>) -> ExitCode {
+    match result {
+        Ok(reason) => {
+            println!("[{reason}]");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
     }
 }
 
