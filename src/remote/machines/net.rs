@@ -45,7 +45,7 @@ pub fn local_link(socket: &Path) -> Result<Link, String> {
 // ponytail: `transport = "quic"` is not followed here yet; every saved
 // machine is reached over ssh until the QUIC transport is wired in.
 pub fn machine_link(m: &Machine) -> Result<Link, String> {
-    let transport = Transport::Ssh(Target::host(&m.target));
+    let transport = Transport::Ssh(Target::parse_host(&m.target)?);
     Link::connect(&transport, ConnectOpts { batch: true }).map_err(|e| e.to_string())
 }
 
@@ -67,6 +67,14 @@ pub fn parse_agents(text: &str) -> Vec<AgentView> {
                 _ => None,
             }
         })
+        .collect()
+}
+
+/// Remote-controlled text made safe to print, line by line
+/// ([`crate::remote::ssh::sanitize`]).
+pub fn sanitize_lines(text: &str) -> String {
+    text.lines()
+        .map(|l| crate::remote::ssh::sanitize(l) + "\n")
         .collect()
 }
 
@@ -126,6 +134,7 @@ pub fn all_agents(
     for (name, rx) in remotes {
         let listing = match rx.recv().ok().flatten() {
             Some(Ok(text)) => {
+                let text = sanitize_lines(&text);
                 let _ = super::save_last_known(state_dir, &name, &text);
                 AgentListing::Online(text)
             }
@@ -179,6 +188,14 @@ mod tests {
                     state: "blocked".into()
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn remote_text_loses_its_controls() {
+        assert_eq!(
+            sanitize_lines("%1 claude\x1b[2Jdone\nok"),
+            "%1 claude\\u{1b}[2Jdone\nok\n"
         );
     }
 

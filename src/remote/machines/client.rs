@@ -13,7 +13,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use super::net::{AGENT_FORMAT, local_link, machine_link, parse_agents};
+use super::net::{AGENT_FORMAT, local_link, machine_link, parse_agents, sanitize_lines};
 use super::{LOCAL, Link as LinkState, Machine, MachineView, Picker, PickerOutcome};
 use super::{client_machines, last_known, render_picker, save_last_known};
 use crate::client::AttachOptions;
@@ -271,6 +271,7 @@ fn refresh(shared: &Shared, i: usize, link: &Link, hello: &str, state_dir: &Path
     let unread = ask(&["display-message", "-p", "#{notifications_unread}"])
         .map(|v| !matches!(v.trim(), "" | "0"))
         .unwrap_or(false);
+    let (agents, sessions) = (sanitize_lines(&agents), sanitize_lines(&sessions));
     let mut entries = lock(shared);
     let e = &mut entries[i];
     if e.machine.is_some() {

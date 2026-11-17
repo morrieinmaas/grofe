@@ -1713,12 +1713,10 @@ fn remote_route(globals: &Globals, rest: &[String]) -> Option<ExitCode> {
                 rest.to_vec()
             };
             let transport = saved.as_ref().and_then(|m| m.transport).map(|t| t.as_str());
-            Some(remote_main(
-                &Target::host(target),
-                &globals.remote,
-                transport,
-                &argv,
-            ))
+            match Target::parse_host(target) {
+                Ok(target) => Some(remote_main(&target, &globals.remote, transport, &argv)),
+                Err(e) => Some(fail(&format!("grofe: {e}"))),
+            }
         }
         (None, Some(i)) => {
             let target = match grofe::remote::ssh::parse_url(&rest[i]) {
@@ -1811,7 +1809,7 @@ fn remote_main(
     let release_url = grofe::remote::bootstrap::release_url(local_option("remote-release-url"));
     let link = match grofe::remote::bootstrap::connect(target, &flags.install, &release_url) {
         Ok(link) => link,
-        Err(e) => return fail(&format!("grofe: {e}")),
+        Err(e) => return fail(&format!("grofe: {}", grofe::remote::ssh::sanitize(&e))),
     };
     let hello = match remote_hello() {
         Ok(h) => h,

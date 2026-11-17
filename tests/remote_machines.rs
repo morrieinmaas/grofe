@@ -109,6 +109,8 @@ fn bad_input_exits_1_with_a_message() {
     for args in [
         &["machine", "add", "a/b", "t"][..],
         &["machine", "add", "local", "t"][..],
+        &["machine", "add", "x", "-oProxyCommand=sh"][..],
+        &["machine", "add", "x", "u@-h"][..],
         &["machine", "add", "x", "t", "--transport", "mosh"][..],
         &["machine", "add", "x"][..],
         &["machine", "add", "x", "t", "--session"][..],

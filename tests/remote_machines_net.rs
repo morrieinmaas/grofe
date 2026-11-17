@@ -57,9 +57,9 @@ impl Fleet {
         let script = format!(
             r#"#!/bin/sh
 for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
-host=
-while [ $# -gt 0 ] && [ "$1" != -- ]; do host="$1"; shift; done
-shift
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+host="$2"
+shift 2
 [ -e '{root}/down-'"$host" ] && {{ echo "ssh: connect to host $host: Connection refused" >&2; exit 255; }}
 case "$host" in
   alpha) {alpha} ;;

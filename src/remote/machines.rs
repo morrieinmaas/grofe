@@ -103,7 +103,7 @@ fn check_word(what: &str, value: &str) -> Result<(), String> {
 
 fn check(m: &Machine) -> Result<(), String> {
     check_name(&m.name)?;
-    check_word("target", &m.target)?;
+    crate::remote::ssh::check_dest(&m.target)?;
     if let Some(s) = &m.session {
         check_word("session", s)?;
     }
