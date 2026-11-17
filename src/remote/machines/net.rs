@@ -24,7 +24,11 @@ pub const AGENT_FORMAT: &str = "#{pane_id} #{agent_kind} #{agent_state}";
 /// proxy starts the server when none runs.
 pub fn local_link(socket: &Path) -> Result<Link, String> {
     let exe = std::env::current_exe().map_err(|e| format!("finding grofe: {e}"))?;
-    let mut child = Command::new(exe)
+    let mut cmd = Command::new(exe);
+    // The attach client blocks signals on its threads; a proxy started
+    // from a reconnect must not inherit that mask.
+    crate::remote::ssh::unblock_signals(&mut cmd);
+    let mut child = cmd
         .arg("-S")
         .arg(socket)
         .arg("proxy")
@@ -41,12 +45,20 @@ pub fn local_link(socket: &Path) -> Result<Link, String> {
     Link::over(LOCAL, stdout, stdin, Some(kill_child(child))).map_err(|e| e.to_string())
 }
 
-/// A link to saved machine `m` over ssh that never prompts.
-// ponytail: `transport = "quic"` is not followed here yet; every saved
-// machine is reached over ssh until the QUIC transport is wired in.
+/// A link to saved machine `m` that never prompts: over QUIC when it was
+/// saved with `--transport quic` (falling back to ssh when UDP gets no
+/// answer, as `-r` does), else over ssh.
 pub fn machine_link(m: &Machine) -> Result<Link, String> {
-    let transport = Transport::Ssh(Target::parse_host(&m.target)?);
-    Link::connect(&transport, ConnectOpts { batch: true }).map_err(|e| e.to_string())
+    Link::connect(&transport(m)?, ConnectOpts { batch: true }).map_err(|e| e.to_string())
+}
+
+/// How saved machine `m` is reached.
+pub fn transport(m: &Machine) -> Result<Transport, String> {
+    let target = Target::parse_host(&m.target)?;
+    Ok(match m.transport {
+        Some(super::Transport::Quic) => Transport::Quic(target),
+        Some(super::Transport::Ssh) | None => Transport::Ssh(target),
+    })
 }
 
 /// The agents in `agent list` output in [`AGENT_FORMAT`]: the kind, or the
@@ -189,6 +201,22 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_quic_machine_is_reached_over_quic() {
+        let mut m = Machine {
+            name: "q".into(),
+            target: "box".into(),
+            session: None,
+            transport: Some(super::super::Transport::Quic),
+            enabled: true,
+        };
+        assert_eq!(transport(&m), Ok(Transport::Quic(Target::host("box"))));
+        m.transport = None;
+        assert_eq!(transport(&m), Ok(Transport::Ssh(Target::host("box"))));
+        m.target = "-oProxyCommand=x".into();
+        assert!(transport(&m).is_err());
     }
 
     #[test]
