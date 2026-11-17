@@ -775,6 +775,18 @@ Default: `lock -np`
 
 Accepted for compatibility; it has no effect in grofe.
 
+## machine-key
+
+The key that opens the machine picker; the client takes it before the server sees it.
+
+- **TOML key**: `machine-key` (string)
+- **Scope**: global
+- **Values**: a key name, or `None`
+
+Default: `M-m`
+
+grofe only: tmux does not have this option.
+
 ## main-pane-height
 
 Height of the main pane in the main-horizontal layout, in cells or as a percentage.

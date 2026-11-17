@@ -101,6 +101,7 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "prompt-position",
     "stable-ssh-agent",
     "forward-browser",
+    "machine-key",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -354,6 +355,14 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "machine-key",
+        doc: "The key that opens the machine picker; the client takes it before the server sees it.",
+        kind: Kind::Key,
+        scope: OptionScope::Global,
+        default: "M-m",
         ..Builtin::PLAIN
     },
     Builtin {

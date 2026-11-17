@@ -2,8 +2,12 @@
 //! `<config-dir>/machines.toml`, driven through the real binary with a
 //! private `XDG_CONFIG_HOME`. No server is started or contacted.
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
+
+use common::TestServer;
 
 fn grofe(config: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_grofe"))
@@ -143,5 +147,22 @@ fn a_broken_file_is_reported_not_overwritten() {
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "[[machine]]\nname = 1\n"
+    );
+}
+
+/// `machine-key` (the client's picker key) is a global key option, `M-m`
+/// by default, and takes another key.
+#[test]
+fn machine_key_option() {
+    let srv = TestServer::start();
+    assert_eq!(
+        srv.cmd(&["show-options", "-gv", "machine-key"]).unwrap(),
+        "M-m\n"
+    );
+    srv.cmd(&["set-option", "-g", "machine-key", "M-j"])
+        .unwrap();
+    assert_eq!(
+        srv.cmd(&["show-options", "-gv", "machine-key"]).unwrap(),
+        "M-j\n"
     );
 }
