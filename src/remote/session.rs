@@ -111,6 +111,23 @@ pub trait Prompt: Send {
     /// what it carries (and the screen is redrawn); `None` keeps it up
     /// (and its text is drawn again).
     fn key(&mut self, cx: &mut HookCtx<'_>, bytes: &[u8]) -> Option<Input>;
+
+    /// Bytes that draw the prompt as an overlay on a `cols` x `rows`
+    /// screen instead of the bottom row (the machine picker's box).
+    fn overlay(&self, _cols: u16, _rows: u16) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// Another link to move the attach to ([`HookCtx::switch`]).
+pub struct Switch {
+    pub link: Link,
+    /// The host, for the bar.
+    pub host: String,
+    /// The session to attach to there (`None`: the server picks).
+    pub target: Option<String>,
+    /// Makes a new link to that host for a reconnect; it must never prompt.
+    pub relink: Arc<dyn Fn() -> Result<Link, String> + Send + Sync>,
 }
 
 /// What a hook can reach.
@@ -120,6 +137,7 @@ pub struct HookCtx<'a> {
     hello: &'a str,
     tty: &'a str,
     prompt: &'a mut Option<Box<dyn Prompt>>,
+    switch: &'a mut Option<Switch>,
 }
 
 impl HookCtx<'_> {
@@ -161,6 +179,12 @@ impl HookCtx<'_> {
     /// Whether a prompt is up.
     pub fn prompting(&self) -> bool {
         self.prompt.is_some()
+    }
+
+    /// Moves the attach to `to` once the hooks return: the current attach
+    /// channel closes (its session keeps running) and `to` attaches.
+    pub fn switch(&mut self, to: Switch) {
+        *self.switch = Some(to);
     }
 }
 
@@ -299,6 +323,7 @@ fn run(
     let mut lp = Loop {
         state: State::Online(Box::new(conn)),
         overlay: None,
+        switch: None,
         backoff: Backoff::new(),
         jitter: Jitter::new(),
         detach: DetachKey::new(prefix),
@@ -325,6 +350,8 @@ enum State {
 struct Loop {
     state: State,
     overlay: Option<Box<dyn Prompt>>,
+    /// A switch a hook asked for, applied after it returns.
+    switch: Option<Switch>,
     backoff: Backoff,
     jitter: Jitter,
     detach: DetachKey,
@@ -366,6 +393,9 @@ impl Loop {
             if self.detach.fired {
                 return Ok("detached".to_string());
             }
+            if let Some(to) = self.switch.take() {
+                self.switch_to(a, to);
+            }
             let now = Clocks::now();
             if let State::Offline { next } = &mut self.state {
                 if woke(clocks, now) && next.is_some() {
@@ -405,6 +435,7 @@ impl Loop {
             hello: &self.params.hello,
             tty: client_tty(),
             prompt: &mut self.overlay,
+            switch: &mut self.switch,
         };
         f(&mut a.hooks, &mut cx)
     }
@@ -456,8 +487,40 @@ impl Loop {
 
     fn draw_prompt(&self) {
         if let Some(p) = &self.overlay {
-            draw_bottom_row(&p.text());
+            let (cols, rows) = client::tty_size();
+            match p.overlay(cols, rows) {
+                Some(bytes) => {
+                    let _ = client::write_tty(&bytes);
+                }
+                None => draw_bottom_row(&p.text()),
+            }
         }
+    }
+
+    /// Closes the attach channel and attaches over `to.link` on its own
+    /// thread; until that is up the bar shows, as for a reconnect. Later
+    /// reconnects go to the new host.
+    fn switch_to(&mut self, a: &mut RemoteAttach, to: Switch) {
+        if let State::Online(c) = &self.state {
+            c.attach.close("");
+        }
+        self.overlay = None;
+        self.generation += 1;
+        let generation = self.generation;
+        a.host = to.host;
+        a.relink = to.relink;
+        self.params.opts.target = to.target;
+        self.params.opts.created = false;
+        self.params.opts.detach_others = false;
+        self.params.opts.extras.cwd = None;
+        self.state = State::Offline { next: None };
+        self.bar.clear();
+        let params = self.params.clone();
+        let out = self.out_tx.clone();
+        std::thread::spawn(move || {
+            let result = handshake(to.link, &params, generation, &out);
+            post(&out, generation, Kind::Connected(result.map(Box::new)));
+        });
     }
 
     /// One event from a connection thread; `Some` ends the client.
