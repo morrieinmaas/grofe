@@ -4,25 +4,16 @@
 
 use std::time::{Duration, Instant};
 
-use crate::harness::{Cleanup, E2e, REMOTE_TIMEOUT};
+use crate::harness::{E2e, REMOTE_TIMEOUT};
 
 fn bar(e: &E2e) -> String {
     format!("reconnecting to {}", e.host)
 }
 
-fn kill_server(e: &E2e, netem: bool) -> Cleanup<'_> {
-    Cleanup {
-        e,
-        host: e.host.clone(),
-        command: "grofe kill-server 2>/dev/null; true".to_string(),
-        netem,
-    }
-}
-
 #[test]
 fn a_killed_sshd_reconnects_with_the_output_made_meanwhile() {
     let e = e2e_or_skip!();
-    let _cleanup = kill_server(&e, false);
+    let _cleanup = e.server_cleanup(false);
     let bar = bar(&e);
     let local = e.local();
     let mut h = local.attach(local.grofe(&["-r", &e.host]));
@@ -54,7 +45,7 @@ fn a_killed_sshd_reconnects_with_the_output_made_meanwhile() {
 #[test]
 fn netem_total_loss_is_a_drop_and_clearing_it_reconnects() {
     let e = e2e_or_skip!();
-    let _cleanup = kill_server(&e, true);
+    let _cleanup = e.server_cleanup(true);
     let bar = bar(&e);
     let local = e.local();
     let mut h = local.attach(local.grofe(&["-r", &e.host]));

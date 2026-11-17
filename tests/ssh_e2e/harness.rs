@@ -19,6 +19,8 @@ pub struct E2e {
     pub host: String,
     pub bare_host: String,
     pub release_url: String,
+    /// `LOW-HIGH`: UDP ports published as themselves on 127.0.0.1.
+    pub udp_ports: Option<String>,
     script: String,
 }
 
@@ -32,6 +34,9 @@ impl E2e {
             host: var("GROFE_E2E_HOST"),
             bare_host: var("GROFE_E2E_BARE_HOST"),
             release_url: var("GROFE_E2E_RELEASE_URL"),
+            udp_ports: std::env::var("GROFE_E2E_UDP_PORTS")
+                .ok()
+                .filter(|s| !s.is_empty()),
             script: var("GROFE_E2E_SCRIPT"),
         })
     }
@@ -55,6 +60,24 @@ impl E2e {
             .args(args)
             .output()
             .expect("run the e2e script")
+    }
+
+    /// Kills the container's grofe server (the one a proxy started) when
+    /// dropped, after `e2e_netem clear` when `netem`, and removes its
+    /// snapshot: `restore-on-start` would bring its sessions back into the
+    /// next scenario. It waits (up to 10 s) for the server to exit: a
+    /// client that connects while it shuts down gets no reply. (`[_]` keeps
+    /// pgrep from matching this command's own shell.)
+    pub fn server_cleanup(&self, netem: bool) -> Cleanup<'_> {
+        Cleanup {
+            e: self,
+            host: self.host.clone(),
+            command: "grofe kill-server 2>/dev/null; \
+                for _ in $(seq 100); do pgrep -u tester -f '[_]_server' >/dev/null || break; sleep 0.1; done; \
+                rm -f ~/.local/state/grofe/*/state.json; true"
+                .to_string(),
+            netem,
+        }
     }
 
     /// A local client side: private dirs and an ssh that reads the run's
