@@ -162,6 +162,32 @@ pub fn parse_url(url: &str) -> Result<Target, String> {
     })
 }
 
+/// A [`Command`] for the ssh program whose child starts with no signal
+/// blocked (see [`unblock_signals`]).
+pub fn command() -> Command {
+    let mut cmd = Command::new(program());
+    unblock_signals(&mut cmd);
+    cmd
+}
+
+/// Makes `cmd`'s child start with an empty signal mask. The attach client
+/// blocks SIGTERM, SIGHUP, SIGINT, SIGQUIT and SIGWINCH in every thread for
+/// its `sigwait` thread, and a blocked mask survives `fork` and `exec`: an
+/// ssh started for a reconnect would otherwise ignore them.
+pub fn unblock_signals(cmd: &mut Command) -> &mut Command {
+    use nix::sys::signal::{SigSet, SigmaskHow, sigprocmask};
+    use std::os::unix::process::CommandExt;
+    // SAFETY: sigprocmask is async-signal-safe; nothing else runs between
+    // fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
+                .map_err(std::io::Error::from)
+        });
+    }
+    cmd
+}
+
 /// The ssh program: `$GROFE_SSH`, else `ssh`.
 pub fn program() -> String {
     std::env::var(SSH_ENV)
@@ -220,7 +246,7 @@ pub fn argv(target: &Target, opts: SshOpts, remote: &str) -> Vec<String> {
 /// shows the user set no `ServerAliveInterval`. If `ssh -G` fails, ssh's
 /// own run will report why.
 pub fn wants_keepalive(target: &Target) -> bool {
-    let mut cmd = Command::new(program());
+    let mut cmd = command();
     cmd.arg("-G");
     if let Some(p) = target.port {
         cmd.args(["-p", &p.to_string()]);
@@ -479,6 +505,24 @@ mod tests {
         assert!(out.status.success(), "{out:?}");
         let out = run(&proxy_command("9.9.9"), b"");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "proxy-ran proxy\n");
+    }
+
+    /// A child of a thread with SIGTERM blocked still dies of SIGTERM.
+    #[test]
+    fn ssh_children_start_with_no_signal_blocked() {
+        use nix::sys::signal::{SigSet, Signal};
+        let status = std::thread::spawn(|| {
+            let mut set = SigSet::empty();
+            set.add(Signal::SIGTERM);
+            set.thread_block().unwrap();
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-c", "kill -TERM $$; sleep 5; exit 3"]);
+            unblock_signals(&mut cmd).status().unwrap()
+        })
+        .join()
+        .unwrap();
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}");
     }
 
     #[test]

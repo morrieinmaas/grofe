@@ -5,7 +5,7 @@
 //! two missed pings).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -335,6 +335,22 @@ fn ping_loop(shared: std::sync::Weak<Shared>, every: Duration) {
     }
 }
 
+/// How long a connect waits for the proxy's hello once ssh runs.
+pub const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Test hook: [`HELLO_TIMEOUT`] in milliseconds. Test-only.
+pub const TEST_HELLO_ENV: &str = "GROFE_TEST_HELLO_MS";
+
+/// Why a connect whose ssh never brought a hello failed.
+pub const NO_ANSWER: &str = "no answer from the remote proxy";
+
+fn hello_timeout() -> Duration {
+    std::env::var(TEST_HELLO_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(HELLO_TIMEOUT, Duration::from_millis)
+}
+
 /// Runs `ssh ... -- <proxy command>` and checks the hello.
 fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError> {
     let ssh_opts = SshOpts {
@@ -342,7 +358,7 @@ fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError>
         batch: opts.batch,
     };
     let remote = ssh::proxy_command(env!("CARGO_PKG_VERSION"));
-    let mut child = Command::new(ssh::program())
+    let mut child = ssh::command()
         .args(ssh::argv(target, ssh_opts, &remote))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -357,10 +373,38 @@ fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError>
         return Err(ConnectError::Failed("ssh has no stdio".to_string()));
     };
     let said = keep_stderr(stderr);
-    match Link::over(target.host_name(), stdout, stdin, None) {
-        Ok(link) => {
+    // ssh may connect and the remote never answer: the hello wait is
+    // bounded, and its end kills ssh, which ends the read below.
+    let (answered, wait) = std::sync::mpsc::channel::<()>();
+    let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+    let watchdog = std::thread::spawn(move || {
+        let timed_out = matches!(
+            wait.recv_timeout(hello_timeout()),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        if timed_out {
+            // Not reaped yet (only this function waits for it), so the pid
+            // is still this child's.
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+        }
+        timed_out
+    });
+    let linked = Link::over(target.host_name(), stdout, stdin, None);
+    let _ = answered.send(());
+    let timed_out = watchdog.join().unwrap_or(false);
+    match linked {
+        Ok(link) if !timed_out => {
             *lock(&link.shared.end) = Some(kill_child(child));
             Ok(link)
+        }
+        Ok(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(ConnectError::Failed(NO_ANSWER.to_string()))
+        }
+        Err(_) if timed_out => {
+            let _ = child.wait();
+            Err(ConnectError::Failed(NO_ANSWER.to_string()))
         }
         Err(e) => {
             // No hello: ssh or the remote command ended; say why.

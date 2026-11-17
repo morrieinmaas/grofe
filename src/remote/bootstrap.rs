@@ -152,7 +152,7 @@ pub fn verify(data: &[u8], sums: &str, file: &str) -> Result<(), String> {
 
 /// `uname -sm` on the remote.
 pub fn remote_uname(target: &Target) -> Result<String, String> {
-    let out = Command::new(ssh::program())
+    let out = ssh::command()
         .args(ssh::argv(target, SshOpts::default(), "uname -sm"))
         .stdin(Stdio::null())
         .output()
@@ -272,7 +272,7 @@ fn upload(target: &Target, binary: &[u8]) -> Result<(), String> {
         binary.len(),
         &hex(&sha256(binary)),
     );
-    let mut child = Command::new(ssh::program())
+    let mut child = ssh::command()
         .args(ssh::argv(target, SshOpts::default(), &remote))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
