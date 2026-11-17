@@ -77,8 +77,8 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
 - **Clipboard.** Copies from programs (OSC 52) and from copy mode reach your terminal through
   the screen stream, as they do locally; `set-clipboard` decides which.
 - **Notifications** reach your terminal the same way.
-- **Opening URLs.** Panes get `BROWSER="grofe open"` while `forward-browser` is on (the
-  default), so a program that opens a link on the remote opens it on your machine. You can run
+- **Opening URLs.** Panes get `BROWSER` set to a small `grofe-open` program the server writes next to
+  its `tmux` link, while `forward-browser` is on (the default), so a program that opens a link on the remote opens it on your machine. You can run
   `grofe open <url>` yourself too. Only `http`, `https` and `file` URLs are opened. A `file` URL
   must name an existing local file; it is refused when it is a directory or bundle, executable,
   or a script or launcher type (`.command`, `.app`, `.sh` and similar), and otherwise asks
@@ -99,7 +99,9 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
 - **Ports.** When a pane starts listening on a TCP port, the client offers
   `forward devbox:5173 to localhost:5173? [y/N/always]`. The local end binds `127.0.0.1` only,
   on the same port or the next free one. `remote-forward-ports` is `ask` (default), `auto` or
-  `off`. A forward closes when the port does or the client exits. `grofe -r devbox ports` lists
+  `off`. A forward closes when the port does or the client exits. These three options are read from
+  your own machine's config (`remote-upload-paste = "on"` in `config.toml`); a remote server's
+  values are ignored, so a remote cannot turn your consent prompts off. `grofe -r devbox ports` lists
   the forwards your clients attached to devbox hold, without connecting. `#{pane_ports}` and `list-ports` show what
   panes listen on.
 
@@ -157,7 +159,8 @@ machine: name, target, session, transport and `on` or `off`, with `-` for an uns
   which must hold the certificate hash and the 32-byte random token that were handed over ssh.
   The client pins that certificate (no certificate authority is involved), TLS 1.3 only, with no
   0-RTT. A newer QUIC proxy for the same server stops the older one.
-- Port forwards bind `127.0.0.1` on your machine only.
+- Port forwards bind `127.0.0.1` on your machine only. Whether uploads and forwards ask first is decided by your
+  config, never the remote's.
 - `open-url` opens only http, https and existing local files (those after asking, never
   executables or launchers), and only from the attached session; uploads never overwrite.
 - The install checks `SHA256SUMS`, which comes from the same place as the archive: it proves the

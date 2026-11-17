@@ -87,7 +87,7 @@ grofe client.
 - **Notifications:** already escapes to the local terminal; for machines not on screen (phase 4)
   they arrive as `notify` events on the control channel.
 - **Open URLs locally.** New verb `open-url <url>` and event `open-url {url, pane}`; `grofe open
-  <url>` is the CLI. Panes get `BROWSER="grofe open"` when the session option
+  <url>` is the CLI. Panes get `BROWSER` (a `grofe-open` program beside the server's `tmux` link) when the session option
   `forward-browser` is on (default on). A remote client subscribed to `open-url` opens the URL
   with the local `open`/`xdg-open`; with no remote client attached, `grofe open` falls back to
   the remote's own opener. Only `http`, `https` and `file` (file: only if the path exists
@@ -106,7 +106,8 @@ grofe client.
   joined with `/proc/<pid>/fd` socket inodes for the pane's process tree; macOS: `proc_pidfdinfo`
   socket info). New format `#{pane_ports}` (comma list), verb `list-ports [-a]`, event
   `ports-changed {pane, ports}` (polled at most every 2 s, only while a subscriber exists).
-  A remote client applies `remote-forward-ports ask|auto|off` (default `ask`): a new port shows
+  A remote client applies `remote-forward-ports ask|auto|off` (from its own local config, like
+  `remote-upload-paste`; a remote value never loosens consent) (default `ask`): a new port shows
   a one-line client prompt `forward host:5173 to localhost:5173? [y/N/always]`; the local
   listener binds `127.0.0.1:<same port>`, or the next free port if taken (shown in the prompt
   result). Forwards close when the port closes or the client exits. `grofe -r host ports` lists
