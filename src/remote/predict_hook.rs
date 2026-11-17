@@ -131,6 +131,7 @@ impl PredictHook {
         self.connection = Some(cx.connection());
         self.echo.clear();
         self.active = None;
+        self.active_rx = None;
         self.reported = None;
         self.mode_rx = Some(cx.request_bg(vec![
             "show-options".into(),
