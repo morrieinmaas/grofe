@@ -31,13 +31,16 @@ pub type End = Box<dyn FnOnce() + Send>;
 pub enum Transport {
     /// `ssh host -- <remote command>`, the proxy on ssh's stdio.
     Ssh(Target),
+    /// `ssh host -- <remote grofe> proxy --quic` once, then QUIC (see
+    /// `super::roam`).
+    Quic(Target),
 }
 
 impl Transport {
     /// The host, for messages.
     pub fn host(&self) -> &str {
         match self {
-            Transport::Ssh(t) => t.host_name(),
+            Transport::Ssh(t) | Transport::Quic(t) => t.host_name(),
         }
     }
 }
@@ -125,6 +128,7 @@ impl Link {
     pub fn connect(transport: &Transport, opts: ConnectOpts) -> Result<Link, ConnectError> {
         match transport {
             Transport::Ssh(target) => connect_ssh(target, opts),
+            Transport::Quic(target) => super::roam::connect_once(target, opts),
         }
     }
 

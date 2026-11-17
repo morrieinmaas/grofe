@@ -1707,14 +1707,16 @@ fn remote_main(target: &Target, flags: &RemoteFlags, argv: &[String]) -> ExitCod
         .clone()
         .or_else(|| local_option("remote-transport"))
         .unwrap_or_else(|| "ssh".to_string());
-    match transport.as_str() {
-        "ssh" => {}
-        "quic" => return fail("grofe: quic transport not built"),
-        other => return fail(&format!("grofe: unknown transport {other:?} (ssh or quic)")),
-    }
     let release_url = grofe::remote::bootstrap::release_url(local_option("remote-release-url"));
-    let link = match grofe::remote::bootstrap::connect(target, &flags.install, &release_url) {
-        Ok(link) => link,
+    let connected = match transport.as_str() {
+        "ssh" => grofe::remote::bootstrap::connect(target, &flags.install, &release_url)
+            .map(|link| (link, None)),
+        "quic" => grofe::remote::roam::Roaming::connect(target, &flags.install, &release_url)
+            .map(|(roaming, link)| (link, Some(std::sync::Arc::new(roaming)))),
+        other => return fail(&format!("grofe: unknown transport {other:?} (ssh or quic)")),
+    };
+    let (link, roaming) = match connected {
+        Ok(c) => c,
         Err(e) => return fail(&format!("grofe: {}", grofe::remote::ssh::sanitize(&e))),
     };
     let hello = match remote_hello() {
@@ -1725,6 +1727,7 @@ fn remote_main(target: &Target, flags: &RemoteFlags, argv: &[String]) -> ExitCod
         link,
         target: target.clone(),
         hello,
+        roaming,
     };
     match grofe::cmd::parse::canonical_name(&argv[0]) {
         "attach-session" => print_attach(remote.attach(argv, false)),
@@ -1770,6 +1773,8 @@ struct Remote {
     link: grofe::remote::connect::Link,
     target: Target,
     hello: String,
+    /// Set for `--transport quic`: reconnects go through it.
+    roaming: Option<std::sync::Arc<grofe::remote::roam::Roaming>>,
 }
 
 impl Remote {
@@ -1864,7 +1869,11 @@ impl Remote {
             },
         };
         let target = self.target.clone();
+        let roaming = self.roaming.clone();
         let relink = std::sync::Arc::new(move || {
+            if let Some(r) = &roaming {
+                return r.relink();
+            }
             grofe::remote::connect::Link::connect(
                 &grofe::remote::connect::Transport::Ssh(target.clone()),
                 grofe::remote::connect::ConnectOpts { batch: true },

@@ -304,6 +304,7 @@ fn detach(pid_file: &Path, log: &Path) -> io::Result<Option<Flock<std::fs::File>
             match middle() {
                 Ok(Some(lock)) => {
                     std::env::set_current_dir("/")?;
+                    reset_signals()?;
                     redirect_stdio(log)?;
                     Ok(Some(lock))
                 }
@@ -316,6 +317,20 @@ fn detach(pid_file: &Path, log: &Path) -> io::Result<Option<Flock<std::fs::File>
             }
         }
     }
+}
+
+/// Unblocks every signal and gives SIGTERM, SIGINT and SIGHUP their default
+/// action: a mask or ignore the starting process had (an attach client
+/// blocks these for its signal thread, and a reconnect bootstraps from
+/// there) must not make the detached proxy deaf to `kill`.
+fn reset_signals() -> io::Result<()> {
+    use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal, signal, sigprocmask};
+    sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None).map_err(io::Error::from)?;
+    for sig in [Signal::SIGTERM, Signal::SIGINT, Signal::SIGHUP] {
+        // SAFETY: the default action installs no handler code.
+        unsafe { signal(sig, SigHandler::SigDfl) }.map_err(io::Error::from)?;
+    }
+    Ok(())
 }
 
 fn redirect_stdio(log: &Path) -> io::Result<()> {
