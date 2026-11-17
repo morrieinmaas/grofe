@@ -19,6 +19,9 @@ use common::{CMD_TIMEOUT, TestServer, run_bounded};
 use harness::Harness;
 use tempfile::TempDir;
 
+/// The picker box's top edge.
+const BOX: &str = "─ machines ─";
+
 /// The local server, two remote ones, and the fake ssh.
 struct Fleet {
     local: TestServer,
@@ -250,13 +253,51 @@ fn the_picker_switches_the_attach_and_dims_an_offline_machine() {
     });
 
     // An offline machine cannot be chosen: the picker stays up.
+    // Each key the picker keeps itself up for draws the box again, so a
+    // new box after `M-3` shows the key was taken and the picker stayed.
     h.send("\x1bm");
     h.wait_for("offline");
+    let from = h.output().len();
     h.send("\x1b3");
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(h.text().contains("offline"), "{}", h.text());
+    h.wait_for_output(BOX.as_bytes(), from);
     h.send("\x1b");
-    std::thread::sleep(Duration::from_millis(300));
+    h.wait_until("the picker closed", Duration::from_secs(10), |t| {
+        !t.contains(BOX)
+    });
+    assert!(
+        f.alpha
+            .cmd(&["list-clients", "-F", "#{session_name}"])
+            .is_ok_and(|o| o.trim() == "main"),
+        "still on alpha"
+    );
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// The picker follows its machines while it is up: a machine that comes
+/// back shows as connected with no key pressed and no pane output.
+#[test]
+fn an_open_picker_redraws_when_a_machine_comes_back() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    // No status line refresh either: only the picker may draw.
+    f.local
+        .cmd(&["set-option", "-g", "status-interval", "0"])
+        .unwrap();
+    let mut h = Harness::spawn(f.grofe(&["--machines"]), 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    h.send("\x1bm");
+    h.wait_until("beta offline in the picker", Duration::from_secs(20), |t| {
+        t.contains(BOX) && t.contains("offline")
+    });
+    f.set_down("beta", false);
+    h.wait_until("beta back in the picker", Duration::from_secs(30), |t| {
+        t.contains(BOX) && !t.contains("offline")
+    });
+    h.send("\x1b");
+    h.wait_until("the picker closed", Duration::from_secs(10), |t| {
+        !t.contains(BOX)
+    });
     h.send("\x02d");
     h.wait_exit();
 }

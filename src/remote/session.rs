@@ -58,6 +58,9 @@ use crate::server::input::{Key, KeyCode, parse_prefix};
 /// How often [`Hook::tick`] runs (and the bar's countdown is checked).
 pub const TICK: Duration = Duration::from_millis(100);
 
+/// Most bytes typed during a switch that are kept for the new attach.
+const MAX_HELD: usize = 64 * 1024;
+
 /// The prefix assumed when the server's cannot be read.
 const DEFAULT_PREFIX: &str = "C-b";
 
@@ -373,6 +376,8 @@ fn run(
         state: State::Online(Box::new(conn)),
         overlay: None,
         switch: None,
+        drawn: Vec::new(),
+        held: None,
         backoff: Backoff::new(),
         jitter: Jitter::new(),
         detach: DetachKey::new(prefix),
@@ -401,6 +406,10 @@ struct Loop {
     overlay: Option<Box<dyn Prompt>>,
     /// A switch a hook asked for, applied after it returns.
     switch: Option<Switch>,
+    /// The overlay's bytes as last drawn.
+    drawn: Vec<u8>,
+    /// Keys typed while a switch attaches, to send once it is up.
+    held: Option<Vec<u8>>,
     backoff: Backoff,
     jitter: Jitter,
     detach: DetachKey,
@@ -464,6 +473,9 @@ impl Loop {
                         h.tick(cx, now.mono);
                     }
                 });
+                if matches!(self.state, State::Online(_)) {
+                    self.redraw_changed_overlay();
+                }
             }
         }
     }
@@ -504,6 +516,12 @@ impl Loop {
 
     fn input(&mut self, a: &mut RemoteAttach, bytes: Vec<u8>) {
         if !matches!(self.state, State::Online(_)) {
+            // Typed during a switch: sent once the new attach is up.
+            if let Some(held) = &mut self.held
+                && held.len() + bytes.len() <= MAX_HELD
+            {
+                held.extend_from_slice(&bytes);
+            }
             self.detach.feed(&bytes);
             return;
         }
@@ -547,15 +565,31 @@ impl Loop {
         self.draw_prompt();
     }
 
-    fn draw_prompt(&self) {
+    fn draw_prompt(&mut self) {
         if let Some(p) = &self.overlay {
             let (cols, rows) = client::tty_size();
             match p.overlay(cols, rows) {
                 Some(bytes) => {
                     let _ = client::write_tty(&bytes);
+                    self.drawn = bytes;
                 }
                 None => draw_bottom_row(&p.text()),
             }
+        }
+    }
+
+    /// After a tick: an overlay whose content changed (the picker's
+    /// machines did) is drawn again, with no key or output to prompt it.
+    fn redraw_changed_overlay(&mut self) {
+        let Some(p) = &self.overlay else {
+            return;
+        };
+        let (cols, rows) = client::tty_size();
+        if let Some(bytes) = p.overlay(cols, rows)
+            && bytes != self.drawn
+        {
+            let _ = client::write_tty(&bytes);
+            self.drawn = bytes;
         }
     }
 
@@ -576,6 +610,7 @@ impl Loop {
         self.params.opts.detach_others = false;
         self.params.opts.extras.cwd = None;
         self.state = State::Offline { next: None };
+        self.held = Some(Vec::new());
         self.bar.clear();
         let params = self.params.clone();
         let out = self.out_tx.clone();
@@ -654,12 +689,17 @@ impl Loop {
                 Ok(conn) => {
                     self.backoff.connected(Instant::now());
                     self.detach = DetachKey::new(conn.prefix);
+                    if let Some(held) = self.held.take().filter(|h| !h.is_empty()) {
+                        conn.send(Frame::Input(held));
+                    }
                     self.state = State::Online(conn);
                     self.bar.clear();
                     let _ = self.out_tx.try_send(Out::Wake);
                 }
                 Err(Failure::Fatal(e)) => return Some(Err(e)),
                 Err(Failure::Retry(_)) => {
+                    // A switch that failed is a reconnect: typing is dropped.
+                    self.held = None;
                     let delay = self.backoff.next_delay(self.jitter.sample());
                     self.state = State::Offline {
                         next: Some(Instant::now() + delay),
