@@ -88,13 +88,15 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
   `on` or `off`. `remote-upload-max` caps one paste (100 MiB by default). A name that is taken
   gets ` (2)`; nothing is ever overwritten. Directories are pasted as text.
 - **ssh agent.** Each session's `SSH_AUTH_SOCK` points at a stable link that every attach
-  repoints, so panes that started before a reconnect keep a working agent. This also works for
-  plain `ssh host` then `grofe attach`. `stable-ssh-agent` turns it off.
+  repoints, so panes that started before a reconnect keep a working agent. For `grofe -r`, the
+  agent is the one ssh forwards to the remote (`ssh -A`, or `ForwardAgent yes` in your ssh
+  config); without agent forwarding nothing changes. This also works for plain `ssh host` then
+  `grofe attach`. `stable-ssh-agent` turns it off.
 - **Ports.** When a pane starts listening on a TCP port, the client offers
   `forward devbox:5173 to localhost:5173? [y/N/always]`. The local end binds `127.0.0.1` only,
   on the same port or the next free one. `remote-forward-ports` is `ask` (default), `auto` or
   `off`. A forward closes when the port does or the client exits. `grofe -r devbox ports` lists
-  the forwards of the clients attached to devbox. `#{pane_ports}` and `list-ports` show what
+  the forwards your clients attached to devbox hold, without connecting. `#{pane_ports}` and `list-ports` show what
   panes listen on.
 
 ## Latency
@@ -105,7 +107,9 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
   real screen. Enter, control keys and escape sequences are never predicted, and nothing is
   predicted at a password prompt or while the pane has echo off. `predictive-echo` is `auto`
   (default: on only for remote links with a round trip of 50 ms or more), `on` or `off`.
-- **Round trip.** `#{client_rtt}` shows the link's smoothed round trip, for the status line.
+- **Round trip.** `#{client_rtt}` shows the link's smoothed round trip (`42ms`), for the status
+  line. The remote client reports it with `set-client-info -t <client> rtt <ms>`; the same verb
+  takes `machines <text>` for `#{client_machines}`.
 - **Roaming.** `--transport quic` (or the option `remote-transport quic`) moves the session
   onto QUIC over UDP after setting it up over ssh, so it survives a changed address: Wi-Fi to a
   phone's tether, sleep and wake. ssh still does the login and the install. If UDP is blocked
@@ -123,19 +127,24 @@ grofe machine rm gpu
 ```
 
 Saved machines live in `machines.toml` in grofe's config directory (name, target, session,
-transport, enabled; never secrets). A saved name works anywhere a host does: `grofe -r devbox`.
+transport, enabled; never secrets). A saved name works anywhere a host does: `grofe -r devbox`. `machine ls` prints one line per
+machine: name, target, session, transport and `on` or `off`, with `-` for an unset field.
+`local` is reserved for this machine.
 
 - `grofe --machines`, or bare `grofe` once machines are saved, connects to your local server and
   every enabled machine. Only the machine on screen streams its screen; the others keep a light
   control connection for agent and notification events, so a slow machine never stalls the
   one you are using.
+- The multi-machine client does not forward URLs, files or ports yet; use `grofe -r <name>` for
+  those.
 - `M-m` (`machine-key`) opens the machine picker: one row per machine with its state
   (connected, reconnecting, offline), its sessions and its agents. Enter switches; `M-1` to
   `M-9` jump straight to a row. The session you leave keeps running.
 - `#{client_machines}` lists the machines for the status line, marking one with a blocked agent
   or an unread notification.
 - `grofe agent list --all-machines` prints every machine's agents with a `machine` column;
-  `grofe --machine devbox agent list` asks one. An offline machine shows its last known agents,
+  `grofe --machine devbox agent list` asks one. `--machine` takes only saved names (and
+  `local`); `-r` takes saved names and ssh targets alike. An offline machine shows its last known agents,
   marked offline.
 
 ## Security notes
