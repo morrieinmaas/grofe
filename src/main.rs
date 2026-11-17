@@ -22,8 +22,8 @@ use grofe::client;
 use grofe::paths::{self, Env};
 use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
 use grofe::remote::bootstrap::Install;
-use grofe::remote::session;
 use grofe::remote::ssh::Target;
+use grofe::remote::{forward, session};
 use grofe::server;
 use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -1699,6 +1699,9 @@ fn local_option(name: &str) -> Option<String> {
 /// attach channel, everything else is one control request printed as the
 /// local CLI prints it.
 fn remote_main(target: &Target, flags: &RemoteFlags, argv: &[String]) -> ExitCode {
+    if argv == ["ports"] {
+        return remote_ports(target.host_name());
+    }
     let transport = flags
         .transport
         .clone()
@@ -1870,16 +1873,37 @@ impl Remote {
         });
         let attach = session::RemoteAttach {
             host: self.target.host_name().to_string(),
-            control_hello: self.hello,
+            control_hello: self.hello.clone(),
             ctx: remote_ctx(),
             opts,
             term: std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
             reconnect: local_option("remote-reconnect").is_none_or(|v| v == "on"),
             relink,
-            hooks: vec![Box::new(grofe::remote::predict_hook::PredictHook::new())],
+            // Predictive echo last: it predicts only what the others send on.
+            hooks: vec![
+                Box::new(forward::ForwardHook::new(
+                    self.target.host_name(),
+                    &self.hello,
+                    Some(forward::forwards_dir(&Env::from_process())),
+                )),
+                Box::new(grofe::remote::predict_hook::PredictHook::new()),
+            ],
         };
         session::attach(self.link, attach)
     }
+}
+
+/// `grofe -r host ports`: the port forwards this machine's clients of
+/// `host` hold, from their state files; no connection is made.
+fn remote_ports(host: &str) -> ExitCode {
+    let dir = forward::forwards_dir(&Env::from_process());
+    let forwards = forward::list_forwards(&dir, host);
+    if forwards.is_empty() {
+        println!("no ports forwarded from {host}");
+    } else {
+        print!("{}", forward::format_forwards(host, &forwards));
+    }
+    ExitCode::SUCCESS
 }
 
 /// How an attach client's end is reported: `[reason]`, or the error.
