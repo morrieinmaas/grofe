@@ -268,6 +268,13 @@ fn event_samples() -> Vec<Event> {
             pane: p,
             echo: false,
         },
+        Event::Notify {
+            pane: p,
+            session: Some(s),
+            kind: Some("claude".into()),
+            state: "blocked".into(),
+            msg: Some("Bash ls".into()),
+        },
         Event::EventsDropped { count: 3 },
     ]
 }
@@ -296,7 +303,8 @@ fn index(event: &Event) -> usize {
         Event::OpenUrl { .. } => 17,
         Event::PortsChanged { .. } => 18,
         Event::PaneEcho { .. } => 19,
-        Event::EventsDropped { .. } => 20,
+        Event::Notify { .. } => 20,
+        Event::EventsDropped { .. } => 21,
     }
 }
 
@@ -316,6 +324,16 @@ fn event_extras() -> Vec<(&'static str, Event)> {
             Event::OpenUrl {
                 url: "http://localhost:8080/".into(),
                 pane: None,
+            },
+        ),
+        (
+            "event-notify-bare",
+            Event::Notify {
+                pane: PaneId(4),
+                session: None,
+                kind: None,
+                state: "done".into(),
+                msg: None,
             },
         ),
         (

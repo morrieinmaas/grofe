@@ -72,6 +72,7 @@ pub const NAMES: &[&str] = &[
     "open-url",
     "ports-changed",
     "pane-echo",
+    "notify",
 ];
 
 /// `pane-output` is sent only to subscribers that name it: a bare
@@ -81,7 +82,13 @@ const PANE_OUTPUT: &str = "pane-output";
 /// Events added after v1.0 (protocol-v1 §8) reach only a subscription that
 /// names them, as `pane-output` does. The last two are also what the poller
 /// in `server::remote` runs for.
-const NAMED_ONLY: &[&str] = &[PANE_OUTPUT, "open-url", "ports-changed", "pane-echo"];
+const NAMED_ONLY: &[&str] = &[
+    PANE_OUTPUT,
+    "open-url",
+    "ports-changed",
+    "pane-echo",
+    "notify",
+];
 
 /// What a `subscribe -t` is limited to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

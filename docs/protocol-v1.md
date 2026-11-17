@@ -128,8 +128,9 @@ A connection that sent `subscribe` receives events as single JSON lines whose
 (`%N` panes, `@N` windows, `$N` sessions); `uid` is a pane's stable id;
 `client` is `#{client_name}`. A nullable field is always present, as `null`.
 Fixture: `event-<name>.json` for each event, plus `event-pane-exited-killed`,
-`event-option-changed-unset`, `event-open-url-no-pane` and
-`event-ports-changed-none` for the null and empty shapes.
+`event-option-changed-unset`, `event-open-url-no-pane`,
+`event-ports-changed-none` and `event-notify-bare` for the null and empty
+shapes.
 
 | Event | Payload after `event` | Fires when |
 |---|---|---|
@@ -153,6 +154,7 @@ Fixture: `event-<name>.json` for each event, plus `event-pane-exited-killed`,
 | `open-url` | `url`, `pane` (nullable: null when the caller was not in a pane) | `open-url <url>` (`grofe open`, `$BROWSER`) was run with an `http`, `https` or `file` URL; only for a subscription naming it |
 | `ports-changed` | `pane`, `ports` (sorted list of TCP port numbers the pane's process tree listens on, now) | that list changed; polled at most every 2 s while a subscription naming it exists; only for a subscription naming it |
 | `pane-echo` | `pane`, `echo` (the pty's ECHO flag, false while a program reads a password) | the flag changed (a new pane counts as echo on); polled with `ports-changed`; only for a subscription naming it |
+| `notify` | `pane`, `session` (nullable), `kind` (nullable), `state`, `msg` (nullable) | an agent notification was raised (the one the tray lists); only for a subscription naming it |
 | `events-dropped` | `count` | a notice, not subscribable: the subscriber's queue overflowed; sent before its next delivered event |
 
 The full table (emitters, consumers, exact firing rules) is spec §7.2.

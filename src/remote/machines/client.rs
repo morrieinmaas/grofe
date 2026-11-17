@@ -38,7 +38,20 @@ const GIVE_UP: u32 = 3;
 const RETRY: Duration = Duration::from_secs(5);
 
 /// The events that change a view.
-const EVENTS: &[&str] = &["agent-changed", "session-created", "session-closed"];
+const EVENTS: &[&str] = &[
+    "agent-changed",
+    "session-created",
+    "session-closed",
+    "notify",
+];
+
+/// Where a machine's notifications go when it is not the one on screen:
+/// the machine attached to, and the texts waiting for the hook to show.
+#[derive(Clone, Default)]
+struct Notices {
+    current: Arc<AtomicUsize>,
+    queue: Arc<Mutex<Vec<String>>>,
+}
 
 /// The session a machine is attached to when none is saved for it: what
 /// `grofe -r host` attaches to.
@@ -151,21 +164,24 @@ pub fn run(
         entries[0].link = Some(local.clone());
         entries[0].view.link = LinkState::Connected;
     }
+    let notices = Notices::default();
     for (i, reach) in reaches.iter().enumerate() {
-        let (shared, reach, hello, dir) = (
+        let (shared, reach, hello, dir, notices) = (
             Arc::clone(&shared),
             reach.clone(),
             hello.clone(),
             state_dir.clone(),
+            notices.clone(),
         );
         let first = (i == 0).then(|| local.clone());
-        std::thread::spawn(move || watch(shared, i, reach, &hello, &dir, first));
+        std::thread::spawn(move || watch(shared, i, reach, &hello, &dir, first, notices));
     }
     let hook = MachinesHook {
         shared: Arc::clone(&shared),
         reaches: reaches.clone(),
         key,
-        current: Arc::new(AtomicUsize::new(0)),
+        current: Arc::clone(&notices.current),
+        notices: Arc::clone(&notices.queue),
         hello: hello.clone(),
         sent: None,
     };
@@ -252,6 +268,7 @@ fn watch(
     hello: &str,
     state_dir: &Path,
     first: Option<Link>,
+    notices: Notices,
 ) {
     let mut first = first;
     // Failed attempts since the machine was last connected; `None` while it
@@ -282,12 +299,13 @@ fn watch(
         let (tx, rx) = mpsc::channel();
         if let Ok(chan) = link.open_control() {
             let hello = hello.to_string();
-            std::thread::spawn(move || subscribe(chan, &hello, EVENTS, || tx.send(()).is_ok()));
+            std::thread::spawn(move || subscribe(chan, &hello, EVENTS, |v| tx.send(v).is_ok()));
         }
         while link.dropped().is_none() {
             refresh(&shared, i, &link, hello, state_dir);
             match rx.recv_timeout(REFRESH) {
-                Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(event) => on_event(&shared, i, &notices, &event),
+                Err(RecvTimeoutError::Timeout) => {}
                 // The event channel ended: the link is going.
                 Err(RecvTimeoutError::Disconnected) => std::thread::sleep(REFRESH),
             }
@@ -316,7 +334,7 @@ fn subscribe<S: Read + Write>(
     mut chan: S,
     hello: &str,
     events: &[&str],
-    mut seen: impl FnMut() -> bool,
+    mut seen: impl FnMut(serde_json::Value) -> bool,
 ) {
     let mut argv = vec!["subscribe".to_string()];
     argv.extend(events.iter().map(|e| e.to_string()));
@@ -339,11 +357,57 @@ fn subscribe<S: Read + Write>(
     }
     let mut line = String::new();
     while matches!(reader.read_line(&mut line), Ok(n) if n > 0) {
+        let event = serde_json::from_str::<serde_json::Value>(&line).ok();
         line.clear();
-        if !seen() {
+        if let Some(event) = event.filter(|e| e.get("event").is_some())
+            && !seen(event)
+        {
             return;
         }
     }
+}
+
+/// An event from machine `i`. A `notify` from a machine not on screen marks
+/// it unread and queues its text for the local terminal; the attached
+/// machine's own server already shows its notifications.
+fn on_event(shared: &Shared, i: usize, notices: &Notices, event: &serde_json::Value) {
+    if event.get("event").and_then(|e| e.as_str()) != Some("notify")
+        || notices.current.load(Ordering::SeqCst) == i
+    {
+        return;
+    }
+    let name = {
+        let mut entries = lock(shared);
+        entries[i].view.unread = true;
+        entries[i].view.name.clone()
+    };
+    notices
+        .queue
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(notice_text(&name, event));
+}
+
+/// A `notify` event from machine `name` as one line for the local
+/// terminal, like the server's own: `grofe: <machine>: <kind> <state>:
+/// <msg>`, every remote word sanitized.
+fn notice_text(name: &str, event: &serde_json::Value) -> String {
+    let field = |k: &str| {
+        event
+            .get(k)
+            .and_then(|v| v.as_str())
+            .map(crate::remote::ssh::sanitize)
+    };
+    let mut text = format!("grofe: {}:", crate::remote::ssh::sanitize(name));
+    for word in [field("kind"), field("state")].into_iter().flatten() {
+        text.push(' ');
+        text.push_str(&word);
+    }
+    if let Some(msg) = field("msg") {
+        text.push_str(": ");
+        text.push_str(&msg);
+    }
+    text
 }
 
 /// Reads machine `i`'s sessions, agents and unread flag over `link`.
@@ -381,6 +445,8 @@ struct MachinesHook {
     key: Vec<u8>,
     /// The machine attached to.
     current: Arc<AtomicUsize>,
+    /// Notifications from machines not on screen, to show locally.
+    notices: Arc<Mutex<Vec<String>>>,
     hello: String,
     /// The text last sent, and to which machine.
     sent: Option<(usize, String)>,
@@ -405,6 +471,11 @@ impl Hook for MachinesHook {
     }
 
     fn tick(&mut self, cx: &mut HookCtx<'_>, _now: Instant) {
+        let waiting = std::mem::take(&mut *self.notices.lock().unwrap_or_else(|p| p.into_inner()));
+        for text in waiting {
+            // As the server sends its own (OSC 9): the terminal shows it.
+            cx.draw(&crate::server::notify::desktop::osc9(&text));
+        }
         let current = self.current.load(Ordering::SeqCst);
         let text = client_machines(&views(&self.shared));
         if self.sent.as_ref() == Some(&(current, text.clone())) {
@@ -528,7 +599,7 @@ mod tests {
             String::from_utf8(got).unwrap()
         });
         let mut seen = 0;
-        subscribe(ours, "HELLO", &["agent-changed"], || {
+        subscribe(ours, "HELLO", &["agent-changed"], |_| {
             seen += 1;
             true
         });
@@ -546,6 +617,51 @@ mod tests {
         assert_eq!(link_state(Some(1)), LinkState::Reconnecting);
         assert_eq!(link_state(Some(GIVE_UP - 1)), LinkState::Reconnecting);
         assert_eq!(link_state(Some(GIVE_UP)), LinkState::Offline);
+    }
+
+    #[test]
+    fn a_notify_becomes_one_sanitized_line() {
+        let e = serde_json::json!({
+            "event": "notify", "pane": "%1", "session": "$0",
+            "kind": "claude", "state": "blocked", "msg": "Bash rm\u{1b}[2J"
+        });
+        assert_eq!(
+            notice_text("box", &e),
+            "grofe: box: claude blocked: Bash rm\\u{1b}[2J"
+        );
+        let bare = serde_json::json!({"event": "notify", "pane": "%1", "state": "done",
+            "kind": null, "msg": null, "session": null});
+        assert_eq!(notice_text("box", &bare), "grofe: box: done");
+    }
+
+    #[test]
+    fn a_notify_marks_only_a_machine_not_on_screen() {
+        let shared: Shared = Arc::new(Mutex::new(
+            (0..2)
+                .map(|_| Entry {
+                    machine: None,
+                    view: offline_view(None, Path::new("/nonexistent")),
+                    link: None,
+                })
+                .collect(),
+        ));
+        let notices = Notices::default();
+        let e = serde_json::json!({"event": "notify", "state": "done"});
+        on_event(&shared, 0, &notices, &e);
+        assert!(
+            !lock(&shared)[0].view.unread,
+            "on screen: its server shows it"
+        );
+        on_event(&shared, 1, &notices, &e);
+        assert!(lock(&shared)[1].view.unread);
+        assert_eq!(notices.queue.lock().unwrap().len(), 1);
+        on_event(
+            &shared,
+            1,
+            &notices,
+            &serde_json::json!({"event": "agent-changed"}),
+        );
+        assert_eq!(notices.queue.lock().unwrap().len(), 1);
     }
 
     #[test]

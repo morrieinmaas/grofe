@@ -181,14 +181,16 @@ impl Drop for Fleet {
     }
 }
 
-/// How many files `pid` has open: its connections included.
+/// How many descriptors `pid` has open, its connections among them: the
+/// unix sockets on macOS (lsof also lists mapped libraries, which a server
+/// loads lazily), every descriptor where `/proc` exists.
 fn open_files(pid: Pid) -> usize {
     let proc = format!("/proc/{pid}/fd");
     if let Ok(dir) = fs::read_dir(&proc) {
         return dir.count();
     }
     let out = Command::new("lsof")
-        .args(["-n", "-P", "-p", &pid.to_string()])
+        .args(["-n", "-P", "-a", "-U", "-p", &pid.to_string()])
         .output()
         .expect("lsof");
     String::from_utf8_lossy(&out.stdout).lines().count()
@@ -493,6 +495,83 @@ fn the_picker_attaches_a_quic_machine_with_one_bootstrap() {
     assert_eq!(f.bootstraps("alpha"), 1);
     h.send("echo still-quic\r");
     h.wait_for("still-quic");
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// A raised agent notification is a `notify` event for a subscription that
+/// names it.
+#[test]
+fn a_raised_notification_is_a_notify_event() {
+    let srv = TestServer::start();
+    let mut sub = srv.subscribe(&["notify"]).unwrap();
+    agent(&srv, "main", "claude", "working");
+    let pane = srv
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .unwrap();
+    srv.cmd(&[
+        "agent",
+        "report",
+        "blocked",
+        "-t",
+        pane.trim(),
+        "--kind",
+        "claude",
+        "--msg",
+        "Bash ls",
+    ])
+    .unwrap();
+    let event = sub.next(CMD_TIMEOUT).unwrap();
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["event"], "notify", "{json}");
+    assert_eq!(json["pane"], pane.trim());
+    assert_eq!(json["state"], "blocked");
+    assert_eq!(json["kind"], "claude");
+    assert_eq!(json["msg"], "Bash ls");
+}
+
+/// A notification on a machine not on screen reaches the local terminal
+/// as OSC 9, and that machine is marked in the picker.
+#[test]
+fn a_background_machine_notification_shows_locally() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    agent(&f.alpha, "main", "claude", "working");
+    let pane = f
+        .alpha
+        .cmd(&["display-message", "-p", "-t", "main", "#{pane_id}"])
+        .unwrap();
+    let mut h = Harness::spawn(f.grofe(&["--machines"]), 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    h.send("\x1bm");
+    h.wait_until("alpha connected", Duration::from_secs(20), |t| {
+        t.contains(BOX) && t.contains("claude working")
+    });
+    h.send("\x1b");
+    h.wait_until("the picker closed", Duration::from_secs(10), |t| {
+        !t.contains(BOX)
+    });
+    let from = h.output().len();
+    f.alpha
+        .cmd(&[
+            "agent",
+            "report",
+            "blocked",
+            "-t",
+            pane.trim(),
+            "--kind",
+            "claude",
+            "--msg",
+            "approve?",
+        ])
+        .unwrap();
+    h.wait_for_output(b"\x1b]9;grofe: a: claude blocked: approve?", from);
+    h.send("\x1bm");
+    h.wait_until("a marked", Duration::from_secs(10), |t| t.contains("2!a"));
+    h.send("\x1b");
+    h.wait_until("the picker closed", Duration::from_secs(10), |t| {
+        !t.contains(BOX)
+    });
     h.send("\x02d");
     h.wait_exit();
 }

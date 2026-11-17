@@ -123,6 +123,18 @@ pub enum Event {
         pane: PaneId,
         echo: bool,
     },
+    /// An agent notification was raised (agents spec §6), as the tray lists
+    /// it: the pane, its session (null if it has none), the agent's kind
+    /// (nullable), the state it reached and its message (nullable). Only for
+    /// a subscription naming it, so a client watching other machines can
+    /// show their notifications.
+    Notify {
+        pane: PaneId,
+        session: Option<SessionId>,
+        kind: Option<String>,
+        state: String,
+        msg: Option<String>,
+    },
     EventsDropped {
         count: u64,
     },
@@ -152,6 +164,7 @@ impl Event {
             Event::OpenUrl { .. } => "open-url",
             Event::PortsChanged { .. } => "ports-changed",
             Event::PaneEcho { .. } => "pane-echo",
+            Event::Notify { .. } => "notify",
             Event::EventsDropped { .. } => "events-dropped",
         }
     }
@@ -168,6 +181,10 @@ impl Event {
             | Event::AgentChanged { pane, .. }
             | Event::PortsChanged { pane, .. }
             | Event::PaneEcho { pane, .. } => s.pane = Some(*pane),
+            Event::Notify { pane, session, .. } => {
+                s.pane = Some(*pane);
+                s.session = *session;
+            }
             Event::OpenUrl { pane, .. } => s.pane = *pane,
             Event::PaneDied { pane, window, .. } | Event::PaneResized { pane, window } => {
                 s.pane = Some(*pane);

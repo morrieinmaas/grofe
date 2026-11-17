@@ -124,9 +124,31 @@ fn raise(state: &mut State, pane: PaneId, change: &Change, worked: Duration, now
         now,
     );
     if let Some(raised) = raised {
+        emit_notify(state, raised);
         deliver(state, raised);
         clients::mark_all_dirty(state);
     }
+}
+
+/// The `notify` event for a raised notification (protocol v1 §6).
+fn emit_notify(state: &mut State, raised: Raised) {
+    let Some(n) = state.notify.items().iter().find(|n| n.id == raised.id) else {
+        return;
+    };
+    let session = state
+        .model
+        .panes
+        .get(&n.pane)
+        .and_then(|p| state.model.windows.get(&p.window))
+        .map(|w| w.session);
+    let event = crate::event::Event::Notify {
+        pane: n.pane,
+        session,
+        kind: n.kind.clone(),
+        state: n.state.clone(),
+        msg: n.msg.clone(),
+    };
+    state.events.emit(event);
 }
 
 /// Sends a raised notification out of the terminal (spec §6.4): `auto` is
