@@ -699,6 +699,10 @@ start-from-tmux = <span class="k">true</span>
           <p class="ans">macOS and Linux. It is built and tested against Ghostty and WezTerm; WezTerm needs <code>config.enable_kitty_keyboard = true</code>. Other terminals get the older key encoding and skip what they lack.</p>
         </details>
         <details>
+          <summary><h3>Can I work on another machine?</h3></summary>
+          <p class="ans">Yes. <code>grofe -r host</code> attaches to a session there over ssh and installs grofe on it if you say yes. A dropped link or a laptop asleep shows a reconnect bar and comes back with nothing lost; URLs, dropped files, ports and the ssh agent are forwarded; keys echo locally on slow links. Save machines with <code>grofe machine add</code> and switch between them, and their agents, in one window. See <a href="docs/remote.html">Remote sessions</a>.</p>
+        </details>
+        <details>
           <summary><h3>Is it trying to be Zellij?</h3></summary>
           <p class="ans">No modal interface and no WebAssembly plugins: just tmux's way of working, with the rough edges taken off.</p>
         </details>
@@ -764,6 +768,7 @@ start-from-tmux = <span class="k">true</span>
     <div><h3>Features</h3><ul>
       <li><a href="docs/agents.html">Agent sessions</a></li>
       <li><a href="docs/framed-panes.html">Framed panes</a></li>
+      <li><a href="docs/remote.html">Remote sessions</a></li>
       <li><a href="docs/scratchpads.html">Scratchpads</a></li>
       <li><a href="docs/plugins.html">Plugins and Luau</a></li>
     </ul></div>
