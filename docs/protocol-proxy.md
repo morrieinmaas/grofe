@@ -51,7 +51,7 @@ A `close` ends a channel in both directions; frames for a channel no longer know
 |---------|---------------------|
 | `{"type":"attach"}` | connects to the server socket (starting the server as any CLI call does) and bridges bytes both ways. The client's first data is the v1 attach hello line. |
 | `{"type":"control"}` | the same, for a v1 control connection (control hello, then requests). |
-| `{"type":"tcp","port":N}` | connects to `127.0.0.1:N` and bridges bytes. |
+| `{"type":"tcp","port":N}` | connects to `127.0.0.1:N`, or to `[::1]:N` when that is refused (a server listening on IPv6 localhost only), and bridges bytes. Nothing but the loopback addresses is ever connected to. |
 | `{"type":"upload","dir":"...","name":"..."}` | creates `dir` if needed (a leading `~/` is the proxy user's home), writes the data to `dir/name` until `eof`, never overwriting: a taken name gets ` (2)`, ` (3)`, ... appended. It then sends the final absolute path as `data`, `eof`, and `close`. `name` must not contain `/` and must not be `.` or `..`. |
 
 A failure (no server, connection refused, bad name, disk error) is a `close` with the reason.
