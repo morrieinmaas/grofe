@@ -15,6 +15,13 @@ pub const OPENER_ENV: &str = "GROFE_OPENER";
 /// The longest URL that is opened, in bytes.
 pub const MAX_URL: usize = 4096;
 
+/// The `BROWSER` a pane had before `forward-browser` set it to the
+/// `grofe-open` shim: `grofe open` runs it when no client opens the URL.
+pub const PREV_BROWSER_ENV: &str = "GROFE_PREV_BROWSER";
+
+/// Set in what an opener runs: a `grofe open` that finds it is a loop.
+pub const OPENING_ENV: &str = "GROFE_OPENING";
+
 /// Whether `url` may be opened: `http`, `https` or `file`, nothing with a
 /// control character in it. The error names the reason.
 pub fn check(url: &str) -> Result<(), String> {
@@ -83,20 +90,45 @@ pub fn open_locally(url: &str) -> Result<(), String> {
     {
         return Err("that file does not exist here".to_string());
     }
-    let program = std::env::var(OPENER_ENV)
-        .ok()
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
+    open_here(url)
+}
+
+/// Opens `url` here with no allow-list: `GROFE_OPENER`, else the user's
+/// own browser from before `forward-browser` ([`PREV_BROWSER_ENV`]), else
+/// `open` / `xdg-open`. What it runs has [`OPENING_ENV`] set and no
+/// `BROWSER` that names the `grofe-open` shim, so an opener that runs
+/// `$BROWSER` (xdg-open with no desktop) cannot loop back into `grofe open`.
+pub fn open_here(url: &str) -> Result<(), String> {
+    if std::env::var_os(OPENING_ENV).is_some() {
+        return Err(
+            "not opening: grofe open ran inside an opener (BROWSER names grofe open?)".to_string(),
+        );
+    }
+    let set = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let (program, mut cmd) = match (set(OPENER_ENV), set(PREV_BROWSER_ENV)) {
+        (Some(p), _) => (p.clone(), Command::new(p)),
+        (None, Some(browser)) => {
+            // As programs run `$BROWSER`: a command, given the URL.
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg("-c").arg(format!("{browser} \"$1\"")).arg("sh");
+            (browser, cmd)
+        }
+        (None, None) => {
+            let p = if cfg!(target_os = "macos") {
                 "open"
             } else {
                 "xdg-open"
-            }
-            .to_string()
-        });
-    let status = Command::new(&program)
-        .arg(url)
-        .stdin(Stdio::null())
+            };
+            (p.to_string(), Command::new(p))
+        }
+    };
+    cmd.arg(url).stdin(Stdio::null()).env(OPENING_ENV, "1");
+    match set(PREV_BROWSER_ENV) {
+        Some(prev) => cmd.env("BROWSER", prev),
+        None if set("BROWSER").is_some_and(|b| names_shim(&b)) => cmd.env_remove("BROWSER"),
+        None => &mut cmd,
+    };
+    let status = cmd
         .status()
         .map_err(|e| format!("cannot run {program}: {e}"))?;
     if status.success() {
@@ -104,6 +136,12 @@ pub fn open_locally(url: &str) -> Result<(), String> {
     } else {
         Err(format!("{program} failed: {status}"))
     }
+}
+
+/// Whether `browser` is the `grofe-open` shim.
+fn names_shim(browser: &str) -> bool {
+    std::path::Path::new(browser.trim()).file_name()
+        == Some(std::ffi::OsStr::new(crate::server::remote::OPEN_SHIM_NAME))
 }
 
 #[cfg(test)]

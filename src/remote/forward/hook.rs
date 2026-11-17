@@ -24,6 +24,7 @@ use crate::event::Event;
 use crate::remote::connect::Link;
 use crate::remote::proxy_proto::ProxyConn;
 use crate::remote::session::{self, Hook, HookCtx, Prompt};
+use crate::server::input::{Decoder, Input as Decoded, Key, KeyCode, parse_prefix};
 use crate::types::PaneId;
 
 /// Events forwarding subscribes to.
@@ -142,12 +143,14 @@ impl Core {
                     line: String::new(),
                     core: Arc::clone(me),
                     grace: None,
+                    decoder: Decoder::new(),
                 })),
                 Action::Offer(text) => cx.prompt(Box::new(Answer {
                     text,
                     line: String::new(),
                     core: Arc::clone(me),
                     grace: Some(Grace::new(Instant::now())),
+                    decoder: Decoder::new(),
                 })),
                 Action::ClearPrompt => cx.close_prompt(),
                 Action::Message(text) => {
@@ -219,6 +222,9 @@ struct Answer {
     /// For a question the remote raised: keys still go to the pane while
     /// the user is typing.
     grace: Option<Grace>,
+    /// Keys in any encoding the terminal uses (legacy, or the kitty
+    /// keyboard protocol the client may have turned on).
+    decoder: Decoder,
 }
 
 /// How long the keyboard must rest before a remote-raised prompt takes a
@@ -264,28 +270,40 @@ impl Prompt for Answer {
             cx.send(bytes.to_vec());
             return None;
         }
-        let answer = match bytes {
-            // A lone escape or C-c: no.
-            [0x1b] | [0x03] => Some(String::new()),
-            _ if bytes.starts_with(b"\x1b") => None,
-            _ => bytes.iter().find_map(|&b| match b {
-                b'\r' | b'\n' => Some(std::mem::take(&mut self.line)),
-                0x7f | 0x08 => {
-                    self.line.pop();
-                    None
-                }
-                0x20..=0x7e if self.line.len() < MAX_ANSWER => {
-                    self.line.push(b as char);
-                    None
-                }
-                _ => None,
-            }),
-        }?;
+        let answer = answer_keys(&mut self.decoder, &mut self.line, bytes)?;
         let mut core = lock(&self.core);
         let actions = core.fw.handle(Input::Answer(answer), Instant::now());
         let send = core.apply(&self.core, cx, actions);
         Some(session::Input::send(send))
     }
+}
+
+/// Feeds typed `bytes` to a prompt's answer `line`: the answer once Enter
+/// is pressed, an empty one (no) on Escape or C-c.
+fn answer_keys(decoder: &mut Decoder, line: &mut String, bytes: &[u8]) -> Option<String> {
+    let ctrl_c = parse_prefix("C-c").ok().flatten();
+    for input in decoder.feed(bytes, Instant::now(), std::time::Duration::ZERO) {
+        let Decoded::Key(key) = input else {
+            continue;
+        };
+        match key.code {
+            KeyCode::Enter => return Some(std::mem::take(line)),
+            KeyCode::Escape => return Some(String::new()),
+            _ if ctrl_c.is_some_and(|c| key.matches(&c)) => return Some(String::new()),
+            KeyCode::Backspace => {
+                line.pop();
+            }
+            KeyCode::Char(c)
+                if (c.is_ascii_graphic() || c == ' ')
+                    && line.len() < MAX_ANSWER
+                    && key.matches(&Key::plain(KeyCode::Char(c))) =>
+            {
+                line.push(c)
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input>) {
@@ -388,6 +406,30 @@ fn attached_session(link: &Link, hello: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_prompt_reads_keys_in_legacy_and_kitty_encodings() {
+        let answer = |bytes: &[u8]| {
+            let mut line = String::new();
+            answer_keys(&mut Decoder::new(), &mut line, bytes)
+        };
+        for (bytes, want) in [
+            (&b"y\r"[..], Some("y")),
+            (b"always\r", Some("always")),
+            (b"ab\x7f\r", Some("a")),
+            (b"\x1b", Some("")),
+            (b"\x03", Some("")),
+            (b"y", None),
+            (b"\x1b[A", None),
+            // The kitty keyboard protocol: Enter, Escape, C-c, Backspace.
+            (b"y\x1b[13u", Some("y")),
+            (b"\x1b[27u", Some("")),
+            (b"\x1b[99;5u", Some("")),
+            (b"ab\x1b[127u\x1b[13u", Some("a")),
+        ] {
+            assert_eq!(answer(bytes).as_deref(), want, "{bytes:?}");
+        }
+    }
 
     #[test]
     fn a_remote_prompt_takes_a_key_only_after_the_keyboard_rests() {
