@@ -289,14 +289,35 @@ fn grofe_open_in_a_remote_pane_runs_the_local_opener() {
     fs::set_permissions(&opener, fs::Permissions::from_mode(0o755)).unwrap();
     r.srv.cmd(&["new-session", "-d", "-s", "other"]).unwrap();
     let mut h = r.attach(&[(grofe::open::OPENER_ENV, opener.to_str().unwrap())]);
+    // The remote's own opener, which `grofe open` falls back to when no
+    // client opens the url.
+    let theirs = r.root().join("opened-there");
+    let remote_opener = r.root().join("remote-opener");
+    fs::write(
+        &remote_opener,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n",
+            theirs.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&remote_opener, fs::Permissions::from_mode(0o755)).unwrap();
     let open = |session: &str, url: &str| {
-        let command = format!("{} open '{url}'", env!("CARGO_BIN_EXE_grofe"));
+        let command = format!(
+            "GROFE_OPENER={} {} open '{url}'",
+            remote_opener.display(),
+            env!("CARGO_BIN_EXE_grofe")
+        );
         r.srv
             .cmd(&["send-keys", "-t", session, &command, "Enter"])
             .unwrap();
     };
-    // Another session's url is not this client's; this one's opens.
+    // Another session's url is not this client's: the remote opens it
+    // itself. This one's opens here.
     open("other", "https://example.com/theirs");
+    wait_until("the remote's own opener", WAIT, || {
+        fs::read_to_string(&theirs).is_ok_and(|u| u == "https://example.com/theirs\n")
+    });
     open("main", "https://example.com/z?q=1");
     wait_until("the url", WAIT, || out.exists());
     std::thread::sleep(Duration::from_millis(500));
@@ -304,11 +325,18 @@ fn grofe_open_in_a_remote_pane_runs_the_local_opener() {
         fs::read_to_string(&out).unwrap(),
         "https://example.com/z?q=1\n"
     );
+    assert_eq!(
+        fs::read_to_string(&theirs).unwrap(),
+        "https://example.com/theirs\n",
+        "the remote opened only the other session's url"
+    );
     // A local file asks first.
     let doc = r.file("report.txt", "x");
     let url = format!("file://{}", doc.display());
     open("main", &url);
     h.wait_for(&format!("open {url}? [y/N]"));
+    // The remote raised it: it takes a key only after the keyboard rests.
+    std::thread::sleep(Duration::from_millis(700));
     h.send("y\r");
     wait_until("the file url", WAIT, || {
         fs::read_to_string(&out).is_ok_and(|u| u.ends_with(&format!("{url}\n")))
@@ -344,5 +372,30 @@ fn the_sessions_agent_link_follows_the_agent_ssh_gave_the_proxy() {
         link.display().to_string()
     );
     std::os::unix::net::UnixStream::connect(&link).expect("the agent through the link");
+    detach(h);
+}
+
+#[test]
+fn a_port_offer_lets_typing_through_and_takes_a_key_after_a_pause() {
+    let r = Remote::new();
+    let mut h = r.attach(&[]);
+    let (port, stop) = r.listener("main");
+    h.wait_for(&format!(
+        "forward box:{port} to localhost:{port}? [y/N/always]"
+    ));
+    // Typed at once, as mid-command: it reaches the pane, not the offer.
+    h.send("y\r");
+    std::thread::sleep(Duration::from_millis(300));
+    let none = run_bounded(r.client(&["ports"]), CMD_TIMEOUT);
+    assert_eq!(none.stdout, "no ports forwarded from box\n");
+    // After a pause the offer takes the answer.
+    std::thread::sleep(Duration::from_millis(700));
+    h.send("y\r");
+    wait_until("the forward", WAIT, || {
+        run_bounded(r.client(&["ports"]), CMD_TIMEOUT)
+            .stdout
+            .starts_with(&format!("box:{port} -> localhost:"))
+    });
+    fs::write(&stop, "").unwrap();
     detach(h);
 }

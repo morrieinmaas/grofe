@@ -362,6 +362,9 @@ fn the_detach_key_ends_the_client_while_offline() {
     r.set_down(true);
     kill(r.proxy(1), Signal::SIGKILL).unwrap();
     h.wait_for(BAR);
+    // The first retry is attempt 1; the one after the failed one, 2.
+    h.wait_for("grofe: reconnecting to box (attempt 1, next in 1s) · prefix d detach");
+    h.wait_for("(attempt 2,");
     h.send("\x02d");
     h.wait_exit();
     assert!(String::from_utf8_lossy(h.output()).contains("[detached]"));

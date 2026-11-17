@@ -36,7 +36,38 @@ where
         let connect = Arc::clone(&connect);
         std::thread::spawn(move || serve(chan, &payload, &connect));
     });
+    let watch = mux.clone();
+    std::thread::spawn(move || end_when_silent(&watch, silence_bound()));
     Ok(mux.wait_closed())
+}
+
+/// How long the client may send nothing before the proxy takes it for gone:
+/// it pings every 5 s, so this is about three missed pings. A client whose
+/// network went away never closes the stream (the TCP connection under ssh
+/// lingers), and its server-side client would otherwise outlive it.
+pub const SILENCE: Duration = Duration::from_secs(20);
+
+/// Test hook: [`SILENCE`] in milliseconds. Test-only.
+pub const TEST_SILENCE_ENV: &str = "GROFE_TEST_PROXY_SILENCE_MS";
+
+fn silence_bound() -> Duration {
+    std::env::var(TEST_SILENCE_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(SILENCE, Duration::from_millis)
+}
+
+/// Ends `mux` once its peer has been silent for `bound`, closing every
+/// channel so the server drops the clients behind them.
+fn end_when_silent(mux: &Mux, bound: Duration) {
+    let step = (bound / 4).clamp(Duration::from_millis(50), Duration::from_secs(1));
+    while !mux.is_closed() {
+        if mux.idle() >= bound {
+            mux.end("the client went silent");
+            return;
+        }
+        std::thread::sleep(step);
+    }
 }
 
 fn serve(chan: Channel, payload: &[u8], connect: &Connect) {

@@ -508,10 +508,14 @@ pub struct KillServer;
 /// `subscribe <event>... [-t target]` (control mode only): event names or
 /// `*` patterns; empty means every event but `pane-output`. `target`, when
 /// given, limits the events to a pane, window or session (spec §7.2).
+/// `client` (`-c`, grofe's, spec ssh-remote §3) limits them to the session
+/// that client is attached to, following it when it switches; events of no
+/// pane, window or session still pass.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Subscribe {
     pub events: Vec<String>,
     pub target: Option<Target>,
+    pub client: Option<String>,
 }
 
 /// `attach-session`/`attach` (`-t -d --nest`). `nest` is grofe's force for

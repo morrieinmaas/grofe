@@ -102,17 +102,39 @@ fn post(out: &SyncSender<Out>, generation: u64, kind: Kind) -> bool {
 
 // ------------------------------------------------------------------ attach
 
-/// This client's tty name on the remote: unique, so requests can name the
-/// client (`-t`) and find its session, and never a local device path the
+/// This client's tty name on the remote for connection `generation`:
+/// unique per process and per connection, so requests can name the client
+/// (`-t`) and find its session even while a dropped connection's stale
+/// client still lingers on the server, and never a local device path the
 /// remote could mistake for one of its own terminals.
-pub fn client_tty() -> &'static str {
-    static TTY: OnceLock<String> = OnceLock::new();
-    TTY.get_or_init(|| {
+pub fn tty_for(generation: u64) -> String {
+    static BASE: OnceLock<String> = OnceLock::new();
+    let base = BASE.get_or_init(|| {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         format!("/dev/grofe-remote/{}-{nanos}", std::process::id())
-    })
+    });
+    format!("{base}-{generation}")
+}
+
+/// The tty of the connection attaching or attached now ([`tty_for`]),
+/// for code outside a hook call; inside one, [`HookCtx::client`].
+pub fn client_tty() -> String {
+    lock_tty().clone()
+}
+
+fn lock_tty() -> std::sync::MutexGuard<'static, String> {
+    static CURRENT: OnceLock<std::sync::Mutex<String>> = OnceLock::new();
+    CURRENT
+        .get_or_init(|| std::sync::Mutex::new(tty_for(1)))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+/// Makes `tty` the current one ([`client_tty`]).
+fn set_client_tty(tty: &str) {
+    *lock_tty() = tty.to_string();
 }
 
 /// A remote attach, as the CLI sets it up.
@@ -146,6 +168,8 @@ struct Params {
 /// One connection: its link and attach channel.
 struct Conn {
     link: Link,
+    /// This connection's tty on the remote ([`tty_for`]).
+    tty: String,
     attach: crate::remote::proxy_proto::Channel,
     /// The attached session's id, for a reconnect.
     session: Option<String>,
@@ -222,6 +246,7 @@ fn run(
         detach: DetachKey::new(prefix),
         generation: 1,
         bar: String::new(),
+        attempt: 1,
         params,
         out_tx,
     };
@@ -256,6 +281,8 @@ struct Loop {
     generation: u64,
     /// The bar as last drawn.
     bar: String,
+    /// The attempt the bar names: the one the current wait leads to.
+    attempt: u32,
     params: Params,
     out_tx: SyncSender<Out>,
 }
@@ -335,7 +362,7 @@ impl Loop {
             conn: c,
             host: &a.host,
             hello: &self.params.hello,
-            tty: client_tty(),
+            tty: &c.tty,
             prompt: &mut self.overlay,
             draw: Vec::new(),
             generation: self.generation,
@@ -393,9 +420,9 @@ impl Loop {
             }
             if closed {
                 // In the background: a slow link must not stall the keys.
-                let (link, hello) = (c.link.clone(), self.params.hello.clone());
+                let (link, hello, tty) = (c.link.clone(), self.params.hello.clone(), c.tty.clone());
                 std::thread::spawn(move || {
-                    let argv = ["refresh-client", "-t", client_tty()].map(String::from);
+                    let argv = ["refresh-client", "-t", tty.as_str()].map(String::from);
                     let _ = link.request(&hello, &argv);
                 });
             }
@@ -451,6 +478,7 @@ impl Loop {
         self.params.opts.created = false;
         self.params.opts.detach_others = false;
         self.params.opts.extras.cwd = None;
+        self.attempt = self.backoff.attempt();
         self.state = State::Offline { next: None };
         self.held = Some(Vec::new());
         self.bar.clear();
@@ -537,6 +565,8 @@ impl Loop {
         self.detach = DetachKey::new(c.prefix);
         let session = c.session.clone();
         self.params.opts.target = session.or(self.params.opts.target.take());
+        // Counted before the delay is: the first retry is attempt 1.
+        self.attempt = self.backoff.attempt();
         self.state = State::Offline {
             next: Some(now + self.backoff.next_delay(self.jitter.sample())),
         };
@@ -562,6 +592,7 @@ impl Loop {
             Err(Failure::Retry(_)) => {
                 // A switch that failed is a reconnect: typing is dropped.
                 self.held = None;
+                self.attempt = self.backoff.attempt();
                 let delay = self.backoff.next_delay(self.jitter.sample());
                 self.state = State::Offline {
                     next: Some(Instant::now() + delay),
@@ -600,7 +631,7 @@ impl Loop {
                 .as_secs_f64()
                 .ceil() as u64
         });
-        let text = bar_text(host, self.backoff.attempt(), secs);
+        let text = bar_text(host, self.attempt, secs);
         if text != self.bar {
             draw_bottom_row(&text);
             self.bar = text;
@@ -623,9 +654,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_client_tty_is_unique_and_not_a_real_device() {
-        let tty = client_tty();
-        assert!(tty.starts_with("/dev/grofe-remote/"));
-        assert_eq!(tty, client_tty());
+    fn the_client_tty_is_unique_per_connection_and_not_a_real_device() {
+        let (one, two) = (tty_for(1), tty_for(2));
+        assert!(one.starts_with("/dev/grofe-remote/"));
+        assert_ne!(
+            one, two,
+            "a reconnect must not reuse the stale client's tty"
+        );
+        assert_eq!(one, tty_for(1));
+        set_client_tty(&two);
+        assert_eq!(client_tty(), two);
     }
 }

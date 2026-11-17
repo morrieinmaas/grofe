@@ -57,6 +57,8 @@ struct MuxInner {
     dead: Mutex<Option<String>>,
     dead_cv: Condvar,
     is_dead: AtomicBool,
+    /// When the last frame came in.
+    last_rx: Mutex<Instant>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -288,6 +290,7 @@ impl Mux {
             dead: Mutex::new(None),
             dead_cv: Condvar::new(),
             is_dead: AtomicBool::new(false),
+            last_rx: Mutex::new(Instant::now()),
         });
         let thread_inner = Arc::clone(&inner);
         std::thread::spawn(move || read_loop(thread_inner, reader, role, on_open));
@@ -359,6 +362,17 @@ impl Mux {
         self.inner.is_dead.load(Ordering::SeqCst)
     }
 
+    /// How long since the peer last sent a frame.
+    pub fn idle(&self) -> Duration {
+        lock(&self.inner.last_rx).elapsed()
+    }
+
+    /// Ends the connection here, without writing to the peer (which may
+    /// not be reading): every channel fails with `reason`.
+    pub fn end(&self, reason: &str) {
+        self.inner.fail_all(reason);
+    }
+
     /// Blocks until the connection ends; why it ended.
     pub fn wait_closed(&self) -> String {
         let mut dead = lock(&self.inner.dead);
@@ -384,7 +398,10 @@ fn read_loop<R: Read>(
     let peer_parity = if role == Role::Client { 0 } else { 1 };
     let why = loop {
         let frame = match read_frame(&mut reader) {
-            Ok(Some(f)) => f,
+            Ok(Some(f)) => {
+                *lock(&inner.last_rx) = Instant::now();
+                f
+            }
             Ok(None) => break "proxy connection closed".to_string(),
             Err(
                 e

@@ -96,6 +96,13 @@ pub enum Scope {
     Pane(PaneId),
     Window(WindowId),
     Session(SessionId),
+    /// `subscribe -c`: the session `client` is attached to, moved along
+    /// when it switches ([`Events::client_moved`]). Unlike [`Scope::Session`],
+    /// an event of no pane, window or session passes.
+    Client {
+        client: ClientId,
+        session: SessionId,
+    },
 }
 
 impl Scope {
@@ -113,7 +120,7 @@ impl Scope {
         match self {
             Scope::Pane(p) => model.panes.contains_key(&p),
             Scope::Window(w) => model.windows.contains_key(&w),
-            Scope::Session(s) => model.sessions.contains_key(&s),
+            Scope::Session(s) | Scope::Client { session: s, .. } => model.sessions.contains_key(&s),
         }
     }
 
@@ -137,7 +144,12 @@ impl Scope {
         match self {
             Scope::Pane(p) => at.pane == Some(p),
             Scope::Window(w) => at.window == Some(w),
-            Scope::Session(s) => {
+            Scope::Client { .. }
+                if at.pane.is_none() && at.window.is_none() && at.session.is_none() =>
+            {
+                true
+            }
+            Scope::Session(s) | Scope::Client { session: s, .. } => {
                 at.session == Some(s) || windowed && at.window.is_some_and(|w| model.has_link(s, w))
             }
         }
@@ -263,6 +275,27 @@ impl Events {
         self.subscribers
             .iter()
             .any(|s| !s.tx.is_closed() && s.filters.iter().any(|f| f == name))
+    }
+
+    /// Client `client` is attached to `session` now: its `subscribe -c`
+    /// subscriptions follow it.
+    pub fn client_moved(&mut self, client: ClientId, session: SessionId) {
+        for s in &mut self.subscribers {
+            if let Some(Scope::Client { client: c, .. }) = s.scope
+                && c == client
+            {
+                s.scope = Some(Scope::Client { client, session });
+                s.gone = false;
+            }
+        }
+    }
+
+    /// Whether `event` would reach a subscriber: one that names it, whose
+    /// scope it lies in.
+    pub fn reaches(&self, event: &Event, model: &Model) -> bool {
+        self.subscribers.iter().any(|s| {
+            !s.tx.is_closed() && s.wants(event.name()) && s.passes(event, Place::default(), model)
+        })
     }
 
     /// How many live subscriptions name event `name`.
@@ -626,6 +659,43 @@ mod tests {
         assert!(Scope::Window(WindowId(2)).passes(&changed("@2"), none, &model));
         assert!(Scope::Pane(PaneId(3)).passes(&changed("%3"), none, &model));
         assert!(!Scope::Pane(PaneId(3)).passes(&changed("%4"), none, &model));
+    }
+
+    /// `subscribe -c`: the client's session's events, then the next one's
+    /// after it switches; an event of no place (a global option) passes.
+    #[test]
+    fn a_client_scope_follows_its_client() {
+        let model = Model::default();
+        let place = |s: u32| Place {
+            window: Some(WindowId(s)),
+            session: Some(SessionId(s)),
+        };
+        let mut events = Events::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let scope = Scope::Client {
+            client: ClientId(7),
+            session: SessionId(1),
+        };
+        events.subscribe(vec![], Some(scope), tx).unwrap();
+        let global = Event::OptionChanged {
+            scope: "global".into(),
+            name: "".into(),
+            value: None,
+        };
+        assert!(scope.passes(&global, Place::default(), &model));
+        events.emit_at(exited(1), place(1));
+        events.emit_at(exited(2), place(2));
+        events.flush(&model);
+        assert_eq!(rx.try_recv().ok(), Some(exited(1)));
+        assert!(rx.try_recv().is_err());
+        // Another client moving changes nothing; this one moving does.
+        events.client_moved(ClientId(8), SessionId(1));
+        events.client_moved(ClientId(7), SessionId(2));
+        events.emit_at(exited(1), place(1));
+        events.emit_at(exited(2), place(2));
+        events.flush(&model);
+        assert_eq!(rx.try_recv().ok(), Some(exited(2)));
+        assert!(rx.try_recv().is_err());
     }
 
     /// Events added after v1.0 reach only a subscription that names them,

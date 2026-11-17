@@ -288,7 +288,7 @@ pub(super) static ROWS: &[Row] = &[
         ANY,
         parse::parse_display_message,
     ),
-    row("subscribe", "", "t:", ANY, parse::parse_subscribe),
+    row("subscribe", "", "t:c:", ANY, parse::parse_subscribe),
     row(
         "attach-session",
         "attach",

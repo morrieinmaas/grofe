@@ -61,7 +61,7 @@ The client notices a drop when the stream ends, ssh exits, or two pings in a row
 5 seconds) go unanswered. Then:
 
 - the last screen stays up, and the bottom row shows
-  `grofe: reconnecting to devbox (attempt 3, next in 4s) · prefix d detach`;
+  `grofe: reconnecting to devbox (attempt 1, next in 1s) · prefix d detach`;
 - your typing is dropped, except the detach key (the prefix, then `d`), which ends the client
   cleanly;
 - it retries after 0.5 s, 1, 2, 4 and so on, up to 30 s, with some jitter; a link that stays up

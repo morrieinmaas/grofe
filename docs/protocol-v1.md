@@ -163,8 +163,10 @@ The full table (emitters, consumers, exact firing rules) is spec §7.2.
 unknown literal is an error. A bare `subscribe` and every pattern match the
 v1.0 events above except `pane-output`; that event, and any event added after
 v1.0, reach only a subscription naming them literally. `-t` limits events to
-a pane, window or session. A later `subscribe` on the same connection
-replaces the earlier one.
+a pane, window or session. `-c client` (added after v1.0) limits them to the
+session that attached client is in, following it when it switches; an event
+of no pane, window or session (a global option) still passes. A later
+`subscribe` on the same connection replaces the earlier one.
 
 **Delivery.** In the order things happened. Each subscriber has a queue of
 1024 events; on overflow events are dropped and `events-dropped` with the
