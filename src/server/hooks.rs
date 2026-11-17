@@ -1132,7 +1132,10 @@ fn client_event(state: &mut State, id: ClientId, name: &'static str) {
                     rows,
                 })
             }
-            "client-session-changed" => Some(Event::ClientSessionChanged { client, session }),
+            "client-session-changed" => {
+                state.events.client_moved(id, session);
+                Some(Event::ClientSessionChanged { client, session })
+            }
             _ => None,
         };
         if let Some(event) = event {

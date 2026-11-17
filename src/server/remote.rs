@@ -171,13 +171,17 @@ pub fn install_open_shim(dir: &Path, exe: &Path) -> io::Result<()> {
 /// open it itself.
 pub fn open_url(state: &mut State, ctx: &ClientCtx, c: OpenUrl) -> Result<String, String> {
     crate::open::check(&c.url).map_err(|e| format!("open-url: refused {:?}: {e}", c.url))?;
-    if !state.events.named("open-url") {
-        return Err(crate::open::NO_SUBSCRIBER.to_string());
-    }
-    state.events.emit(Event::OpenUrl {
+    let event = Event::OpenUrl {
         url: c.url,
         pane: ctx.pane,
-    });
+    };
+    // A remote client subscribes for its own session (`subscribe -c`): a
+    // pane of another session has nobody to open it, and `grofe open` falls
+    // back to this machine's opener.
+    if !state.events.reaches(&event, &state.model) {
+        return Err(crate::open::NO_SUBSCRIBER.to_string());
+    }
+    state.events.emit(event);
     Ok(String::new())
 }
 

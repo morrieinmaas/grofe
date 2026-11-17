@@ -199,7 +199,11 @@ fn read_events(
     generation: u64,
     out: SyncSender<Out>,
 ) {
-    pump_events(chan, hello, events, |value| {
+    // Only this client's session's events (`subscribe -c`, following a
+    // switch): another session's URL or port is not this client's.
+    let mut args = vec!["-c".to_string(), super::client_tty().to_string()];
+    args.extend(events.iter().cloned());
+    pump_events(chan, hello, &args, |value| {
         post(&out, generation, Kind::Server(value))
     });
 }

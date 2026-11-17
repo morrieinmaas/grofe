@@ -980,8 +980,17 @@ fn handle(state: &mut State, msg: ServerMsg) {
             let result = match cmd::parse(&req.argv) {
                 Ok(Command::Subscribe(c)) => {
                     polled = remote::wants_poll(&c.events);
-                    c.target
-                        .map(|t| events::Scope::resolve(&state.model, &ctx, &t))
+                    let follow = c.client.as_deref().map(|name| {
+                        clients::client_named(state, name)
+                            .and_then(|id| Some((id, state.clients.get(&id)?.session)))
+                            .map(|(client, session)| events::Scope::Client { client, session })
+                            .ok_or_else(|| format!("no client {name}"))
+                    });
+                    let scope = c
+                        .target
+                        .map(|t| events::Scope::resolve(&state.model, &ctx, &t));
+                    follow
+                        .or(scope)
                         .transpose()
                         .and_then(|scope| state.events.subscribe(c.events, scope, tx))
                         .map(|()| String::new())
