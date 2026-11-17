@@ -573,3 +573,92 @@ fn the_links_go_when_the_server_exits() {
         fs::symlink_metadata(&link).is_err()
     });
 }
+
+/// Writes an executable `sh` script at `path`.
+fn script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write the script");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
+}
+
+/// Runs `grofe open <url>` in a new pane of `srv`; its exit status, once
+/// it has one.
+fn grofe_open_in_a_pane(srv: &TestServer, name: &str, url: &str) -> String {
+    let out = srv.home.join(format!("{name}.exit"));
+    let command = format!(
+        "{} open '{url}'; echo $? > {}; sleep 100",
+        env!("CARGO_BIN_EXE_grofe"),
+        out.display()
+    );
+    srv.cmd(&["new-session", "-d", "-s", name, &command])
+        .expect("session");
+    wait_until("grofe open to finish", WAIT, || {
+        fs::read_to_string(&out).is_ok_and(|s| !s.is_empty())
+    });
+    fs::read_to_string(&out).unwrap().trim().to_string()
+}
+
+#[test]
+fn an_opener_that_runs_browser_does_not_loop_back_into_grofe_open() {
+    // A headless xdg-open (and macOS's open, here) runs $BROWSER: the shim.
+    let bin = tempfile::tempdir().expect("bin");
+    let count = bin.path().join("count");
+    for name in ["xdg-open", "open"] {
+        script(
+            &bin.path().join(name),
+            &format!(
+                "echo run >> '{}'\n[ -n \"$BROWSER\" ] && exec \"$BROWSER\" \"$1\"\nexit 3",
+                count.display()
+            ),
+        );
+    }
+    let path = format!("{}:/usr/bin:/bin", bin.path().display());
+    let srv = TestServer::builder().path_env(&path).start();
+    let status = grofe_open_in_a_pane(&srv, "loop", "https://example.com/loop");
+    assert_ne!(status, "0", "nothing could open it");
+    assert_eq!(
+        fs::read_to_string(&count).unwrap(),
+        "run\n",
+        "the opener ran once"
+    );
+}
+
+#[test]
+fn grofe_open_falls_back_to_the_panes_own_browser() {
+    let srv = TestServer::builder().path_env("/usr/bin:/bin").start();
+    let got = srv.home.join("browsed");
+    let browser = srv.home.join("my-browser");
+    script(&browser, &format!("echo \"$1\" >> '{}'", got.display()));
+    srv.cmd(&["start-server"]).expect("start");
+    srv.cmd(&[
+        "set-environment",
+        "-g",
+        "BROWSER",
+        browser.to_str().unwrap(),
+    ])
+    .expect("BROWSER");
+    // The pane keeps it beside the shim.
+    let env = srv.home.join("env");
+    let command = format!(
+        "printf '%s|%s' \"$BROWSER\" \"$GROFE_PREV_BROWSER\" > {}; sleep 100",
+        env.display()
+    );
+    srv.cmd(&["new-session", "-d", "-s", "env", &command])
+        .expect("session");
+    wait_until("the pane's env", WAIT, || env.exists());
+    let text = fs::read_to_string(&env).unwrap();
+    let (shim, prev) = text.split_once('|').unwrap();
+    assert!(shim.ends_with("/grofe-open"), "{shim}");
+    assert_eq!(prev, browser.display().to_string());
+    // With nobody to forward to, the user's own browser opens it, even a
+    // scheme that is never forwarded.
+    assert_eq!(
+        grofe_open_in_a_pane(&srv, "a", "https://example.com/p"),
+        "0"
+    );
+    assert_eq!(grofe_open_in_a_pane(&srv, "b", "ftp://example.com/f"), "0");
+    assert_eq!(
+        fs::read_to_string(&got).unwrap(),
+        "https://example.com/p\nftp://example.com/f\n"
+    );
+}

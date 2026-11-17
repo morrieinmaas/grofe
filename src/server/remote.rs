@@ -149,7 +149,18 @@ pub fn pane_env(state: &State, session: SessionId, env: &mut Vec<(String, String
     if session_flag(state, session, "forward-browser")
         && let Some(shim) = OPEN_SHIM.get()
     {
-        env.push(("BROWSER".to_string(), shim.display().to_string()));
+        // The browser the pane would have had stays reachable: `grofe open`
+        // runs it when no client is there to open a URL.
+        let shim = shim.display().to_string();
+        let prev = env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "BROWSER")
+            .map(|(_, v)| v.clone());
+        if let Some(prev) = prev.filter(|p| !p.is_empty() && *p != shim) {
+            env.push((crate::open::PREV_BROWSER_ENV.to_string(), prev));
+        }
+        env.push(("BROWSER".to_string(), shim));
     }
 }
 

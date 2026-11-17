@@ -369,13 +369,22 @@ fn print_attach(result: Result<String, String>) -> ExitCode {
 
 /// `grofe open <url>`: asks the clients subscribed to `open-url` to open it
 /// (a remote client opens it on its own machine). With no server or no
-/// subscriber it opens the URL here, with `open` or `xdg-open`
-/// (`GROFE_OPENER`). Only http, https and file URLs are opened.
+/// subscriber it opens the URL here: the pane's own browser from before
+/// `forward-browser`, else `open` or `xdg-open` (`GROFE_OPENER` first). Only
+/// http, https and file URLs are forwarded.
 pub(super) fn open_url(socket: &Path, args: &[String]) -> ExitCode {
     let [url] = args else {
         return fail("grofe open: usage: grofe open <url>");
     };
     if let Err(e) = grofe::open::check(url) {
+        // The allow-list guards what reaches a remote client's machine; the
+        // user's own browser here may open what it likes.
+        if std::env::var_os(grofe::open::PREV_BROWSER_ENV).is_some() {
+            return match grofe::open::open_here(url) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => fail(&format!("grofe open: {e}")),
+            };
+        }
         return fail(&format!("grofe open: refused {url:?}: {e}"));
     }
     let argv = ["open-url".to_string(), url.clone()];
