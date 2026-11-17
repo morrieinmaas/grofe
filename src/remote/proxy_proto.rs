@@ -257,6 +257,9 @@ impl Default for SendWindow {
     }
 }
 
+/// Why a channel whose peer sent past its credit is closed.
+pub const OVERRUN: &str = "flow control: data past the window";
+
 /// What a receiver has consumed since it last granted credit.
 #[derive(Debug, Default)]
 pub struct RecvWindow(u32);
@@ -298,6 +301,8 @@ struct ChanState {
     closed: Option<Closed>,
     send: SendWindow,
     recv: RecvWindow,
+    /// Credit the peer still holds: what it may send before a `window`.
+    left: u32,
 }
 
 struct ChanShared {
@@ -438,6 +443,9 @@ impl Channel {
                     *slot = b;
                 }
                 let grant = st.recv.consumed(n);
+                if let Some(credit) = grant {
+                    st.left = st.left.saturating_add(credit);
+                }
                 let open = st.closed.is_none();
                 drop(st);
                 if let Some(credit) = grant
@@ -552,7 +560,10 @@ impl Mux {
     fn register(&self, id: u32) -> Channel {
         let shared = Arc::new(ChanShared {
             id,
-            st: Mutex::new(ChanState::default()),
+            st: Mutex::new(ChanState {
+                left: INITIAL_WINDOW,
+                ..ChanState::default()
+            }),
             cv: Condvar::new(),
         });
         lock(&self.inner.chans).insert(id, Arc::clone(&shared));
@@ -658,7 +669,25 @@ fn read_loop<R: Read>(
             }
             Frame::Data(id, bytes) => {
                 if let Some(c) = chan(id) {
-                    lock(&c.st).buf.extend(bytes);
+                    let mut st = lock(&c.st);
+                    match st.left.checked_sub(bytes.len() as u32) {
+                        Some(left) => {
+                            st.left = left;
+                            st.buf.extend(bytes);
+                        }
+                        // Past the credit it was given: the buffer stays bounded.
+                        None => {
+                            let reason = OVERRUN.to_string();
+                            st.buf.clear();
+                            st.closed.get_or_insert(Closed {
+                                reason: reason.clone(),
+                                local: false,
+                            });
+                            drop(st);
+                            lock(&inner.chans).remove(&id);
+                            let _ = inner.send(&Frame::Close(id, reason));
+                        }
+                    }
                     c.cv.notify_all();
                 }
             }
@@ -761,5 +790,37 @@ impl ProxyConn {
             return Err(io::Error::other("upload failed"));
         }
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn data_past_the_window_closes_the_channel() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let mux = Mux::start(a.try_clone().unwrap(), a, Role::Client, |c, _| c.close(""));
+        let mut chan = mux.open(&OpenSpec::Attach).unwrap();
+        let mut peer = b.try_clone().unwrap();
+        // The window, exactly, is fine; one byte more is an overrun.
+        let chunk = vec![7u8; MAX_CHUNK];
+        for _ in 0..INITIAL_WINDOW as usize / MAX_CHUNK {
+            write_frame(&mut peer, &Frame::Data(chan.id(), chunk.clone())).unwrap();
+        }
+        write_frame(&mut peer, &Frame::Data(chan.id(), vec![1])).unwrap();
+        let mut reader = BufReader::new(b);
+        let close = loop {
+            match read_frame(&mut reader).unwrap() {
+                Some(Frame::Close(id, why)) => break (id, why),
+                Some(_) => {}
+                None => panic!("no close"),
+            }
+        };
+        assert_eq!(close, (chan.id(), OVERRUN.to_string()));
+        // What came within the window was dropped with the channel.
+        let err = chan.read(&mut [0u8; 16]).unwrap_err();
+        assert_eq!(err.to_string(), OVERRUN);
     }
 }
