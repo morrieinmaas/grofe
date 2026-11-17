@@ -360,7 +360,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "forward-browser",
-        doc: "Set BROWSER to grofe open in new panes, so a remote client opens the URLs a pane asks for.",
+        doc: "Set BROWSER in new panes to a grofe-open shim (grofe open), so a remote client opens the URLs a pane asks for.",
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",
@@ -376,27 +376,27 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "remote-upload-paste",
-        doc: "What a remote client does with a bracketed paste of local file paths: ask uploads them to the pane's directory after a prompt, on uploads without asking, off pastes the paths as text.",
+        doc: "What a remote client (grofe -r) does with a bracketed paste of local file paths: ask uploads them to the pane's directory after a prompt, on uploads without asking, off pastes the paths as text. Read from this machine's config; a remote server's value is ignored.",
         kind: Kind::Choice(&["ask", "on", "off"]),
-        scope: OptionScope::Session,
+        scope: OptionScope::Global,
         default: "ask",
         ..Builtin::PLAIN
     },
     Builtin {
         name: "remote-upload-max",
-        doc: "The largest total size, in MiB, of the files one paste uploads to a remote session; a bigger paste is refused.",
+        doc: "The largest total size, in MiB, of the files one paste uploads to a remote session; a bigger paste is refused. Read from this machine's config; a remote server's value is ignored.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },
-        scope: OptionScope::Session,
+        scope: OptionScope::Global,
         default: "100",
         ..Builtin::PLAIN
     },
     Builtin {
         name: "remote-forward-ports",
-        doc: "What a remote client does when a pane starts listening on a port: ask forwards it to localhost (the same port, or the next free one) after a prompt, auto forwards without asking, off never forwards.",
+        doc: "What a remote client (grofe -r) does when a remote pane starts listening on a port: ask forwards it to localhost (the same port, or the next free one) after a prompt, auto forwards without asking, off never forwards. Read from this machine's config; a remote server's value is ignored.",
         kind: Kind::Choice(&["ask", "auto", "off"]),
-        scope: OptionScope::Session,
+        scope: OptionScope::Global,
         default: "ask",
         ..Builtin::PLAIN
     },

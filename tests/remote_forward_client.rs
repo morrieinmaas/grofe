@@ -98,7 +98,7 @@ exec /bin/sh -c "exec $*"
         cmd
     }
 
-    /// An attached client, its shell prompt up and the remote's options read.
+    /// An attached client, its shell prompt up.
     fn attach(&self, env: &[(&str, &str)]) -> Harness {
         let mut cmd = self.client(&[]);
         for (k, v) in env {
@@ -106,9 +106,6 @@ exec /bin/sh -c "exec $*"
         }
         let mut h = Harness::spawn(cmd, COLS, 24);
         h.wait_for(common::PROMPT.trim());
-        // ponytail: the options are read on the first tick after the attach;
-        // there is no signal for it, so give it a moment.
-        std::thread::sleep(Duration::from_millis(800));
         h
     }
 
@@ -125,6 +122,13 @@ exec /bin/sh -c "exec $*"
             ])
             .unwrap();
         PathBuf::from(out.trim())
+    }
+
+    /// This machine's config for the client.
+    fn local_config(&self, toml: &str) {
+        let dir = self.root().join("local-config/grofe");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.toml"), toml).unwrap();
     }
 
     /// A local file to paste.
@@ -148,13 +152,8 @@ fn detach(mut h: Harness) {
 fn a_pasted_file_uploads_and_its_remote_path_is_typed_in_mode_on() {
     let r = Remote::new();
     let local = r.file("notes.txt", "from the local side");
+    r.local_config("remote-upload-paste = \"on\"\n");
     let mut h = r.attach(&[]);
-    // A session option, set after the attach: the client follows it.
-    r.srv
-        .cmd(&["set-option", "-t", "main", "remote-upload-paste", "on"])
-        .unwrap();
-    // ponytail: no signal for the reread either.
-    std::thread::sleep(Duration::from_millis(800));
     h.send("echo ");
     h.send(pasted(&local));
     let remote = r.pane_dir().join("notes.txt");
@@ -168,6 +167,10 @@ fn a_pasted_file_uploads_and_its_remote_path_is_typed_in_mode_on() {
 #[test]
 fn in_mode_ask_the_prompt_comes_first_and_y_uploads() {
     let r = Remote::new();
+    // The remote saying `on` grants it nothing: consent is this machine's.
+    r.srv
+        .cmd(&["set-option", "-g", "remote-upload-paste", "on"])
+        .unwrap();
     let local = r.file("ask.txt", "12345");
     let mut h = r.attach(&[]);
     h.send("echo ");
@@ -236,9 +239,7 @@ impl Remote {
 #[test]
 fn a_port_a_pane_listens_on_reaches_localhost_in_mode_auto() {
     let r = Remote::new();
-    r.srv
-        .cmd(&["set-option", "-g", "remote-forward-ports", "auto"])
-        .unwrap();
+    r.local_config("remote-forward-ports = \"auto\"\n");
     let none = run_bounded(r.client(&["ports"]), CMD_TIMEOUT);
     assert_eq!(none.stdout, "no ports forwarded from box\n");
     // A port in a session this client is not attached to is not its own.

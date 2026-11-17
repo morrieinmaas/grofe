@@ -102,6 +102,26 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// The settings `get` gives the options as: this machine's config, so a
+    /// remote cannot grant itself uploads or local ports. A default for one
+    /// it does not give or that does not parse.
+    pub fn from_options(get: impl Fn(&str) -> Option<String>) -> Settings {
+        let default = Settings::default();
+        Settings {
+            upload_paste: get("remote-upload-paste")
+                .and_then(|v| UploadMode::parse(v.trim()))
+                .unwrap_or(default.upload_paste),
+            upload_max: get("remote-upload-max")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map_or(default.upload_max, |mib| mib << 20),
+            forward_ports: get("remote-forward-ports")
+                .and_then(|v| ForwardMode::parse(v.trim()))
+                .unwrap_or(default.forward_ports),
+        }
+    }
+}
+
 /// A bracketed paste of local files, waiting for its upload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilePaste {
@@ -205,9 +225,6 @@ pub struct Forwarding {
     forwarded: BTreeSet<u16>,
     /// Ports the user said no to, while they stay open.
     declined: BTreeSet<u16>,
-    /// The user answered `always`: auto for this client, whatever the
-    /// option says.
-    always: bool,
 }
 
 impl Forwarding {
@@ -223,20 +240,11 @@ impl Forwarding {
             pane_ports: HashMap::new(),
             forwarded: BTreeSet::new(),
             declined: BTreeSet::new(),
-            always: false,
         }
     }
 
     pub fn settings(&self) -> &Settings {
         &self.settings
-    }
-
-    /// Replaces the settings (once the remote's options are read).
-    pub fn set_settings(&mut self, mut settings: Settings) {
-        if self.always {
-            settings.forward_ports = ForwardMode::Auto;
-        }
-        self.settings = settings;
     }
 
     /// The remote ports being forwarded.
@@ -483,7 +491,6 @@ impl Forwarding {
             Ask::Upload(paste, _) => send(out, &bracketed(&paste.original)),
             Ask::Forward(port) if answer == "always" || answer == "a" => {
                 self.settings.forward_ports = ForwardMode::Auto;
-                self.always = true;
                 self.forward(port, out);
                 let (ports, rest): (Vec<Ask>, Vec<Ask>) = self
                     .asks

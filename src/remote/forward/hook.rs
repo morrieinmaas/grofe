@@ -8,8 +8,9 @@
 //!
 //! Events carry no session and reach every remote client of the server, so
 //! the worker passes on only those of a pane in this client's attached
-//! session, and reads that session's options and ports again on a connect
-//! and on a session switch.
+//! session, and reads that session's ports again on a connect and on a
+//! session switch. The options that grant consent (uploads, ports) come
+//! from this machine's config, never from the remote.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use std::time::Instant;
 
 use super::exec::{LinkCell, is_slow, opener, run_slow};
 use super::ports::Forwarder;
-use super::{Action, ForwardMode, Forwarding, Input, Settings, UploadMode};
+use super::{Action, Forwarding, Input, Settings};
 use crate::event::Event;
 use crate::remote::connect::Link;
 use crate::remote::proxy_proto::ProxyConn;
@@ -27,12 +28,11 @@ use crate::remote::session::{self, Hook, HookCtx, Prompt};
 use crate::types::PaneId;
 
 /// Events forwarding subscribes to.
-pub const EVENTS: [&str; 5] = [
+pub const EVENTS: [&str; 4] = [
     "open-url",
     "ports-changed",
     "pane-exited",
     "client-session-changed",
-    "option-changed",
 ];
 
 /// The longest answer a prompt takes.
@@ -48,15 +48,13 @@ struct Core {
     forwarder: Forwarder,
     link: LinkCell,
     jobs: Sender<Job>,
-    done: Receiver<Done>,
+    done: Receiver<Input>,
     /// The proxy connection last seen (its address), to tell a reconnect.
     conn: Option<usize>,
 }
 
 /// Work for the worker thread.
 enum Job {
-    /// Read the attached session's options.
-    Settings,
     /// Pass the event on if it concerns the attached session.
     Event(Event),
     /// Read the attached session's listening ports ([`Input::Resync`]).
@@ -65,17 +63,17 @@ enum Job {
     Message(String),
 }
 
-/// What the worker hands back.
-enum Done {
-    Settings(Settings),
-    Input(Input),
-}
-
 impl ForwardHook {
     /// Forwarding for a client of `host`, whose control requests use
-    /// `hello`; its forwards are listed under `state_dir`
-    /// ([`list_forwards`](super::list_forwards)).
-    pub fn new(host: &str, hello: &str, state_dir: Option<PathBuf>) -> ForwardHook {
+    /// `hello`, with `settings` from this machine's config
+    /// ([`Settings::from_options`]); its forwards are listed under
+    /// `state_dir` ([`list_forwards`](super::list_forwards)).
+    pub fn new(
+        host: &str,
+        hello: &str,
+        state_dir: Option<PathBuf>,
+        settings: Settings,
+    ) -> ForwardHook {
         let link = LinkCell::default();
         let (jobs, job_rx) = channel();
         let (done_tx, done) = channel();
@@ -83,7 +81,7 @@ impl ForwardHook {
         let hello = hello.to_string();
         std::thread::spawn(move || worker(worker_link, hello, job_rx, done_tx));
         let core = Core {
-            fw: Forwarding::new(host, Settings::default()),
+            fw: Forwarding::new(host, settings),
             forwarder: Forwarder::new(host, opener(link.clone()), state_dir),
             link,
             jobs,
@@ -114,14 +112,13 @@ fn lock(core: &Mutex<Core>) -> MutexGuard<'_, Core> {
 
 impl Core {
     /// Points the forwards at `link` and, on a new connection (the first,
-    /// or a reconnect), reads the options and ports again: what changed
+    /// or a reconnect), reads the ports again: what changed
     /// while the link was down sent no event this client saw.
     fn connected(&mut self, link: &Link) {
         let conn = std::ptr::from_ref::<ProxyConn>(link.conn()) as usize;
         if self.conn != Some(conn) {
             self.conn = Some(conn);
             self.link.set(link.clone());
-            let _ = self.jobs.send(Job::Settings);
             let _ = self.jobs.send(Job::Resync);
         }
     }
@@ -182,11 +179,9 @@ impl Hook for ForwardHook {
         let mut core = self.lock();
         core.connected(cx.link());
         let jobs = match event {
-            Event::OptionChanged { name, .. } if name.starts_with("remote-") => vec![Job::Settings],
-            Event::OptionChanged { .. } => Vec::new(),
             // ponytail: any client's switch rereads ours; the event names the
             // client by a name this client does not know for itself.
-            Event::ClientSessionChanged { .. } => vec![Job::Settings, Job::Resync],
+            Event::ClientSessionChanged { .. } => vec![Job::Resync],
             // Through the worker, so events keep their order with its checks.
             event => vec![Job::Event(event)],
         };
@@ -200,10 +195,7 @@ impl Hook for ForwardHook {
         core.connected(cx.link());
         let mut inputs = vec![Input::Tick];
         while let Ok(done) = core.done.try_recv() {
-            match done {
-                Done::Settings(s) => core.fw.set_settings(s),
-                Done::Input(input) => inputs.push(input),
-            }
+            inputs.push(done);
         }
         let mut send = Vec::new();
         for input in inputs {
@@ -254,22 +246,18 @@ impl Prompt for Answer {
     }
 }
 
-fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Done>) {
+fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input>) {
     for job in jobs {
         let Some(link) = link.get() else { continue };
         let reply = match job {
-            Job::Settings => {
-                let session = attached_session(&link, &hello);
-                Done::Settings(read_settings(&link, &hello, session.as_deref()))
-            }
             Job::Event(event) => {
                 if !in_session(&link, &hello, &event) {
                     continue;
                 }
-                Done::Input(Input::Event(event))
+                Input::Event(event)
             }
             Job::Resync => match attached_session(&link, &hello) {
-                Some(s) => Done::Input(Input::Resync(session_ports(&link, &hello, &s))),
+                Some(s) => Input::Resync(session_ports(&link, &hello, &s)),
                 None => continue,
             },
             Job::Message(text) => {
@@ -285,7 +273,7 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Done>
             Job::Slow(action) => {
                 let target = attached_session(&link, &hello);
                 match run_slow(&link, target.as_deref(), action) {
-                    Some(input) => Done::Input(input),
+                    Some(input) => input,
                     None => continue,
                 }
             }
@@ -293,34 +281,6 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Done>
         if done.send(reply).is_err() {
             return;
         }
-    }
-}
-
-/// The remote options forwarding follows, as `session` sees them (they are
-/// session options); a default for one that cannot be read.
-fn read_settings(link: &Link, hello: &str, session: Option<&str>) -> Settings {
-    let get = |name: &str| {
-        let argv: Vec<String> = match session {
-            Some(s) => ["show-options", "-Av", "-t", s, name]
-                .map(String::from)
-                .to_vec(),
-            None => ["show-options", "-gv", name].map(String::from).to_vec(),
-        };
-        link.request(hello, &argv)
-            .ok()
-            .map(|v| v.trim().to_string())
-    };
-    let default = Settings::default();
-    Settings {
-        upload_paste: get("remote-upload-paste")
-            .and_then(|v| UploadMode::parse(&v))
-            .unwrap_or(default.upload_paste),
-        upload_max: get("remote-upload-max")
-            .and_then(|v| v.parse::<u64>().ok())
-            .map_or(default.upload_max, |mib| mib << 20),
-        forward_ports: get("remote-forward-ports")
-            .and_then(|v| ForwardMode::parse(&v))
-            .unwrap_or(default.forward_ports),
     }
 }
 

@@ -663,7 +663,7 @@ Default: `off`
 
 ## forward-browser
 
-Set BROWSER to grofe open in new panes, so a remote client opens the URLs a pane asks for.
+Set BROWSER in new panes to a grofe-open shim (grofe open), so a remote client opens the URLs a pane asks for.
 
 - **TOML key**: `forward-browser` (boolean)
 - **Scope**: session
@@ -1383,10 +1383,10 @@ Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:
 
 ## remote-forward-ports
 
-What a remote client does when a pane starts listening on a port: ask forwards it to localhost (the same port, or the next free one) after a prompt, auto forwards without asking, off never forwards.
+What a remote client (grofe -r) does when a remote pane starts listening on a port: ask forwards it to localhost (the same port, or the next free one) after a prompt, auto forwards without asking, off never forwards. Read from this machine's config; a remote server's value is ignored.
 
 - **TOML key**: `remote-forward-ports` (string)
-- **Scope**: session
+- **Scope**: global
 - **Values**: `ask`, `auto`, `off`
 
 Default: `ask`
@@ -1455,10 +1455,10 @@ grofe only: tmux does not have this option.
 
 ## remote-upload-max
 
-The largest total size, in MiB, of the files one paste uploads to a remote session; a bigger paste is refused.
+The largest total size, in MiB, of the files one paste uploads to a remote session; a bigger paste is refused. Read from this machine's config; a remote server's value is ignored.
 
 - **TOML key**: `remote-upload-max` (integer)
-- **Scope**: session
+- **Scope**: global
 - **Values**: a whole number, at most 2147483647
 
 Default: `100`
@@ -1467,10 +1467,10 @@ grofe only: tmux does not have this option.
 
 ## remote-upload-paste
 
-What a remote client does with a bracketed paste of local file paths: ask uploads them to the pane's directory after a prompt, on uploads without asking, off pastes the paths as text.
+What a remote client (grofe -r) does with a bracketed paste of local file paths: ask uploads them to the pane's directory after a prompt, on uploads without asking, off pastes the paths as text. Read from this machine's config; a remote server's value is ignored.
 
 - **TOML key**: `remote-upload-paste` (string)
-- **Scope**: session
+- **Scope**: global
 - **Values**: `ask`, `on`, `off`
 
 Default: `ask`

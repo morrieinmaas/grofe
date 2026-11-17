@@ -332,6 +332,7 @@ impl Remote {
                     self.target.host_name(),
                     &self.hello,
                     Some(forward::forwards_dir(&Env::from_process())),
+                    forward::Settings::from_options(local_option),
                 )),
                 Box::new(grofe::remote::predict_hook::PredictHook::new()),
             ],

@@ -449,17 +449,20 @@ fn a_resync_replaces_what_the_events_said() {
 }
 
 #[test]
-fn always_outlives_a_reread_of_the_options() {
-    let mut f = fw(UploadMode::Ask, ForwardMode::Ask);
-    let now = Instant::now();
-    f.handle(ports(1, &[3000]), now);
-    f.handle(Input::Answer("always".into()), now);
-    f.set_settings(Settings::default());
-    assert_eq!(f.settings().forward_ports, ForwardMode::Auto);
-    let mut g = fw(UploadMode::Ask, ForwardMode::Ask);
-    g.set_settings(Settings {
-        forward_ports: ForwardMode::Off,
-        ..Settings::default()
-    });
-    assert_eq!(g.settings().forward_ports, ForwardMode::Off);
+fn settings_come_from_the_options_given_with_defaults_for_the_rest() {
+    let local = |name: &str| match name {
+        "remote-upload-paste" => Some("on".to_string()),
+        "remote-upload-max" => Some("5".to_string()),
+        "remote-forward-ports" => Some("bogus".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        Settings::from_options(local),
+        Settings {
+            upload_paste: UploadMode::On,
+            upload_max: 5 << 20,
+            forward_ports: ForwardMode::Ask,
+        }
+    );
+    assert_eq!(Settings::from_options(|_| None), Settings::default());
 }
