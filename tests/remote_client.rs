@@ -60,7 +60,7 @@ for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
 [ -e '{root}/down' ] && {{ echo "ssh: connect to host box: Connection refused" >&2; exit 255; }}
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift 2
-case "$*" in *proxy*) echo $$ >> '{root}/proxies' ;; esac
+case "$*" in *proxy*) echo $$ >> '{root}/proxies'; [ -e '{root}/hang' ] && exec sleep 60 ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 unset GROFE_PANE TMUX
@@ -400,4 +400,27 @@ fn hosts_that_look_like_ssh_options_never_reach_ssh() {
     }
     assert!(!r.root().join("proxies").exists());
     assert!(!r.root().join("pwned").exists());
+}
+
+/// An ssh that connects but whose remote never says hello: the connect
+/// gives up after the hello timeout instead of hanging.
+#[test]
+fn a_silent_remote_times_out_instead_of_hanging() {
+    let r = Remote::new(true);
+    fs::write(r.root().join("hang"), "").unwrap();
+    let mut cmd = r.client(&["list-sessions"]);
+    cmd.env("GROFE_TEST_HELLO_MS", "500");
+    let started = Instant::now();
+    let out = run_bounded(cmd, CMD_TIMEOUT);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        out.stderr.contains("no answer from the remote proxy"),
+        "{out:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+    // The hung ssh was killed.
+    let pid = r.proxy(1);
+    common::wait_until("the silent ssh to die", CMD_TIMEOUT, || {
+        common::process_gone(pid)
+    });
 }
