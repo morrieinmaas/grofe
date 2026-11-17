@@ -10,6 +10,7 @@
 //! with the [`Input`] to feed back.
 
 mod exec;
+mod hook;
 mod ports;
 #[cfg(test)]
 mod tests;
@@ -22,7 +23,8 @@ use std::time::{Duration, Instant};
 use crate::event::Event;
 use crate::types::PaneId;
 
-pub use exec::{Executor, Opener, opener, upload_dir, upload_files};
+pub use exec::{Executor, LinkCell, Opener, is_slow, opener, run_slow, upload_dir, upload_files};
+pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
 use text::count_files;
 pub use text::{forward_prompt, human_size, parse_paths, shell_quote, upload_prompt};
@@ -214,6 +216,11 @@ impl Forwarding {
 
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    /// Replaces the settings (once the remote's options are read).
+    pub fn set_settings(&mut self, settings: Settings) {
+        self.settings = settings;
     }
 
     /// The remote ports being forwarded.

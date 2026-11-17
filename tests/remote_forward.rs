@@ -8,28 +8,31 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{TestServer, wait_until};
 use grofe::event::Event;
 use grofe::protocol::{Hello, Reply, Request, encode_hello};
+use grofe::remote::connect::Link;
+use grofe::remote::forward::LinkCell;
 use grofe::remote::forward::{
     Action, Executor, ForwardMode, Forwarding, Input, Settings, UploadMode, list_forwards,
 };
-use grofe::remote::proxy_proto::{OpenSpec, ProxyConn};
+use grofe::remote::proxy_proto::OpenSpec;
 
 const WAIT: Duration = Duration::from_secs(10);
 
-fn spawn_proxy(srv: &TestServer) -> (Child, Arc<ProxyConn>) {
+fn spawn_proxy(srv: &TestServer) -> (Child, Link) {
     let mut cmd = srv.command();
     cmd.arg("proxy")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let mut child = cmd.spawn().unwrap();
-    let conn = ProxyConn::new(child.stdout.take().unwrap(), child.stdin.take().unwrap()).unwrap();
-    (child, Arc::new(conn))
+    let stdout = child.stdout.take().unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let link = Link::over("host", stdout, stdin, None).unwrap();
+    (child, link)
 }
 
 fn finish(mut child: Child) {
@@ -96,7 +99,12 @@ fn a_pasted_file_pair_is_uploaded_to_the_panes_directory() {
     );
 
     let mut fw = Forwarding::new("host", settings(UploadMode::Ask, ForwardMode::Off));
-    let mut exec = Executor::new(Arc::clone(&conn), "host", Some("main".into()), None);
+    let mut exec = Executor::new(
+        LinkCell::new(conn.clone()),
+        "host",
+        Some("main".into()),
+        None,
+    );
     let mut prompts = Vec::new();
     let mut client = Vec::new();
     for action in drive(&mut fw, &mut exec, Input::Keys(pasted.into_bytes()), "y") {
@@ -154,7 +162,7 @@ fn a_remote_port_is_forwarded_until_it_goes() {
     let state = tempfile::tempdir().unwrap();
     let mut fw = Forwarding::new("host", settings(UploadMode::Off, ForwardMode::Auto));
     let mut exec = Executor::new(
-        Arc::clone(&conn),
+        LinkCell::new(conn.clone()),
         "host",
         None,
         Some(state.path().to_path_buf()),
@@ -250,7 +258,7 @@ fn open_url_child() {
     assert_eq!(next(), None, "subscribed");
 
     let mut fw = Forwarding::new("host", Settings::default());
-    let mut exec = Executor::new(Arc::clone(&conn), "host", None, None);
+    let mut exec = Executor::new(LinkCell::new(conn.clone()), "host", None, None);
     srv.cmd(&["open-url", "https://example.com/x?y=1"]).unwrap();
     let event = next().unwrap();
     assert_eq!(drive(&mut fw, &mut exec, Input::Event(event), ""), []);
