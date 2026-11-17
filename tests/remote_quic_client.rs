@@ -48,7 +48,7 @@ impl Remote {
             r#"#!/bin/sh
 for a; do [ "$a" = -G ] && {{ printf 'hostname 127.0.0.1\nserveraliveinterval 0\n'; exit 0; }}; done
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
-shift
+shift 2
 case "$*" in *"proxy --quic"*) echo quic >> '{root}/bootstraps' ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'

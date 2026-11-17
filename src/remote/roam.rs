@@ -75,7 +75,8 @@ pub fn dial_host(target: &Target) -> String {
     if let Some(p) = target.port {
         cmd.args(["-p", &p.to_string()]);
     }
-    cmd.arg(&target.dest)
+    cmd.arg("--")
+        .arg(&target.dest)
         .stdin(Stdio::null())
         .stderr(Stdio::null());
     match cmd.output() {
@@ -98,8 +99,10 @@ enum Attempt {
 fn attempt(host: &str, dial: &str, b: &Bootstrap) -> Attempt {
     let mut q = match quic::connect(dial, b) {
         Ok(q) => q,
-        Err(e) if e.kind() == io::ErrorKind::TimedOut => return Attempt::Silent(e.to_string()),
-        Err(e) => return Attempt::Refused(e.to_string()),
+        Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+            return Attempt::Silent(ssh::sanitize(&e.to_string()));
+        }
+        Err(e) => return Attempt::Refused(ssh::sanitize(&e.to_string())),
     };
     let (reader, writer) = match q.streams() {
         Ok(s) => s,
@@ -108,12 +111,16 @@ fn attempt(host: &str, dial: &str, b: &Bootstrap) -> Attempt {
     // The link's end closes the QUIC connection; it owns the runtime too.
     match Link::over(host, reader, writer, Some(Box::new(move || q.close()))) {
         Ok(link) => Attempt::Linked(link),
-        Err(e) => Attempt::Refused(e.to_string()),
+        Err(e) => Attempt::Refused(ssh::sanitize(&e.to_string())),
     }
 }
 
 fn blocked_line(host: &str, why: &str) -> String {
-    format!("grofe: {host}: {why}; using ssh instead")
+    format!(
+        "grofe: {}: {}; using ssh instead",
+        ssh::sanitize(host),
+        ssh::sanitize(why)
+    )
 }
 
 /// [`Link::connect`] for [`Transport::Quic`]: one bootstrap, no install,
@@ -158,7 +165,7 @@ impl Roaming {
             // (asking as it does), then the proxy runs from the install.
             Err(_) => {
                 drop(super::bootstrap::connect(target, install, release_url)?);
-                bootstrap(target, false).map_err(|e| e.to_string())?
+                bootstrap(target, false).map_err(|e| ssh::sanitize(&e.to_string()))?
             }
         };
         let roaming = Roaming {
@@ -189,7 +196,7 @@ impl Roaming {
 
     fn ssh(&self, batch: bool) -> Result<Link, String> {
         Link::connect(&Transport::Ssh(self.target.clone()), ConnectOpts { batch })
-            .map_err(|e| e.to_string())
+            .map_err(|e| ssh::sanitize(&e.to_string()))
     }
 
     /// A new link after a drop; it never prompts. First QUIC with the same
@@ -212,7 +219,7 @@ impl Roaming {
         {
             return Ok(link);
         }
-        let b = bootstrap(&self.target, true).map_err(|e| e.to_string())?;
+        let b = bootstrap(&self.target, true).map_err(|e| ssh::sanitize(&e.to_string()))?;
         self.state().boot = Some(b.clone());
         match attempt(host, &self.dial, &b) {
             Attempt::Linked(link) => Ok(link),
