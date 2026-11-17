@@ -16,16 +16,14 @@ const WEB_PORT: u16 = 18080;
 /// Starts the container's server with `main` and the global `option` set,
 /// so the client reads it at attach; then attaches.
 fn attach_with(e: &E2e, local: &Local, option: &str, value: &str) -> Harness {
-    let out = e.ssh(&format!(
-        "grofe new-session -d -s main && grofe set-option -g {option} {value}"
-    ));
+    // The consent options are this machine's, never the remote's.
+    let dir = local.root().join("config/grofe");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.toml"), format!("{option} = \"{value}\"\n")).unwrap();
+    let out = e.ssh("grofe new-session -d -s main");
     assert!(out.status.success(), "{out:?}");
     let mut h = Harness::spawn(local.grofe(&["-r", &e.host]), 120, 24);
     h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
-    // ponytail: the client reads the options on its first tick after the
-    // attach and there is no signal for it, so give it a moment (as
-    // tests/remote_forward_client.rs does).
-    std::thread::sleep(Duration::from_millis(800));
     h
 }
 
