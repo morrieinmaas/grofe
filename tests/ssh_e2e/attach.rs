@@ -1,0 +1,47 @@
+//! `grofe -r <host>` against the container that has grofe: one-shot
+//! commands print like the local CLI, and an attach shows the pane.
+
+use crate::harness::{Cleanup, REMOTE_TIMEOUT, run, text};
+
+/// Kills the container's grofe server, the one the proxy started.
+fn kill_server(e: &crate::harness::E2e) -> Cleanup<'_> {
+    Cleanup {
+        e,
+        host: e.host.clone(),
+        command: "grofe kill-server 2>/dev/null; true".to_string(),
+        netem: false,
+    }
+}
+
+#[test]
+fn a_remote_list_sessions_lists_the_container_sessions() {
+    let e = e2e_or_skip!();
+    let _cleanup = kill_server(&e);
+    let local = e.local();
+    let out = run(local.grofe(&["-r", &e.host, "new-session", "-d", "-s", "e2e-ls"]));
+    assert!(out.status.success(), "{out:?}");
+    let out = run(local.grofe(&["-r", &e.host, "list-sessions"]));
+    assert!(out.status.success(), "{out:?}");
+    // The same listing the container's own CLI prints.
+    let there = e.ssh("grofe list-sessions");
+    assert!(text(&out).contains("e2e-ls:"), "{out:?}");
+    assert_eq!(text(&out), text(&there));
+}
+
+#[test]
+fn dash_r_attaches_and_a_command_s_output_shows() {
+    let e = e2e_or_skip!();
+    let _cleanup = kill_server(&e);
+    let local = e.local();
+    let mut h = local.attach(local.grofe(&["-r", &e.host]));
+    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    // The output is not in the typed line: 6*7 is computed there.
+    h.send("echo e2e-$((6*7))-attach\r");
+    h.wait_for_timeout("e2e-42-attach", REMOTE_TIMEOUT);
+    // `-r host` with no command is `new-session -A -s main` there.
+    let out = e.ssh("grofe has-session -t main");
+    assert!(out.status.success(), "{out:?}");
+    h.send("\x02d");
+    h.wait_exit();
+    assert!(String::from_utf8_lossy(h.output()).contains("[detached"));
+}

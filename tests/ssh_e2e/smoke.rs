@@ -1,16 +1,4 @@
-use crate::harness::{E2e, text};
-
-macro_rules! e2e_or_skip {
-    () => {
-        match E2e::get() {
-            Some(e) => e,
-            None => {
-                eprintln!("skipped: GROFE_E2E_SSH_CONFIG is not set (scripts/ssh-e2e.sh)");
-                return;
-            }
-        }
-    };
-}
+use crate::harness::text;
 
 #[test]
 fn grofe_runs_over_ssh() {
@@ -66,7 +54,14 @@ fn helpers_reach_the_container() {
 fn release_dir_is_served() {
     let e = e2e_or_skip!();
     let out = std::process::Command::new("curl")
-        .args(["-fsS", &format!("{}/SHA256SUMS", e.release_url)])
+        .args([
+            "-fsS",
+            &format!(
+                "{}/v{}/SHA256SUMS",
+                e.release_url,
+                env!("CARGO_PKG_VERSION")
+            ),
+        ])
         .output()
         .expect("run curl");
     assert!(out.status.success(), "{out:?}");

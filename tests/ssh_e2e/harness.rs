@@ -1,6 +1,18 @@
 //! What a scenario needs from `scripts/ssh-e2e.sh`'s environment.
 
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::Duration;
+
+use tempfile::TempDir;
+
+use crate::pty::Harness;
+
+/// The bound on a scenario's waits for the remote: a container round trip
+/// plus a reconnect backoff step or two.
+pub const REMOTE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct E2e {
     pub config: String,
@@ -44,8 +56,152 @@ impl E2e {
             .output()
             .expect("run the e2e script")
     }
+
+    /// A local client side: private dirs and an ssh that reads the run's
+    /// config.
+    pub fn local(&self) -> Local {
+        Local::new(&self.config)
+    }
 }
 
 pub fn text(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The local machine of a scenario: `HOME` and the XDG dirs in a temp dir,
+/// and `GROFE_SSH` naming a wrapper that runs `ssh -F <config>` (so `ssh -G`
+/// reads the same config). The wrapper fails like ssh (255) while a `down`
+/// file exists, so a scenario can hold a reconnect off.
+pub struct Local {
+    dir: TempDir,
+}
+
+impl Local {
+    fn new(config: &str) -> Local {
+        let dir = tempfile::Builder::new()
+            .prefix("grofe-e2e")
+            .tempdir()
+            .expect("tempdir");
+        let root = dir.path();
+        for d in ["home", "config", "state", "run"] {
+            fs::create_dir_all(root.join(d)).expect("create a local dir");
+        }
+        fs::set_permissions(root.join("run"), fs::Permissions::from_mode(0o700))
+            .expect("chmod the runtime dir");
+        let script = format!(
+            "#!/bin/sh\n\
+             [ -e '{root}/down' ] && {{ echo 'ssh: connect to host: Connection refused (e2e down)' >&2; exit 255; }}\n\
+             exec ssh -F '{config}' \"$@\"\n",
+            root = root.display(),
+        );
+        let ssh = root.join("ssh");
+        fs::write(&ssh, script).expect("write the ssh wrapper");
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("chmod the wrapper");
+        Local { dir }
+    }
+
+    pub fn root(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// A local `grofe <args>`: the worktree's build, private dirs, the
+    /// wrapper ssh, no inherited grofe or tmux session.
+    pub fn grofe(&self, args: &[&str]) -> Command {
+        let root = self.root();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.args(args)
+            .current_dir(root)
+            .env_remove("GROFE")
+            .env_remove("GROFE_PANE")
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .env_remove("GROFE_REMOTE_RELEASE_URL")
+            .env("GROFE_SSH", root.join("ssh"))
+            .env("HOME", root.join("home"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_RUNTIME_DIR", root.join("run"))
+            .env("TERM", "xterm-256color")
+            .env_remove("COLORTERM");
+        cmd
+    }
+
+    /// `grofe <args>` in an 80x24 pty.
+    pub fn attach(&self, cmd: Command) -> Harness {
+        Harness::spawn(cmd, 80, 24)
+    }
+
+    /// While down, the wrapper ssh refuses every connection.
+    pub fn set_down(&self, down: bool) {
+        let f: PathBuf = self.root().join("down");
+        if down {
+            fs::write(f, "").expect("write the down file");
+        } else {
+            let _ = fs::remove_file(f);
+        }
+    }
+}
+
+/// Runs `command` on `host` over ssh when dropped, pass or fail: a
+/// scenario's cleanup in the container (kill the grofe server it started,
+/// clear netem, remove an install).
+pub struct Cleanup<'a> {
+    pub e: &'a E2e,
+    pub host: String,
+    pub command: String,
+    /// Also `e2e_netem clear` first.
+    pub netem: bool,
+}
+
+impl Drop for Cleanup<'_> {
+    fn drop(&mut self) {
+        if self.netem {
+            let _ = self.e.helper("e2e_netem", &["clear"]);
+        }
+        let _ = Command::new("ssh")
+            .args(["-F", &self.e.config, "-o", "ConnectTimeout=10"])
+            .arg(&self.host)
+            .arg(&self.command)
+            .output();
+    }
+}
+
+/// Runs a local client one-shot, killed if it takes over [`REMOTE_TIMEOUT`].
+pub fn run(mut cmd: Command) -> Output {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn grofe");
+    let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let out_t = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = out.read_to_end(&mut v);
+        v
+    });
+    let err_t = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = err.read_to_end(&mut v);
+        v
+    });
+    let deadline = std::time::Instant::now() + REMOTE_TIMEOUT;
+    let status = loop {
+        if let Some(s) = child.try_wait().expect("wait for grofe") {
+            break s;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{cmd:?} did not finish within {REMOTE_TIMEOUT:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    Output {
+        status,
+        stdout: out_t.join().unwrap(),
+        stderr: err_t.join().unwrap(),
+    }
 }
