@@ -77,7 +77,10 @@ pub trait Prompt: Send {
 
 /// Another link to move the attach to ([`HookCtx::switch`]).
 pub struct Switch {
-    pub link: Link,
+    /// Makes (or hands over) the link to attach on, and gets the session
+    /// ready there. It runs on the switch's own thread, so a slow machine
+    /// never stalls the client.
+    pub connect: Box<dyn FnOnce() -> Result<Link, String> + Send>,
     /// The host, for the bar.
     pub host: String,
     /// The session to attach to there (`None`: the server picks).
@@ -149,7 +152,8 @@ impl HookCtx<'_> {
 
     /// Asks the server to draw this client's screen anew.
     pub fn redraw(&self) {
-        let _ = self.request(&["refresh-client".into(), "-t".into(), self.tty.into()]);
+        // In the background: a slow link must not stall the main loop.
+        drop(self.request_bg(vec!["refresh-client".into(), "-t".into(), self.tty.into()]));
     }
 
     /// Raises `prompt`, replacing one already up.

@@ -30,12 +30,13 @@ pub(super) fn handshake(
     send_hello(&link, &mut chan, p)?;
     let session = attached_session(&link, &p.hello);
     let prefix = server_prefix(&link, &p.hello);
-    start_readers(&link, &chan, p, generation, out);
+    let events = start_readers(&link, &chan, p, generation, out);
     Ok(Conn {
         link,
         attach: chan,
         session,
         prefix,
+        events,
     })
 }
 
@@ -106,18 +107,26 @@ fn server_prefix(link: &Link, hello: &str) -> Key {
 }
 
 /// The attach channel's reader thread and, when hooks name events, the
-/// event channel's.
-fn start_readers(link: &Link, chan: &Channel, p: &Params, generation: u64, out: &SyncSender<Out>) {
+/// event channel's; that channel, so the connection can close it.
+fn start_readers(
+    link: &Link,
+    chan: &Channel,
+    p: &Params,
+    generation: u64,
+    out: &SyncSender<Out>,
+) -> Option<Channel> {
     let reader = chan.clone();
     let tx = out.clone();
     std::thread::spawn(move || read_frames(reader, generation, tx));
-    if !p.events.is_empty()
-        && let Ok(ctl) = link.open_control()
-    {
-        let tx = out.clone();
-        let (hello, events) = (p.hello.clone(), p.events.clone());
-        std::thread::spawn(move || read_events(ctl, &hello, &events, generation, tx));
+    if p.events.is_empty() {
+        return None;
     }
+    let ctl = link.open_control().ok()?;
+    let tx = out.clone();
+    let (hello, events) = (p.hello.clone(), p.events.clone());
+    let kept = ctl.clone();
+    std::thread::spawn(move || read_events(ctl, &hello, &events, generation, tx));
+    Some(kept)
 }
 
 /// The attach reply line, read a byte at a time so no frame bytes after
