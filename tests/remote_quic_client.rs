@@ -57,7 +57,9 @@ unset GROFE_PANE TMUX
 case "$*" in *"proxy --quic"*) [ -e '{root}/silent' ] && {{
   /bin/sh -c "$*" | /usr/bin/sed "s/\"port\":[0-9]*/\"port\":$(cat '{root}/silent')/"
   exit 0; }} ;; esac
-exec /bin/sh -c "$*"
+# `exec` inside too: dash (Linux /bin/sh) forks for a -c command's last
+# step where bash execs, and the test must signal the proxy itself.
+exec /bin/sh -c "exec $*"
 "#,
             root = root.display(),
             sock = srv.socket.display(),
