@@ -150,6 +150,17 @@ struct Conn {
     /// The attached session's id, for a reconnect.
     session: Option<String>,
     prefix: Key,
+    /// The control channel subscribed to the hooks' events, if any: closed
+    /// with the attach, so a switch or reconnect leaves no subscription.
+    events: Option<crate::remote::proxy_proto::Channel>,
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        if let Some(e) = &self.events {
+            e.close("");
+        }
+    }
 }
 
 impl Conn {
@@ -381,10 +392,12 @@ impl Loop {
                 c.send(Frame::Input(out.send));
             }
             if closed {
-                let _ = c.link.request(
-                    &self.params.hello,
-                    &["refresh-client".into(), "-t".into(), client_tty().into()],
-                );
+                // In the background: a slow link must not stall the keys.
+                let (link, hello) = (c.link.clone(), self.params.hello.clone());
+                std::thread::spawn(move || {
+                    let argv = ["refresh-client", "-t", client_tty()].map(String::from);
+                    let _ = link.request(&hello, &argv);
+                });
             }
         }
         if !out.draw.is_empty() {
@@ -428,6 +441,7 @@ impl Loop {
         if let State::Online(c) = &self.state {
             c.attach.close("");
         }
+        // The old connection's event channel closes with it (Conn's drop).
         self.overlay = None;
         self.generation += 1;
         let generation = self.generation;
@@ -443,7 +457,10 @@ impl Loop {
         let params = self.params.clone();
         let out = self.out_tx.clone();
         std::thread::spawn(move || {
-            let result = handshake(to.link, &params, generation, &out);
+            let result = match (to.connect)() {
+                Ok(link) => handshake(link, &params, generation, &out),
+                Err(e) => Err(Failure::Retry(e)),
+            };
             post(&out, generation, Kind::Connected(result.map(Box::new)));
         });
     }

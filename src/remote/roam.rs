@@ -190,6 +190,21 @@ impl Roaming {
         Ok((roaming, link))
     }
 
+    /// A roaming remote with no link yet: its first [`Roaming::relink`]
+    /// bootstraps without prompting, and later ones reuse that token. For
+    /// a caller that owns a terminal (the multi-machine client) and must
+    /// neither prompt nor print.
+    pub fn unlinked(target: &Target) -> Roaming {
+        Roaming {
+            target: target.clone(),
+            dial: dial_host(target),
+            state: Mutex::new(State {
+                boot: None,
+                ssh_only: false,
+            }),
+        }
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }

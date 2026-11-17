@@ -10,21 +10,27 @@ use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::net::{AGENT_FORMAT, local_link, machine_link, parse_agents, sanitize_lines};
-use super::{LOCAL, Link as LinkState, Machine, MachineView, Picker, PickerOutcome};
+use super::{LOCAL, Link as LinkState, Machine, MachineView, Picker, PickerOutcome, Transport};
 use super::{client_machines, last_known, render_picker, save_last_known};
 use crate::client::AttachOptions;
 use crate::protocol::ClientCtx;
 use crate::protocol::{Reply, Request};
 use crate::remote::connect::{Link, read_reply};
+use crate::remote::roam::Roaming;
 use crate::remote::session::{self, Hook, HookCtx, Input, Prompt, RemoteAttach, Switch};
+use crate::remote::ssh::Target;
 
 /// How often a connected machine's view is read again without an event
 /// (notifications send none).
 const REFRESH: Duration = Duration::from_secs(3);
+
+/// Failed attempts after a drop before a machine counts as offline rather
+/// than reconnecting.
+const GIVE_UP: u32 = 3;
 
 /// How long a watcher waits before connecting again.
 // ponytail: a fixed retry, not the attach's backoff; a machine down for
@@ -57,13 +63,47 @@ fn lock(s: &Shared) -> MutexGuard<'_, Vec<Entry>> {
 struct Reach {
     socket: PathBuf,
     machine: Option<Machine>,
+    /// A machine saved with `quic`: the one roaming remote its attaches
+    /// share, made on the first attach, so a relink reuses its token.
+    roaming: Arc<OnceLock<Arc<Roaming>>>,
 }
 
 impl Reach {
+    fn new(socket: &Path, machine: Option<Machine>) -> Reach {
+        Reach {
+            socket: socket.to_path_buf(),
+            machine,
+            roaming: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// A control link for the watcher: the local proxy, or ssh. Never a
+    /// QUIC bootstrap, which would stop the proxy behind a running attach.
     fn connect(&self) -> Result<Link, String> {
         match &self.machine {
             None => local_link(&self.socket),
             Some(m) => machine_link(m),
+        }
+    }
+
+    fn quic(&self) -> bool {
+        self.machine
+            .as_ref()
+            .is_some_and(|m| m.transport == Some(Transport::Quic))
+    }
+
+    /// A link for the attach: over QUIC through the machine's one roaming
+    /// remote when it was saved with `quic` (never prompting or printing),
+    /// else as [`Reach::connect`].
+    fn attach_link(&self) -> Result<Link, String> {
+        match &self.machine {
+            Some(m) if self.quic() => {
+                let target = Target::parse_host(&m.target)?;
+                self.roaming
+                    .get_or_init(|| Arc::new(Roaming::unlinked(&target)))
+                    .relink()
+            }
+            _ => self.connect(),
         }
     }
 
@@ -91,10 +131,7 @@ pub fn run(
     let state_dir = crate::paths::state_dir(&crate::paths::Env::from_process());
     let reaches: Vec<Reach> = std::iter::once(None)
         .chain(machines.iter().filter(|m| m.enabled).cloned().map(Some))
-        .map(|machine| Reach {
-            socket: socket.to_path_buf(),
-            machine,
-        })
+        .map(|machine| Reach::new(socket, machine))
         .collect();
     let shared: Shared = Arc::new(Mutex::new(
         reaches
@@ -217,14 +254,26 @@ fn watch(
     first: Option<Link>,
 ) {
     let mut first = first;
+    // Failed attempts since the machine was last connected; `None` while it
+    // never was (offline from the start).
+    let mut failed: Option<u32> = None;
     loop {
         let link = match first.take().map(Ok).unwrap_or_else(|| reach.connect()) {
             Ok(link) => link,
             Err(_) => {
+                let state = match &mut failed {
+                    Some(n) => {
+                        *n += 1;
+                        link_state(Some(*n))
+                    }
+                    None => link_state(None),
+                };
+                lock(&shared)[i].view.link = state;
                 std::thread::sleep(RETRY);
                 continue;
             }
         };
+        failed = Some(0);
         {
             let mut entries = lock(&shared);
             entries[i].link = Some(link.clone());
@@ -243,12 +292,19 @@ fn watch(
                 Err(RecvTimeoutError::Disconnected) => std::thread::sleep(REFRESH),
             }
         }
-        {
-            let mut entries = lock(&shared);
-            entries[i].link = None;
-            entries[i].view.link = LinkState::Offline;
-        }
-        std::thread::sleep(RETRY);
+        // Dropped: reconnecting at once, with the last known view kept.
+        let mut entries = lock(&shared);
+        entries[i].link = None;
+        entries[i].view.link = LinkState::Reconnecting;
+    }
+}
+
+/// A watched machine's state after `failed` attempts in a row since it was
+/// last connected (`None`: it never was).
+fn link_state(failed: Option<u32>) -> LinkState {
+    match failed {
+        Some(n) if n < GIVE_UP => LinkState::Reconnecting,
+        _ => LinkState::Offline,
     }
 }
 
@@ -355,8 +411,9 @@ impl Hook for MachinesHook {
             return;
         }
         let argv = client_info_argv(cx.client(), &text);
-        // An older server has no such verb: the segment stays empty there.
-        let _ = cx.request(&argv);
+        // In the background, so a slow link never stalls the client. An
+        // older server has no such verb: the segment stays empty there.
+        drop(cx.request_bg(argv));
         self.sent = Some((current, text));
     }
 }
@@ -409,15 +466,26 @@ impl Prompt for PickerPrompt {
             return Some(Input::default());
         }
         // An offline machine cannot be attached to: the picker stays up.
-        let link = lock(&self.shared)[i].link.clone()?;
-        let reach = self.reaches[i].clone();
-        let target = ensure_session(&link, &self.hello, reach.session().as_deref()).ok()?;
+        let watched = lock(&self.shared)[i].link.clone()?;
         let host = lock(&self.shared)[i].view.name.clone();
+        let reach = self.reaches[i].clone();
+        let target = reach.session();
+        let (first, hello, session) = (reach.clone(), self.hello.clone(), target.clone());
         cx.switch(Switch {
-            link,
+            // On the switch's thread: the QUIC link (or the watcher's) and
+            // the session there, so a slow machine never stalls the keys.
+            connect: Box::new(move || {
+                let link = if first.quic() {
+                    first.attach_link()?
+                } else {
+                    watched
+                };
+                ensure_session(&link, &hello, session.as_deref())?;
+                Ok(link)
+            }),
             host,
             target,
-            relink: Arc::new(move || reach.connect()),
+            relink: Arc::new(move || reach.attach_link()),
         });
         self.current.store(i, Ordering::SeqCst);
         Some(Input::default())
@@ -473,6 +541,14 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_machine_reconnects_before_it_counts_as_offline() {
+        assert_eq!(link_state(None), LinkState::Offline, "never reached");
+        assert_eq!(link_state(Some(1)), LinkState::Reconnecting);
+        assert_eq!(link_state(Some(GIVE_UP - 1)), LinkState::Reconnecting);
+        assert_eq!(link_state(Some(GIVE_UP)), LinkState::Offline);
+    }
+
+    #[test]
     fn the_key_is_found_inside_input() {
         assert_eq!(find(b"ab\x1bmcd", b"\x1bm"), Some(2));
         assert_eq!(find(b"abc", b"\x1bm"), None);
@@ -488,10 +564,7 @@ mod tests {
             transport: None,
             enabled: true,
         };
-        let reach = |m: Option<Machine>| Reach {
-            socket: PathBuf::new(),
-            machine: m,
-        };
+        let reach = |m: Option<Machine>| Reach::new(Path::new(""), m);
         assert_eq!(reach(None).session(), None);
         assert_eq!(reach(Some(m.clone())).session().as_deref(), Some("main"));
         m.session = Some("dev".into());

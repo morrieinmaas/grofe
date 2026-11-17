@@ -45,20 +45,17 @@ pub fn local_link(socket: &Path) -> Result<Link, String> {
     Link::over(LOCAL, stdout, stdin, Some(kill_child(child))).map_err(|e| e.to_string())
 }
 
-/// A link to saved machine `m` that never prompts: over QUIC when it was
-/// saved with `--transport quic` (falling back to ssh when UDP gets no
-/// answer, as `-r` does), else over ssh.
+/// A control link to saved machine `m`, over ssh, that never prompts.
+/// Always ssh, also for a machine saved with `quic`: a QUIC bootstrap
+/// starts a new proxy there, which stops the one behind a running attach.
 pub fn machine_link(m: &Machine) -> Result<Link, String> {
-    Link::connect(&transport(m)?, ConnectOpts { batch: true }).map_err(|e| e.to_string())
+    Link::connect(&control_transport(m)?, ConnectOpts { batch: true }).map_err(|e| e.to_string())
 }
 
-/// How saved machine `m` is reached.
-pub fn transport(m: &Machine) -> Result<Transport, String> {
-    let target = Target::parse_host(&m.target)?;
-    Ok(match m.transport {
-        Some(super::Transport::Quic) => Transport::Quic(target),
-        Some(super::Transport::Ssh) | None => Transport::Ssh(target),
-    })
+/// How a control link reaches saved machine `m`: ssh, whatever it was
+/// saved with.
+pub fn control_transport(m: &Machine) -> Result<Transport, String> {
+    Ok(Transport::Ssh(Target::parse_host(&m.target)?))
 }
 
 /// The agents in `agent list` output in [`AGENT_FORMAT`]: the kind, or the
@@ -204,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quic_machine_is_reached_over_quic() {
+    fn control_links_use_ssh_for_a_quic_machine_too() {
         let mut m = Machine {
             name: "q".into(),
             target: "box".into(),
@@ -212,11 +209,12 @@ mod tests {
             transport: Some(super::super::Transport::Quic),
             enabled: true,
         };
-        assert_eq!(transport(&m), Ok(Transport::Quic(Target::host("box"))));
-        m.transport = None;
-        assert_eq!(transport(&m), Ok(Transport::Ssh(Target::host("box"))));
+        assert_eq!(
+            control_transport(&m),
+            Ok(Transport::Ssh(Target::host("box")))
+        );
         m.target = "-oProxyCommand=x".into();
-        assert!(transport(&m).is_err());
+        assert!(control_transport(&m).is_err());
     }
 
     #[test]

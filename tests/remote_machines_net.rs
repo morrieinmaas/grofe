@@ -17,6 +17,8 @@ use std::time::Duration;
 
 use common::{CMD_TIMEOUT, TestServer, run_bounded};
 use harness::Harness;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use tempfile::TempDir;
 
 /// The picker box's top edge.
@@ -59,7 +61,7 @@ impl Fleet {
         };
         let script = format!(
             r#"#!/bin/sh
-for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
+for a; do [ "$a" = -G ] && {{ printf 'hostname 127.0.0.1\nserveraliveinterval 0\n'; exit 0; }}; done
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 host="$2"
 shift 2
@@ -70,7 +72,12 @@ case "$host" in
   *) echo "ssh: Could not resolve hostname $host" >&2; exit 255 ;;
 esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin'
+export GROFE_REMOTE_UDP_PORTS=47100-47999
 unset GROFE_PANE TMUX
+case "$*" in
+  *"proxy --quic"*) echo "$host" >> '{root}/bootstraps' ;;
+  *proxy*) echo $$ >> '{root}/proxies-'"$host" ;;
+esac
 # `exec` inside too: dash (Linux /bin/sh) forks for a -c command's last
 # step where bash execs, and the test must signal the proxy itself.
 exec /bin/sh -c "exec $*"
@@ -121,6 +128,25 @@ exec /bin/sh -c "exec $*"
         cmd
     }
 
+    /// The `proxy --quic` bootstraps run on `host` so far.
+    fn bootstraps(&self, host: &str) -> usize {
+        fs::read_to_string(self.root().join("bootstraps"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| *l == host)
+            .count()
+    }
+
+    /// The pids of the stdio proxies run on `host` so far.
+    fn proxies(&self, host: &str) -> Vec<Pid> {
+        fs::read_to_string(self.root().join(format!("proxies-{host}")))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .map(Pid::from_raw)
+            .collect()
+    }
+
     fn set_down(&self, host: &str, down: bool) {
         let f = self.root().join(format!("down-{host}"));
         if down {
@@ -129,6 +155,62 @@ exec /bin/sh -c "exec $*"
             let _ = fs::remove_file(f);
         }
     }
+}
+
+impl Drop for Fleet {
+    /// The detached QUIC proxies outlive the test otherwise.
+    fn drop(&mut self) {
+        for srv in [&self.alpha, &self.beta] {
+            let log = srv.log_path();
+            let stem = log.file_stem().unwrap().to_string_lossy().into_owned();
+            let Ok(entries) = fs::read_dir(log.parent().unwrap()) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let n = e.file_name().to_string_lossy().into_owned();
+                if n.starts_with(&format!("{stem}-quic-"))
+                    && n.ends_with(".pid")
+                    && let Some(pid) = fs::read_to_string(e.path())
+                        .ok()
+                        .and_then(|s| s.trim().parse().ok())
+                {
+                    let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+/// How many files `pid` has open: its connections included.
+fn open_files(pid: Pid) -> usize {
+    let proc = format!("/proc/{pid}/fd");
+    if let Ok(dir) = fs::read_dir(&proc) {
+        return dir.count();
+    }
+    let out = Command::new("lsof")
+        .args(["-n", "-P", "-p", &pid.to_string()])
+        .output()
+        .expect("lsof");
+    String::from_utf8_lossy(&out.stdout).lines().count()
+}
+
+/// A server's pid.
+fn server_pid(srv: &TestServer) -> Pid {
+    Pid::from_raw(
+        srv.cmd(&["display-message", "-p", "#{pid}"])
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    )
+}
+
+/// The clients attached to `srv`, by session name.
+fn clients(srv: &TestServer) -> String {
+    srv.cmd(&["list-clients", "-F", "#{session_name}"])
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 /// A session `s` on `srv` with one agent reporting `state` as `kind`.
@@ -294,10 +376,123 @@ fn an_open_picker_redraws_when_a_machine_comes_back() {
     h.wait_until("beta back in the picker", Duration::from_secs(30), |t| {
         t.contains(BOX) && !t.contains("offline")
     });
+    // alpha's link drops while alpha is unreachable: it shows reconnecting
+    // (it was connected), not offline.
+    f.set_down("alpha", true);
+    for pid in f.proxies("alpha") {
+        let _ = kill(pid, Signal::SIGKILL);
+    }
+    h.wait_until("alpha reconnecting", Duration::from_secs(20), |t| {
+        t.contains(BOX) && t.contains("reconnecting") && !t.contains("offline")
+    });
     h.send("\x1b");
     h.wait_until("the picker closed", Duration::from_secs(10), |t| {
         !t.contains(BOX)
     });
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// A switch closes the old connection's event subscription with its attach:
+/// the server left behind holds no more connections than before.
+#[test]
+fn a_switch_leaves_no_subscription_behind() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    f.alpha.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    let pid = server_pid(&f.alpha);
+    let mut h = Harness::spawn(f.grofe(&["--machines"]), 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    h.send("\x1bm");
+    h.wait_until("alpha connected", Duration::from_secs(20), |t| {
+        t.contains(BOX) && t.contains("connected     main")
+    });
+    h.send("\x1b");
+    h.wait_until("the picker closed", Duration::from_secs(10), |t| {
+        !t.contains(BOX)
+    });
+    // The fewest seen: the watcher's links, without a passing refresh.
+    let before = (0..10)
+        .map(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            open_files(pid)
+        })
+        .min()
+        .unwrap();
+    for (key, on_alpha) in [("\x1b2", "main"), ("\x1b1", "")] {
+        h.send("\x1bm");
+        h.wait_for(BOX);
+        h.send(key);
+        h.wait_until("the switch", Duration::from_secs(20), |_| {
+            clients(&f.alpha) == on_alpha
+        });
+    }
+    h.wait_until(
+        "alpha back to its connections",
+        Duration::from_secs(15),
+        |_| open_files(pid) <= before,
+    );
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// One-shot and watcher links to a machine saved with `quic` go over ssh:
+/// a run of `agent list --all-machines` starts no second QUIC bootstrap,
+/// which would stop the proxy behind a running QUIC attach.
+#[test]
+fn agent_list_leaves_a_quic_attach_alone() {
+    let f = Fleet::new();
+    let out = run_bounded(
+        f.grofe(&["machine", "add", "q", "alpha", "--transport", "quic"]),
+        CMD_TIMEOUT,
+    );
+    assert!(out.status.success(), "{out:?}");
+    let mut h = Harness::spawn(f.grofe(&["-r", "q"]), 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    assert_eq!(f.bootstraps("alpha"), 1);
+    let out = run_bounded(f.grofe(&["agent", "list", "--all-machines"]), CMD_TIMEOUT);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(f.bootstraps("alpha"), 1, "no second bootstrap");
+    h.send("echo still-attached\r");
+    h.wait_for("still-attached");
+    assert!(!h.text().contains("reconnecting"), "{}", h.text());
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// In `--machines`, a machine saved with `quic` is attached over QUIC with
+/// one bootstrap, and its watcher (over ssh) never runs another, so the two
+/// do not stop each other's proxy.
+#[test]
+fn the_picker_attaches_a_quic_machine_with_one_bootstrap() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    let out = run_bounded(
+        f.grofe(&["machine", "add", "q", "alpha", "--transport", "quic"]),
+        CMD_TIMEOUT,
+    );
+    assert!(out.status.success(), "{out:?}");
+    f.alpha.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    let mut h = Harness::spawn(f.grofe(&["--machines"]), 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    h.send("\x1bm");
+    h.wait_until("q connected", Duration::from_secs(20), |t| {
+        t.contains(BOX)
+            && t.lines()
+                .any(|l| l.contains("4 q") && l.contains("connected"))
+    });
+    h.send("\x1b4");
+    h.wait_until("q attached", Duration::from_secs(20), |_| {
+        clients(&f.alpha) == "main"
+    });
+    h.send("echo over-quic\r");
+    h.wait_for("over-quic");
+    assert_eq!(f.bootstraps("alpha"), 1);
+    // Watchers refresh every 3 s; none of that bootstraps.
+    std::thread::sleep(Duration::from_secs(4));
+    assert_eq!(f.bootstraps("alpha"), 1);
+    h.send("echo still-quic\r");
+    h.wait_for("still-quic");
     h.send("\x02d");
     h.wait_exit();
 }
