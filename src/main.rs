@@ -262,6 +262,11 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // Saved machines (spec ssh-remote §5): a file under the config dir,
+        // no server involved. grofe's own verb.
+        "machine" if dialect() == Dialect::Grofe => {
+            ExitCode::from(grofe::remote::machines::run(&rest[1..]).clamp(0, 255) as u8)
+        }
         // grofe's own verb: `$BROWSER` in a pane, see `open_url`.
         "open" if dialect() == Dialect::Grofe => open_url(&globals.socket(), &rest[1..]),
         // grofe's own verb: agent status reports and hook setup.
