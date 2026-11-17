@@ -1369,6 +1369,42 @@ Default:
 Pane is dead (#{?#{!=:#{pane_dead_status},},status #{pane_dead_status},}#{?#{!=:#{pane_dead_signal},},signal #{pane_dead_signal},}, #{t:pane_dead_time})
 ```
 
+## remote-forward-ports
+
+What a remote client does when a pane starts listening on a port: ask forwards it to localhost (the same port, or the next free one) after a prompt, auto forwards without asking, off never forwards.
+
+- **TOML key**: `remote-forward-ports` (string)
+- **Scope**: session
+- **Values**: `ask`, `auto`, `off`
+
+Default: `ask`
+
+grofe only: tmux does not have this option.
+
+## remote-upload-max
+
+The largest total size, in MiB, of the files one paste uploads to a remote session; a bigger paste is refused.
+
+- **TOML key**: `remote-upload-max` (integer)
+- **Scope**: session
+- **Values**: a whole number, at most 2147483647
+
+Default: `100`
+
+grofe only: tmux does not have this option.
+
+## remote-upload-paste
+
+What a remote client does with a bracketed paste of local file paths: ask uploads them to the pane's directory after a prompt, on uploads without asking, off pastes the paths as text.
+
+- **TOML key**: `remote-upload-paste` (string)
+- **Scope**: session
+- **Values**: `ask`, `on`, `off`
+
+Default: `ask`
+
+grofe only: tmux does not have this option.
+
 ## renumber-windows
 
 Renumber a session's windows when one is closed, so there are no gaps.
