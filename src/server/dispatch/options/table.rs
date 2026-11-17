@@ -101,6 +101,9 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "prompt-position",
     "stable-ssh-agent",
     "forward-browser",
+    "remote-upload-paste",
+    "remote-upload-max",
+    "remote-forward-ports",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -354,6 +357,32 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Bool,
         scope: OptionScope::Session,
         default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-upload-paste",
+        doc: "What a remote client does with a bracketed paste of local file paths: ask uploads them to the pane's directory after a prompt, on uploads without asking, off pastes the paths as text.",
+        kind: Kind::Choice(&["ask", "on", "off"]),
+        scope: OptionScope::Session,
+        default: "ask",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-upload-max",
+        doc: "The largest total size, in MiB, of the files one paste uploads to a remote session; a bigger paste is refused.",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Session,
+        default: "100",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-forward-ports",
+        doc: "What a remote client does when a pane starts listening on a port: ask forwards it to localhost (the same port, or the next free one) after a prompt, auto forwards without asking, off never forwards.",
+        kind: Kind::Choice(&["ask", "auto", "off"]),
+        scope: OptionScope::Session,
+        default: "ask",
         ..Builtin::PLAIN
     },
     Builtin {
