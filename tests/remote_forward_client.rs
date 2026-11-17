@@ -147,11 +147,14 @@ fn detach(mut h: Harness) {
 #[test]
 fn a_pasted_file_uploads_and_its_remote_path_is_typed_in_mode_on() {
     let r = Remote::new();
-    r.srv
-        .cmd(&["set-option", "-g", "remote-upload-paste", "on"])
-        .unwrap();
     let local = r.file("notes.txt", "from the local side");
     let mut h = r.attach(&[]);
+    // A session option, set after the attach: the client follows it.
+    r.srv
+        .cmd(&["set-option", "-t", "main", "remote-upload-paste", "on"])
+        .unwrap();
+    // ponytail: no signal for the reread either.
+    std::thread::sleep(Duration::from_millis(800));
     h.send("echo ");
     h.send(pasted(&local));
     let remote = r.pane_dir().join("notes.txt");
@@ -203,6 +206,33 @@ fn listener_child() {
     }
 }
 
+impl Remote {
+    /// Starts [`listener_child`] in `session`'s pane; its port and the file
+    /// that stops it.
+    fn listener(&self, session: &str) -> (u16, PathBuf) {
+        let port_file = self.root().join(format!("port-{session}"));
+        let stop_file = self.root().join(format!("stop-{session}"));
+        let command = format!(
+            "GROFE_T_PORTFILE={} GROFE_T_STOPFILE={} {} --ignored --exact --quiet listener_child",
+            port_file.display(),
+            stop_file.display(),
+            std::env::current_exe().unwrap().display()
+        );
+        self.srv
+            .cmd(&["send-keys", "-t", session, &command, "Enter"])
+            .unwrap();
+        wait_until("the listener's port", WAIT, || {
+            fs::read_to_string(&port_file).is_ok_and(|p| p.trim().parse::<u16>().is_ok())
+        });
+        let port = fs::read_to_string(&port_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        (port, stop_file)
+    }
+}
+
 #[test]
 fn a_port_a_pane_listens_on_reaches_localhost_in_mode_auto() {
     let r = Remote::new();
@@ -211,32 +241,23 @@ fn a_port_a_pane_listens_on_reaches_localhost_in_mode_auto() {
         .unwrap();
     let none = run_bounded(r.client(&["ports"]), CMD_TIMEOUT);
     assert_eq!(none.stdout, "no ports forwarded from box\n");
+    // A port in a session this client is not attached to is not its own.
+    r.srv.cmd(&["new-session", "-d", "-s", "other"]).unwrap();
+    let (theirs, stop_theirs) = r.listener("other");
     let h = r.attach(&[]);
-    let port_file = r.root().join("port");
-    let stop_file = r.root().join("stop");
-    let command = format!(
-        "GROFE_T_PORTFILE={} GROFE_T_STOPFILE={} {} --ignored --exact --quiet listener_child",
-        port_file.display(),
-        stop_file.display(),
-        std::env::current_exe().unwrap().display()
-    );
-    r.srv
-        .cmd(&["send-keys", "-t", "main", &command, "Enter"])
-        .unwrap();
-    wait_until("the listener's port", WAIT, || {
-        fs::read_to_string(&port_file).is_ok_and(|p| p.trim().parse::<u16>().is_ok())
-    });
-    let port: u16 = fs::read_to_string(&port_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let (port, stop_file) = r.listener("main");
     // `grofe -r box ports` lists it once the client forwards it.
     let mut listed = String::new();
     wait_until("the forward", WAIT, || {
         listed = run_bounded(r.client(&["ports"]), CMD_TIMEOUT).stdout;
         listed.starts_with(&format!("box:{port} -> localhost:"))
     });
+    assert_eq!(
+        listed.lines().count(),
+        1,
+        "only this session's port: {listed}"
+    );
+    assert!(!listed.contains(&format!("box:{theirs} ")), "{listed}");
     let local: u16 = listed
         .trim()
         .rsplit(':')
@@ -250,6 +271,7 @@ fn a_port_a_pane_listens_on_reaches_localhost_in_mode_auto() {
     s.read_to_string(&mut got).unwrap();
     assert_eq!(got, "hi-from-remote");
     fs::write(&stop_file, "").unwrap();
+    fs::write(&stop_theirs, "").unwrap();
     detach(h);
 }
 
@@ -260,21 +282,35 @@ fn grofe_open_in_a_remote_pane_runs_the_local_opener() {
     let opener = r.root().join("opener");
     fs::write(
         &opener,
-        format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", out.display()),
+        format!("#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n", out.display()),
     )
     .unwrap();
     fs::set_permissions(&opener, fs::Permissions::from_mode(0o755)).unwrap();
-    let h = r.attach(&[(grofe::open::OPENER_ENV, opener.to_str().unwrap())]);
-    let command = format!(
-        "{} open https://example.com/z?q=1",
-        env!("CARGO_BIN_EXE_grofe")
+    r.srv.cmd(&["new-session", "-d", "-s", "other"]).unwrap();
+    let mut h = r.attach(&[(grofe::open::OPENER_ENV, opener.to_str().unwrap())]);
+    let open = |session: &str, url: &str| {
+        let command = format!("{} open '{url}'", env!("CARGO_BIN_EXE_grofe"));
+        r.srv
+            .cmd(&["send-keys", "-t", session, &command, "Enter"])
+            .unwrap();
+    };
+    // Another session's url is not this client's; this one's opens.
+    open("other", "https://example.com/theirs");
+    open("main", "https://example.com/z?q=1");
+    wait_until("the url", WAIT, || out.exists());
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        "https://example.com/z?q=1\n"
     );
-    r.srv
-        .cmd(&["send-keys", "-t", "main", &command, "Enter"])
-        .unwrap();
-    wait_until("the local opener", WAIT, || out.exists());
-    wait_until("the url", WAIT, || {
-        fs::read_to_string(&out).is_ok_and(|u| u == "https://example.com/z?q=1")
+    // A local file asks first.
+    let doc = r.file("report.txt", "x");
+    let url = format!("file://{}", doc.display());
+    open("main", &url);
+    h.wait_for(&format!("open {url}? [y/N]"));
+    h.send("y\r");
+    wait_until("the file url", WAIT, || {
+        fs::read_to_string(&out).is_ok_and(|u| u.ends_with(&format!("{url}\n")))
     });
     detach(h);
 }
@@ -282,6 +318,8 @@ fn grofe_open_in_a_remote_pane_runs_the_local_opener() {
 #[test]
 fn the_sessions_agent_link_follows_the_agent_ssh_gave_the_proxy() {
     let r = Remote::new();
+    // The agent ssh gave the proxy: a live socket.
+    let _agent = std::os::unix::net::UnixListener::bind(r.root().join("agent.sock")).unwrap();
     let h = r.attach(&[("SSH_AUTH_SOCK", "/local/agent/not/sent")]);
     let id = r
         .srv
@@ -290,5 +328,20 @@ fn the_sessions_agent_link_follows_the_agent_ssh_gave_the_proxy() {
     let n: u32 = id.trim().trim_start_matches('$').parse().unwrap();
     let link = grofe::paths::agent_link(&r.srv.socket, n);
     assert_eq!(fs::read_link(&link).unwrap(), r.root().join("agent.sock"));
+    // The first pane, made over a control channel before the attach, has
+    // the link, and through it the agent.
+    let out = r.root().join("first-agent");
+    let command = format!("printf %s \"$SSH_AUTH_SOCK\" > {}", out.display());
+    r.srv
+        .cmd(&["send-keys", "-t", "main", &command, "Enter"])
+        .unwrap();
+    wait_until("the pane's agent", WAIT, || {
+        fs::read_to_string(&out).is_ok_and(|s| !s.is_empty())
+    });
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        link.display().to_string()
+    );
+    std::os::unix::net::UnixStream::connect(&link).expect("the agent through the link");
     detach(h);
 }

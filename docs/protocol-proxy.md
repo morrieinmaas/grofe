@@ -65,7 +65,9 @@ send `data` only while it has credit, and each `data` byte uses one; writers sen
 bytes per frame so channels interleave. A receiver that has consumed 131072 bytes (half the
 window) since it last granted credit sends `window` with that count. A receiver never stops
 reading frames for one slow channel (data for it waits in a buffer bounded by the credit it
-gave), so a stalled tcp channel cannot hold up the attach stream.
+gave), so a stalled tcp channel cannot hold up the attach stream. A peer that sends `data` past
+its credit has broken the protocol: the receiver drops what the channel holds and closes it
+with the reason `flow control: data past the window`.
 
 ## Liveness
 

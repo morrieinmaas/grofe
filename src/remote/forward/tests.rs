@@ -102,7 +102,7 @@ fn a_file_paste_split_across_reads_asks_and_uploads() {
         shown: "~/src".into(),
     };
     assert_eq!(
-        f.handle(Input::DirResolved(paste, dir), now),
+        f.handle(Input::DirResolved(paste.clone(), dir), now),
         [Action::Prompt(
             "upload 2 files (3.1 MB) to host:~/src? [y/N]".into()
         )]
@@ -111,12 +111,15 @@ fn a_file_paste_split_across_reads_asks_and_uploads() {
         f.handle(Input::Answer("y".into()), now),
         [Action::Upload {
             dir: "/home/u/src".into(),
-            files: vec![a, b]
+            paste: paste.clone()
         }]
     );
     assert_eq!(
         f.handle(
-            Input::Uploaded(Ok(vec!["/r/a b.txt".into(), "/r/it's.png".into()])),
+            Input::Uploaded {
+                paste,
+                result: Ok(vec!["/r/a b.txt".into(), "/r/it's.png".into()])
+            },
             now
         ),
         [Action::Send(
@@ -165,9 +168,10 @@ fn upload_on_skips_the_prompt_and_off_passes_through() {
         on.handle(Input::DirResolved(p.clone(), dir), now),
         [Action::Upload {
             dir: "/x".into(),
-            files: vec![a.clone()]
+            paste: p.clone()
         }]
     );
+    assert_eq!(p.files, std::slice::from_ref(&a));
     let mut off = fw(UploadMode::Off, ForwardMode::Ask);
     assert_eq!(
         off.handle(Input::Keys(paste.clone()), now),
@@ -195,7 +199,7 @@ fn missing_relative_and_directory_paths_pass_through() {
 }
 
 #[test]
-fn over_the_cap_sends_nothing() {
+fn over_the_cap_says_so_and_pastes_the_text() {
     let (_d, a, b) = files();
     let mut f = Forwarding::new(
         "host",
@@ -206,10 +210,34 @@ fn over_the_cap_sends_nothing() {
     );
     let paste = bracketed(format!("{} {}", escaped(&a), escaped(&b)).as_bytes());
     assert_eq!(
-        f.handle(Input::Keys(paste), Instant::now()),
-        [Action::Message(
-            "grofe: not uploading 2 files (3.1 MB): over remote-upload-max (1 MiB)".into()
-        )]
+        f.handle(Input::Keys(paste.clone()), Instant::now()),
+        [
+            Action::Message(
+                "grofe: not uploading 2 files (3.1 MB): over remote-upload-max (1 MiB)".into()
+            ),
+            Action::Send(paste)
+        ]
+    );
+}
+
+#[test]
+fn a_failed_upload_says_so_and_pastes_the_text() {
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = FilePaste {
+        files: vec!["/a".into()],
+        total: 1,
+        original: b"/a".to_vec(),
+    };
+    let failed = Input::Uploaded {
+        paste,
+        result: Err("upload of a failed: broken pipe".into()),
+    };
+    assert_eq!(
+        f.handle(failed, Instant::now()),
+        [
+            Action::Message("grofe: upload of a failed: broken pipe".into()),
+            Action::Send(b"\x1b[200~/a\x1b[201~".to_vec())
+        ]
     );
 }
 
@@ -361,4 +389,77 @@ fn open_url_events_open_and_a_refusal_is_a_message() {
         f.handle(Input::Opened(Err("bad".into())), now),
         [Action::Message("grofe: not opening a url: bad".into())]
     );
+}
+
+#[test]
+fn a_file_url_from_the_remote_asks_first_and_a_runnable_one_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("report.pdf");
+    std::fs::write(&doc, "x").unwrap();
+    let exe = dir.path().join("tool");
+    std::fs::write(&exe, "x").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let url = |p: &Path| format!("file://{}", p.display());
+    let open = |u: String| Input::Event(Event::OpenUrl { url: u, pane: None });
+    let mut f = fw(UploadMode::Ask, ForwardMode::Ask);
+    let now = Instant::now();
+    assert_eq!(
+        f.handle(open(url(&doc)), now),
+        [Action::Prompt(format!("open {}? [y/N]", url(&doc)))]
+    );
+    assert_eq!(
+        f.handle(Input::Answer("y".into()), now),
+        [Action::OpenUrl(url(&doc))]
+    );
+    f.handle(open(url(&doc)), now);
+    assert_eq!(f.handle(Input::Answer("".into()), now), []);
+    assert_eq!(
+        f.handle(open(url(&exe)), now),
+        [Action::Message(
+            "grofe: not opening a url: an executable file is not opened".into()
+        )]
+    );
+    // http and https open without asking, as before.
+    assert_eq!(
+        f.handle(open("https://a/".into()), now),
+        [Action::OpenUrl("https://a/".into())]
+    );
+}
+
+#[test]
+fn a_resync_replaces_what_the_events_said() {
+    let mut f = fw(UploadMode::Ask, ForwardMode::Auto);
+    let now = Instant::now();
+    assert_eq!(
+        f.handle(ports(1, &[3000]), now),
+        [Action::StartForward(3000)]
+    );
+    // Another session now: pane 1 is not in it, pane 2 listens on 4000.
+    assert_eq!(
+        f.handle(Input::Resync(vec![(pane(2), vec![4000])]), now),
+        [Action::StopForward(3000), Action::StartForward(4000)]
+    );
+    assert_eq!(f.forwarded(), [4000]);
+    // The same again changes nothing.
+    assert_eq!(
+        f.handle(Input::Resync(vec![(pane(2), vec![4000])]), now),
+        []
+    );
+}
+
+#[test]
+fn always_outlives_a_reread_of_the_options() {
+    let mut f = fw(UploadMode::Ask, ForwardMode::Ask);
+    let now = Instant::now();
+    f.handle(ports(1, &[3000]), now);
+    f.handle(Input::Answer("always".into()), now);
+    f.set_settings(Settings::default());
+    assert_eq!(f.settings().forward_ports, ForwardMode::Auto);
+    let mut g = fw(UploadMode::Ask, ForwardMode::Ask);
+    g.set_settings(Settings {
+        forward_ports: ForwardMode::Off,
+        ..Settings::default()
+    });
+    assert_eq!(g.settings().forward_ports, ForwardMode::Off);
 }

@@ -56,13 +56,10 @@ fn serve(chan: Channel, payload: &[u8], connect: &Connect) {
             Ok(stream) => bridge(chan, stream),
             Err(e) => chan.close(&e),
         },
-        OpenSpec::Tcp { port } => {
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            match TcpStream::connect_timeout(&addr, TCP_TIMEOUT) {
-                Ok(stream) => bridge(chan, stream),
-                Err(e) => chan.close(&format!("cannot connect to 127.0.0.1:{port}: {e}")),
-            }
-        }
+        OpenSpec::Tcp { port } => match connect_local(port) {
+            Ok(stream) => bridge(chan, stream),
+            Err(e) => chan.close(&format!("cannot connect to 127.0.0.1:{port}: {e}")),
+        },
         OpenSpec::Upload { dir, name } => match upload(&chan, &dir, &name) {
             Ok(path) => {
                 let mut c = chan.clone();
@@ -72,6 +69,19 @@ fn serve(chan: Channel, payload: &[u8], connect: &Connect) {
             }
             Err(e) => chan.close(&e),
         },
+    }
+}
+
+/// Connects to `port` on 127.0.0.1, or on ::1 when that is refused (a dev
+/// server that listens on IPv6 localhost only, as Vite does).
+fn connect_local(port: u16) -> io::Result<TcpStream> {
+    let v4 = SocketAddr::from(([127, 0, 0, 1], port));
+    match TcpStream::connect_timeout(&v4, TCP_TIMEOUT) {
+        Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
+            let v6 = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+            TcpStream::connect_timeout(&v6, TCP_TIMEOUT).map_err(|_| e)
+        }
+        other => other,
     }
 }
 
@@ -209,12 +219,21 @@ fn pass_hello(chan: &Channel, stream: &mut UnixStream) -> Result<(), String> {
             return Err("attach hello too long".to_string());
         }
     }
-    let agent = std::env::var("SSH_AUTH_SOCK").ok();
+    let agent = std::env::var("SSH_AUTH_SOCK")
+        .ok()
+        .filter(|a| live_agent(Path::new(a)));
     let out = match std::str::from_utf8(&line) {
         Ok(text) => add_agent(text, agent.as_deref()).into_bytes(),
         Err(_) => line,
     };
     stream.write_all(&out).map_err(|e| e.to_string())
+}
+
+/// Whether `path` is a socket something listens on. A detached
+/// `proxy --quic` keeps the agent of the ssh session that started it, which
+/// dies with that session: an attach must not repoint the link at it.
+fn live_agent(path: &Path) -> bool {
+    UnixStream::connect(path).is_ok()
 }
 
 /// `line` (an attach hello) with `SSH_AUTH_SOCK` set to `agent` in its
@@ -256,5 +275,39 @@ mod tests {
         assert_eq!(add_agent(hello, None), hello);
         assert_eq!(add_agent(hello, Some("relative")), hello);
         assert_eq!(add_agent("not json\n", Some("/b")), "not json\n");
+    }
+
+    #[test]
+    fn only_a_listening_socket_is_an_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&live).unwrap();
+        assert!(live_agent(&live));
+        // What a dead ssh session leaves: a socket file nobody listens on.
+        let dead = dir.path().join("dead.sock");
+        drop(std::os::unix::net::UnixListener::bind(&dead).unwrap());
+        assert!(dead.exists());
+        assert!(!live_agent(&dead));
+        let file = dir.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(!live_agent(&file));
+        assert!(!live_agent(&dir.path().join("missing")));
+    }
+
+    #[test]
+    fn a_tcp_channel_reaches_a_port_on_ipv6_localhost_only() {
+        let Ok(v6) = std::net::TcpListener::bind("[::1]:0") else {
+            return; // no IPv6 here
+        };
+        let port = v6.local_addr().unwrap().port();
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            return; // the v4 port is taken by something else
+        }
+        // 127.0.0.1:port is free (refused), so the connection goes to ::1.
+        let stream = connect_local(port).unwrap();
+        assert!(stream.peer_addr().unwrap().is_ipv6());
+        let v4 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = v4.local_addr().unwrap().port();
+        assert!(connect_local(port).unwrap().peer_addr().unwrap().is_ipv4());
     }
 }

@@ -134,7 +134,10 @@ pub enum Input {
     /// [`Action::ResolveDir`]'s result.
     DirResolved(FilePaste, UploadDir),
     /// [`Action::Upload`]'s result: the remote paths, or why it failed.
-    Uploaded(Result<Vec<String>, String>),
+    Uploaded {
+        paste: FilePaste,
+        result: Result<Vec<String>, String>,
+    },
     /// [`Action::StartForward`]'s result: the local port, or why not.
     Forwarded {
         remote: u16,
@@ -142,6 +145,10 @@ pub enum Input {
     },
     /// [`Action::OpenUrl`]'s result.
     Opened(Result<(), String>),
+    /// Every listening port of the attached session's panes, as `list-ports`
+    /// gives them: after a connect or a session switch, in place of what the
+    /// events said so far.
+    Resync(Vec<(PaneId, Vec<u16>)>),
     /// Time passing, so a held key or a paste with no end goes out.
     Tick,
 }
@@ -162,8 +169,8 @@ pub enum Action {
     OpenUrl(String),
     /// Find where the paste's files go ([`Input::DirResolved`]).
     ResolveDir(FilePaste),
-    /// Upload `files` into `dir` ([`Input::Uploaded`]).
-    Upload { dir: String, files: Vec<PathBuf> },
+    /// Upload the paste's files into `dir` ([`Input::Uploaded`]).
+    Upload { dir: String, paste: FilePaste },
     /// Forward local connections to remote `port` ([`Input::Forwarded`]).
     StartForward(u16),
     /// Stop forwarding remote `port`.
@@ -175,6 +182,8 @@ pub enum Action {
 enum Ask {
     Upload(FilePaste, UploadDir),
     Forward(u16),
+    /// A `file:` URL from the remote, to open here.
+    Open(String),
 }
 
 /// The forwarding state of one remote client.
@@ -196,6 +205,9 @@ pub struct Forwarding {
     forwarded: BTreeSet<u16>,
     /// Ports the user said no to, while they stay open.
     declined: BTreeSet<u16>,
+    /// The user answered `always`: auto for this client, whatever the
+    /// option says.
+    always: bool,
 }
 
 impl Forwarding {
@@ -211,6 +223,7 @@ impl Forwarding {
             pane_ports: HashMap::new(),
             forwarded: BTreeSet::new(),
             declined: BTreeSet::new(),
+            always: false,
         }
     }
 
@@ -219,7 +232,10 @@ impl Forwarding {
     }
 
     /// Replaces the settings (once the remote's options are read).
-    pub fn set_settings(&mut self, settings: Settings) {
+    pub fn set_settings(&mut self, mut settings: Settings) {
+        if self.always {
+            settings.forward_ports = ForwardMode::Auto;
+        }
         self.settings = settings;
     }
 
@@ -234,7 +250,18 @@ impl Forwarding {
         match input {
             Input::Keys(bytes) => self.keys(&bytes, now, &mut out),
             Input::Tick => self.tick(now, &mut out),
-            Input::Event(Event::OpenUrl { url, .. }) => out.push(Action::OpenUrl(url)),
+            Input::Event(Event::OpenUrl { url, .. }) => {
+                if !is_file_url(&url) {
+                    out.push(Action::OpenUrl(url));
+                } else {
+                    match text::local_file_to_open(&url) {
+                        Ok(()) => self.ask(Ask::Open(url), &mut out),
+                        Err(e) => {
+                            out.push(Action::Message(format!("grofe: not opening a url: {e}")))
+                        }
+                    }
+                }
+            }
             Input::Event(Event::PortsChanged { pane, ports }) => {
                 self.ports(pane, ports.into_iter().collect(), &mut out)
             }
@@ -243,20 +270,41 @@ impl Forwarding {
                 self.pane_ports.remove(&pane);
             }
             Input::Event(_) => {}
+            Input::Resync(panes) => {
+                let known: Vec<PaneId> = self.pane_ports.keys().copied().collect();
+                for pane in known {
+                    if !panes.iter().any(|(p, _)| *p == pane) {
+                        self.ports(pane, BTreeSet::new(), &mut out);
+                        self.pane_ports.remove(&pane);
+                    }
+                }
+                for (pane, ports) in panes {
+                    self.ports(pane, ports.into_iter().collect(), &mut out);
+                }
+            }
             Input::Answer(answer) => self.answer(&answer, &mut out),
             Input::DirResolved(paste, dir) => match self.settings.upload_paste {
                 UploadMode::On => out.push(Action::Upload {
                     dir: dir.path,
-                    files: paste.files,
+                    paste,
                 }),
                 UploadMode::Ask => self.ask(Ask::Upload(paste, dir), &mut out),
                 UploadMode::Off => send(&mut out, &bracketed(&paste.original)),
             },
-            Input::Uploaded(Ok(paths)) => {
+            Input::Uploaded {
+                result: Ok(paths), ..
+            } => {
                 let quoted: Vec<String> = paths.iter().map(|p| shell_quote(p)).collect();
                 send(&mut out, &bracketed(quoted.join(" ").as_bytes()));
             }
-            Input::Uploaded(Err(e)) => out.push(Action::Message(format!("grofe: {e}"))),
+            Input::Uploaded {
+                paste,
+                result: Err(e),
+            } => {
+                // The text stays: only the upload failed.
+                out.push(Action::Message(format!("grofe: {e}")));
+                send(&mut out, &bracketed(&paste.original));
+            }
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
                     "forwarding {}:{remote} to localhost:{local}",
@@ -345,12 +393,13 @@ impl Forwarding {
             return send(out, &bracketed(&content));
         };
         if total > self.settings.upload_max {
-            return out.push(Action::Message(format!(
+            out.push(Action::Message(format!(
                 "grofe: not uploading {} ({}): over remote-upload-max ({} MiB)",
                 count_files(files.len()),
                 human_size(total),
                 self.settings.upload_max >> 20
             )));
+            return send(out, &bracketed(&content));
         }
         out.push(Action::ResolveDir(FilePaste {
             files,
@@ -416,6 +465,7 @@ impl Forwarding {
         match ask {
             Ask::Upload(paste, dir) => upload_prompt(&self.host, paste, dir),
             Ask::Forward(port) => forward_prompt(&self.host, *port),
+            Ask::Open(url) => format!("open {url}? [y/N]"),
         }
     }
 
@@ -428,11 +478,12 @@ impl Forwarding {
         match ask {
             Ask::Upload(paste, dir) if yes => out.push(Action::Upload {
                 dir: dir.path,
-                files: paste.files,
+                paste,
             }),
             Ask::Upload(paste, _) => send(out, &bracketed(&paste.original)),
             Ask::Forward(port) if answer == "always" || answer == "a" => {
                 self.settings.forward_ports = ForwardMode::Auto;
+                self.always = true;
                 self.forward(port, out);
                 let (ports, rest): (Vec<Ask>, Vec<Ask>) = self
                     .asks
@@ -449,9 +500,17 @@ impl Forwarding {
             Ask::Forward(port) => {
                 self.declined.insert(port);
             }
+            Ask::Open(url) if yes => out.push(Action::OpenUrl(url)),
+            Ask::Open(_) => {}
         }
         self.show_next(out);
     }
+}
+
+/// Whether `url` is a `file:` URL.
+fn is_file_url(url: &str) -> bool {
+    url.split_once(':')
+        .is_some_and(|(s, _)| s.eq_ignore_ascii_case("file"))
 }
 
 /// Appends `bytes` to the last [`Action::Send`] in `out`, or adds one.
