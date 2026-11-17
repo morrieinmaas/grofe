@@ -64,8 +64,9 @@ pub fn run_slow(link: &Link, target: Option<&str>, action: Action) -> Option<Inp
         Action::ResolveDir(paste) => {
             Some(Input::DirResolved(paste, upload_dir(link.conn(), target)))
         }
-        Action::Upload { dir, files } => {
-            Some(Input::Uploaded(upload_files(link.conn(), &dir, &files)))
+        Action::Upload { dir, paste } => {
+            let result = upload_files(link.conn(), &dir, &paste.files);
+            Some(Input::Uploaded { paste, result })
         }
         _ => None,
     }

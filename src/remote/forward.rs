@@ -134,7 +134,10 @@ pub enum Input {
     /// [`Action::ResolveDir`]'s result.
     DirResolved(FilePaste, UploadDir),
     /// [`Action::Upload`]'s result: the remote paths, or why it failed.
-    Uploaded(Result<Vec<String>, String>),
+    Uploaded {
+        paste: FilePaste,
+        result: Result<Vec<String>, String>,
+    },
     /// [`Action::StartForward`]'s result: the local port, or why not.
     Forwarded {
         remote: u16,
@@ -162,8 +165,8 @@ pub enum Action {
     OpenUrl(String),
     /// Find where the paste's files go ([`Input::DirResolved`]).
     ResolveDir(FilePaste),
-    /// Upload `files` into `dir` ([`Input::Uploaded`]).
-    Upload { dir: String, files: Vec<PathBuf> },
+    /// Upload the paste's files into `dir` ([`Input::Uploaded`]).
+    Upload { dir: String, paste: FilePaste },
     /// Forward local connections to remote `port` ([`Input::Forwarded`]).
     StartForward(u16),
     /// Stop forwarding remote `port`.
@@ -247,16 +250,25 @@ impl Forwarding {
             Input::DirResolved(paste, dir) => match self.settings.upload_paste {
                 UploadMode::On => out.push(Action::Upload {
                     dir: dir.path,
-                    files: paste.files,
+                    paste,
                 }),
                 UploadMode::Ask => self.ask(Ask::Upload(paste, dir), &mut out),
                 UploadMode::Off => send(&mut out, &bracketed(&paste.original)),
             },
-            Input::Uploaded(Ok(paths)) => {
+            Input::Uploaded {
+                result: Ok(paths), ..
+            } => {
                 let quoted: Vec<String> = paths.iter().map(|p| shell_quote(p)).collect();
                 send(&mut out, &bracketed(quoted.join(" ").as_bytes()));
             }
-            Input::Uploaded(Err(e)) => out.push(Action::Message(format!("grofe: {e}"))),
+            Input::Uploaded {
+                paste,
+                result: Err(e),
+            } => {
+                // The text stays: only the upload failed.
+                out.push(Action::Message(format!("grofe: {e}")));
+                send(&mut out, &bracketed(&paste.original));
+            }
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
                     "forwarding {}:{remote} to localhost:{local}",
@@ -345,12 +357,13 @@ impl Forwarding {
             return send(out, &bracketed(&content));
         };
         if total > self.settings.upload_max {
-            return out.push(Action::Message(format!(
+            out.push(Action::Message(format!(
                 "grofe: not uploading {} ({}): over remote-upload-max ({} MiB)",
                 count_files(files.len()),
                 human_size(total),
                 self.settings.upload_max >> 20
             )));
+            return send(out, &bracketed(&content));
         }
         out.push(Action::ResolveDir(FilePaste {
             files,
@@ -428,7 +441,7 @@ impl Forwarding {
         match ask {
             Ask::Upload(paste, dir) if yes => out.push(Action::Upload {
                 dir: dir.path,
-                files: paste.files,
+                paste,
             }),
             Ask::Upload(paste, _) => send(out, &bracketed(&paste.original)),
             Ask::Forward(port) if answer == "always" || answer == "a" => {
