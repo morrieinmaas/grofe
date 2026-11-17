@@ -82,9 +82,10 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
   `grofe open <url>` yourself too. Only `http`, `https` and `file` URLs are opened. A `file` URL
   must name an existing local file; it is refused when it is a directory or bundle, executable,
   or a script or launcher type (`.command`, `.app`, `.sh` and similar), and otherwise asks
-  `open file:///...? [y/N]` first. Only URLs and ports from the session you are attached to
-  reach your machine. With no remote client attached, `grofe open` uses
-  the remote's own opener.
+  `open file:///...? [y/N]` first. Only URLs from a pane in the session you are attached
+  to, and ports from that session, reach your machine. Otherwise `grofe open` runs the
+  pane's own `BROWSER` (the one it had before grofe set its own), or the remote's `open` or
+  `xdg-open`.
 - **Files.** Drop files into your terminal (a bracketed paste of absolute local paths that all
   exist) and they are uploaded to the pane's directory on the remote, or to
   `~/.cache/grofe/uploads/`, and the remote paths are pasted instead, quoted for the shell.
@@ -163,7 +164,7 @@ machine: name, target, session, transport and `on` or `off`, with `-` for an uns
 - Port forwards bind `127.0.0.1` on your machine only. Whether uploads and forwards ask first is decided by your
   config, never the remote's.
 - `open-url` opens only http, https and existing local files (those after asking, never
-  executables or launchers), and only from the attached session; uploads never overwrite.
+  executables or launchers), and only from a pane in the attached session; uploads never overwrite.
 - The install checks `SHA256SUMS`, which comes from the same place as the archive: it proves the
   download is intact, and a mirror is trusted as much as its host. Release downloads use https.
 - Text a remote sends back in errors and prompts is shown with control characters escaped, so a
