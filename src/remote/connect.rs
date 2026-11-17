@@ -393,6 +393,8 @@ pub fn kill_child(mut child: Child) -> End {
 /// What a connect that got no usable hello means, from the hello error,
 /// ssh's exit status and its stderr.
 pub fn classify(err: ConnectError, status: Option<i32>, stderr: &str) -> ConnectError {
+    // Remote-controlled: shown on the terminal only once made safe.
+    let stderr = &ssh::sanitize(stderr);
     if status == Some(MISSING_STATUS) && stderr.contains(MISSING_MARKER) {
         return ConnectError::Missing;
     }
@@ -521,6 +523,10 @@ mod tests {
             classify(failed(), Some(1), "unknown command: proxy"),
             ConnectError::Incompatible(_)
         ));
+        match classify(failed(), Some(1), "old\x1b]0;pwned\x07") {
+            ConnectError::Incompatible(why) => assert!(!why.contains('\x1b'), "{why:?}"),
+            other => panic!("{other:?}"),
+        }
         match classify(failed(), Some(255), "ssh: Could not resolve hostname") {
             ConnectError::Failed(why) => assert!(why.contains("resolve"), "{why}"),
             other => panic!("{other:?}"),

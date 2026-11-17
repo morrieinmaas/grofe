@@ -58,18 +58,68 @@ pub fn release_file_url(base: &str, version: &str, file: &str) -> String {
     format!("{}/v{version}/{file}", base.trim_end_matches('/'))
 }
 
-/// Reads a release file: `curl -fsSL` for http(s), else from disk.
+/// Whether `url` is `http://` to a loopback literal (`127.0.0.0/8`,
+/// `[::1]`, `localhost`), the one place plain http is taken.
+pub fn loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(inner) => match inner.split_once(']') {
+            Some((h, after)) if after.is_empty() || after.starts_with(':') => h,
+            _ => return false,
+        },
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Reads a release file: `curl` for `https://` (TLS 1.2 or later, and
+/// https only, redirects included), else from disk. Plain `http://` is
+/// refused, since the archive and its sums would both come over it
+/// unchecked, except to a loopback address (the container e2e serves its
+/// release dir there), and then without following redirects.
 pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    if url.starts_with("http://") || url.starts_with("https://") {
+    let curl: &[&str] = if url.starts_with("https://") {
+        &[
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--tlsv1.2",
+            "-fsSL",
+        ]
+    } else if loopback_http(url) {
+        // A local test or mirror server: http, no redirects (no -L).
+        &["--proto", "=http", "-fsS"]
+    } else if url.starts_with("http://") {
+        return Err(format!(
+            "refusing {}: release downloads must use https (plain http only on a loopback address)",
+            ssh::sanitize(url)
+        ));
+    } else {
+        &[]
+    };
+    if !curl.is_empty() {
         let out = Command::new("curl")
-            .args(["-fsSL", url])
+            .args(curl)
+            .args(["--", url])
             .stdin(Stdio::null())
             .output()
             .map_err(|e| format!("cannot run curl: {e}"))?;
         if !out.status.success() {
             return Err(format!(
-                "downloading {url} failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
+                "downloading {} failed: {}",
+                ssh::sanitize(url),
+                ssh::sanitize(String::from_utf8_lossy(&out.stderr).trim())
             ));
         }
         return Ok(out.stdout);
@@ -111,10 +161,10 @@ pub fn remote_uname(target: &Target) -> Result<String, String> {
         return Err(format!(
             "uname on {} failed: {}",
             target.host_name(),
-            String::from_utf8_lossy(&out.stderr).trim()
+            ssh::sanitize(String::from_utf8_lossy(&out.stderr).trim())
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(ssh::sanitize(String::from_utf8_lossy(&out.stdout).trim()))
 }
 
 /// The question asked before an install.
@@ -132,7 +182,7 @@ fn approve(install: &Install, prompt: &str) -> bool {
         Install::Yes | Install::From(_) => true,
         Install::No => false,
         Install::Ask => {
-            if !io::stdin().is_terminal() {
+            if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
                 return false;
             }
             let mut err = io::stderr();
@@ -178,10 +228,18 @@ fn unpack(archive: &[u8], member: &str) -> Result<Vec<u8>, String> {
     if !out.status.success() {
         return Err(format!(
             "unpacking the archive failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            ssh::sanitize(String::from_utf8_lossy(&out.stderr).trim())
         ));
     }
-    std::fs::read(dir.0.join(member)).map_err(|e| format!("reading {member}: {e}"))
+    // The member must be a plain file: an archive whose `grofe` is a
+    // symlink would make this read a file of this machine's choosing.
+    let path = dir.0.join(member);
+    match std::fs::symlink_metadata(&path) {
+        Ok(m) if m.file_type().is_file() => {}
+        Ok(_) => return Err(format!("{member} in the archive is not a plain file")),
+        Err(e) => return Err(format!("reading {member}: {e}")),
+    }
+    std::fs::read(&path).map_err(|e| format!("reading {member}: {e}"))
 }
 
 /// A private directory under the temp dir, removed when dropped.
@@ -194,7 +252,9 @@ impl TempDir {
             .map_or(0, |d| d.as_nanos());
         let dir =
             std::env::temp_dir().join(format!("grofe-install-{}-{nanos}", std::process::id()));
-        std::fs::create_dir(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+            .create(&dir)
+            .map_err(|e| format!("creating {}: {e}", dir.display()))?;
         Ok(TempDir(dir))
     }
 }
@@ -207,7 +267,11 @@ impl Drop for TempDir {
 
 /// Copies `binary` to the remote's versioned install directory.
 fn upload(target: &Target, binary: &[u8]) -> Result<(), String> {
-    let remote = ssh::install_command(env!("CARGO_PKG_VERSION"));
+    let remote = ssh::install_command(
+        env!("CARGO_PKG_VERSION"),
+        binary.len(),
+        &hex(&sha256(binary)),
+    );
     let mut child = Command::new(ssh::program())
         .args(ssh::argv(target, SshOpts::default(), &remote))
         .stdin(Stdio::piped())
@@ -227,7 +291,7 @@ fn upload(target: &Target, binary: &[u8]) -> Result<(), String> {
         return Err(format!(
             "installing on {} failed: {}",
             target.host_name(),
-            String::from_utf8_lossy(&out.stderr).trim()
+            ssh::sanitize(String::from_utf8_lossy(&out.stderr).trim())
         ));
     }
     Ok(())
@@ -253,6 +317,12 @@ pub fn connect(target: &Target, install: &Install, release_url: &str) -> Result<
         return Err(format!(
             "{why} ({host}); run with --install to install v{version} there"
         ));
+    }
+    if !matches!(install, Install::From(_)) && release_url != DEFAULT_RELEASE_URL {
+        eprintln!(
+            "grofe: downloading from {} (not the default release URL)",
+            ssh::sanitize(release_url)
+        );
     }
     let binary = binary(install, release_url, &uname)?;
     upload(target, &binary)?;
@@ -417,6 +487,71 @@ mod tests {
             question("box", "Linux x86_64", "0.3.1"),
             "grofe is not installed on box (linux x86_64). Install v0.3.1 to ~/.local/share/grofe/bin/0.3.1/? [y/N] "
         );
+    }
+
+    #[test]
+    fn a_symlinked_member_is_refused_and_a_plain_one_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let stage = dir.path().join("grofe-v1-x");
+        std::fs::create_dir(&stage).unwrap();
+        let tar = |name: &str| {
+            let out = dir.path().join(name);
+            let ok = Command::new("tar")
+                .arg("czf")
+                .arg(&out)
+                .arg("-C")
+                .arg(dir.path())
+                .arg("grofe-v1-x")
+                .status()
+                .unwrap();
+            assert!(ok.success());
+            std::fs::read(out).unwrap()
+        };
+        std::os::unix::fs::symlink("/etc/hosts", stage.join("grofe")).unwrap();
+        let err = unpack(&tar("link.tar.gz"), "grofe-v1-x/grofe").unwrap_err();
+        assert!(err.contains("not a plain file"), "{err}");
+        std::fs::remove_file(stage.join("grofe")).unwrap();
+        std::fs::write(stage.join("grofe"), b"bin").unwrap();
+        assert_eq!(
+            unpack(&tar("plain.tar.gz"), "grofe-v1-x/grofe").unwrap(),
+            b"bin"
+        );
+    }
+
+    #[test]
+    fn plain_http_is_taken_only_on_loopback() {
+        for ok in [
+            "http://127.0.0.1:8080/r",
+            "http://127.1.2.3/r",
+            "http://localhost:9/r",
+            "http://[::1]:9/r",
+            "http://[::1]/r",
+        ] {
+            assert!(loopback_http(ok), "{ok}");
+        }
+        for bad in [
+            "http://example.invalid/r",
+            "http://127.0.0.1.evil.example/r",
+            "http://localhost.evil.example/r",
+            "http://evil@127.0.0.1/r",
+            "http://128.0.0.1/r",
+            "http://[::2]/r",
+            "http://[::1]x/r",
+            "https://127.0.0.1/r",
+            "file:///r",
+        ] {
+            assert!(!loopback_http(bad), "{bad}");
+        }
+        // A loopback http URL is fetched (nothing listens on port 9, so
+        // curl fails) rather than refused.
+        let err = fetch("http://127.0.0.1:9/v1/SHA256SUMS").unwrap_err();
+        assert!(!err.contains("must use https"), "{err}");
+    }
+
+    #[test]
+    fn plain_http_downloads_are_refused() {
+        let err = fetch("http://example.invalid/v1/SHA256SUMS").unwrap_err();
+        assert!(err.contains("https"), "{err}");
     }
 
     #[test]
