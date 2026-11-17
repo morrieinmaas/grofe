@@ -442,6 +442,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
         Command::ChooseScratchpad => scratch::choose(state, ctx),
         Command::OpenUrl(c) => server::remote::open_url(state, ctx, c),
         Command::ListPorts(c) => server::remote::list_ports(state, ctx, c),
+        Command::SetClientInfo(c) => server::remote::set_client_info(state, ctx, c),
         Command::DisplayMenu(c) => menu::display_menu(state, ctx, c),
         Command::DisplayPanes(c) => menu::display_panes(state, ctx, c),
         Command::ConfirmBefore(c) => menu::confirm_before(state, ctx, c),

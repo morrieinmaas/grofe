@@ -1930,6 +1930,27 @@ set-buffer value-after-positional => err command set-buffer: too many arguments 
 set-buffer dashdash-flag => ok 4a7b3368
 set-buffer flag-dashdash-positional => err command set-buffer: unknown flag -d
 set-buffer letters => a=ok d19a5e41 a=ok 5c01c2b4 b=err command set-buffer: -b expects an argument b=ok 56899eb1 c=U c=U d=U d=U e=U e=U f=U f=U g=U g=U h=U h=U i=U i=U j=U j=U k=U k=U l=U l=U m=U m=U n=err command set-buffer: -n expects an argument n=ok 55becbad o=U o=U p=U p=U q=U q=U r=U r=U s=U s=U t=err command set-buffer: -t expects an argument t=ok c0c5c76d u=U u=U v=U v=U w=ok f44f4d69 w=ok b887a73e x=U x=U y=U y=U z=U z=U A=U A=U B=U B=U C=U C=U D=U D=U E=U E=U F=U F=U G=U G=U H=U H=U I=U I=U J=U J=U K=U K=U L=U L=U M=U M=U N=U N=U O=U O=U P=U P=U Q=U Q=U R=U R=U S=U S=U T=U T=U U=U U=U V=U V=U W=U W=U X=U X=U Y=U Y=U Z=U Z=U 
+set-client-info none => err command set-client-info: missing argument
+set-client-info one => err command set-client-info: too few arguments (need at least 2)
+set-client-info two => ok c47a11cc
+set-client-info many => err command set-client-info: too many arguments (need at most 2)
+set-client-info long => err command set-client-info: invalid flag --
+set-client-info dashdash => err command set-client-info: too few arguments (need at least 2)
+set-client-info target => err command set-client-info: too few arguments (need at least 2)
+set-client-info target-extra => err command set-client-info: too few arguments (need at least 2)
+set-client-info target-glued => err command set-client-info: too few arguments (need at least 2)
+set-client-info target-num => err command set-client-info: too few arguments (need at least 2)
+set-client-info combined-bool => err command set-client-info: unknown flag -d
+set-client-info combined-bool-rev => err command set-client-info: unknown flag -P
+set-client-info combined-value => err command set-client-info: unknown flag -d
+set-client-info combined-glued => err command set-client-info: unknown flag -d
+set-client-info repeated-bool => err command set-client-info: unknown flag -d
+set-client-info repeated-value => err command set-client-info: too few arguments (need at least 2)
+set-client-info flag-after-positional => ok e5b5c274
+set-client-info value-after-positional => err command set-client-info: too many arguments (need at most 2)
+set-client-info dashdash-flag => err command set-client-info: too few arguments (need at least 2)
+set-client-info flag-dashdash-positional => err command set-client-info: unknown flag -d
+set-client-info letters => a=U a=U b=U b=U c=U c=U d=U d=U e=U e=U f=U f=U g=U g=U h=U h=U i=U i=U j=U j=U k=U k=U l=U l=U m=U m=U n=U n=U o=U o=U p=U p=U q=U q=U r=U r=U s=U s=U t=err command set-client-info: -t expects an argument t=err command set-client-info: too few arguments (need at least 2) u=U u=U v=U v=U w=U w=U x=U x=U y=U y=U z=U z=U A=U A=U B=U B=U C=U C=U D=U D=U E=U E=U F=U F=U G=U G=U H=U H=U I=U I=U J=U J=U K=U K=U L=U L=U M=U M=U N=U N=U O=U O=U P=U P=U Q=U Q=U R=U R=U S=U S=U T=U T=U U=U U=U V=U V=U W=U W=U X=U X=U Y=U Y=U Z=U Z=U 
 set-environment none => ok 219f94f3
 set-environment one => ok 67b459ca
 set-environment two => ok 4f9e1928

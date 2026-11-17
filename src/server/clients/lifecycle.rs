@@ -226,8 +226,19 @@ pub struct ClientEntry {
     /// When the toast last shown here expires, as [`deadline`] last saw
     /// it: the toast is gone by then, so [`tick`] cannot work it out.
     pub(super) toast_until: std::cell::Cell<Option<Instant>>,
+    /// What a remote client said about itself (`set-client-info`).
+    pub(crate) info: ClientInfo,
     pub(super) outbox: Outbox,
     pub(super) exit: Option<oneshot::Sender<String>>,
+}
+
+/// `set-client-info`'s values: `#{client_rtt}` and `#{client_machines}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientInfo {
+    /// The smoothed round trip time, in milliseconds.
+    pub rtt_ms: Option<u64>,
+    /// The client's machine list, as it wants it shown.
+    pub machines: Option<String>,
 }
 
 /// What `refresh-client -f`, `attach-session -f -r` and `switch-client -r`
@@ -542,6 +553,7 @@ pub fn attach(state: &mut State, req: AttachRequest) -> Result<Accepted, String>
             flags,
             mouse_modes: None,
             dirty: true,
+            info: ClientInfo::default(),
             toast_until: std::cell::Cell::new(None),
             outbox,
             exit: Some(exit_tx),

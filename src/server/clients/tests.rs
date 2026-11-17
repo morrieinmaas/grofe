@@ -302,6 +302,7 @@ fn state_with_client() -> (State, ClientId) {
             flags: ClientFlags::default(),
             mouse_modes: None,
             dirty: false,
+            info: ClientInfo::default(),
             toast_until: std::cell::Cell::new(None),
             outbox,
             exit: None,

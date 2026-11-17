@@ -1255,6 +1255,18 @@ Style of popups.
 
 Default: `default`
 
+## predictive-echo
+
+Whether grofe -r draws typed characters at once, underlined, before the remote echoes them: auto does so when the round trip is 50 ms or more, on always, off never.
+
+- **TOML key**: `predictive-echo` (string)
+- **Scope**: global
+- **Values**: `auto`, `on`, `off`
+
+Default: `auto`
+
+grofe only: tmux does not have this option.
+
 ## prefix
 
 The prefix key.

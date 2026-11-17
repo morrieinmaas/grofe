@@ -1732,6 +1732,17 @@ pub(super) fn parse_open_url(flags: &Args) -> Result<Command, ParseError> {
     Ok(Command::OpenUrl(super::OpenUrl { url: url.clone() }))
 }
 
+pub(super) fn parse_set_client_info(flags: &Args) -> Result<Command, ParseError> {
+    let [key, value] = flags.positionals.as_slice() else {
+        return Err(ParseError::MissingArgument("set-client-info".to_string()));
+    };
+    Ok(Command::SetClientInfo(super::SetClientInfo {
+        client: flags.val('t'),
+        key: key.clone(),
+        value: value.clone(),
+    }))
+}
+
 pub(super) fn parse_show_scratchpad(flags: &Args) -> Result<Command, ParseError> {
     let word = flags
         .positionals

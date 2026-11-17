@@ -101,6 +101,7 @@ const VERBS: &[&str] = &[
     "send-prefix",
     "server-access",
     "set-buffer",
+    "set-client-info",
     "set-environment",
     "set-hook",
     "set-option",

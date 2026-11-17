@@ -52,6 +52,8 @@ remote-transport = "ssh"
   set by built-in defaults
 remote-udp-ports = "60001-61000"
   set by built-in defaults
+predictive-echo = "auto"
+  set by built-in defaults
 remote-quic-idle = 604800
   set by built-in defaults
 set-clipboard = "external"

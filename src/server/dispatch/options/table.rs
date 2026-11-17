@@ -110,6 +110,7 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "remote-transport",
     "remote-udp-ports",
     "remote-quic-idle",
+    "predictive-echo",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -429,6 +430,14 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::String,
         scope: OptionScope::Global,
         default: "60001-61000",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "predictive-echo",
+        doc: "Whether grofe -r draws typed characters at once, underlined, before the remote echoes them: auto does so when the round trip is 50 ms or more, on always, off never.",
+        kind: Kind::Choice(&["auto", "on", "off"]),
+        scope: OptionScope::Global,
+        default: "auto",
         ..Builtin::PLAIN
     },
     Builtin {

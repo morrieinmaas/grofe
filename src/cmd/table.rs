@@ -423,6 +423,7 @@ pub(super) static ROWS: &[Row] = &[
             all: f.on('a'),
         }))
     }),
+    row("set-client-info", "", "t:", 2, parse::parse_set_client_info).min(2),
     row("drag-pane", "", "M", 0, parse::parse_drag_pane),
     row("place-pane", "", "t:X:Y:", 0, parse::parse_place_pane),
     row(

@@ -1373,6 +1373,16 @@ pub struct ListPorts {
     pub all: bool,
 }
 
+/// `set-client-info [-t client] <key> <value>` (grofe's own): what a remote
+/// client tells the server about itself (`rtt` in milliseconds, `machines`
+/// as free text), shown by `#{client_rtt}` and `#{client_machines}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetClientInfo {
+    pub client: Option<String>,
+    pub key: String,
+    pub value: String,
+}
+
 /// `new-scratchpad` (grofe's own; tmux 3.7b has no such verb): opens a hidden
 /// scratchpad pane, running the shell command or the default shell in `-c`.
 /// Hidden scratchpads are kept server-wide.
@@ -1860,4 +1870,5 @@ pub enum Command {
     KeyMenu(KeyMenu),
     OpenUrl(OpenUrl),
     ListPorts(ListPorts),
+    SetClientInfo(SetClientInfo),
 }

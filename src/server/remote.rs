@@ -25,14 +25,14 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
-use crate::cmd::{ListPanes, ListPorts, OpenUrl};
+use crate::cmd::{ListPanes, ListPorts, OpenUrl, SetClientInfo};
 use crate::compat::Identity;
 use crate::event::Event;
 use crate::paths;
 use crate::protocol::ClientCtx;
 use crate::server::dispatch::options::{self, Owner};
 use crate::server::pane::procinfo;
-use crate::server::{Job, State};
+use crate::server::{Job, State, clients};
 use crate::types::{PaneId, SessionId};
 
 /// How often the poller looks: `ports-changed` is "at most every 2 s".
@@ -155,6 +155,33 @@ pub fn open_url(state: &mut State, ctx: &ClientCtx, c: OpenUrl) -> Result<String
         url: c.url,
         pane: ctx.pane,
     });
+    Ok(String::new())
+}
+
+/// `set-client-info [-t client] <key> <value>`: stores what a remote client
+/// says about itself (`rtt` in whole milliseconds, `machines` as text) for
+/// `#{client_rtt}` and `#{client_machines}`, and redraws its status line.
+pub fn set_client_info(
+    state: &mut State,
+    ctx: &ClientCtx,
+    c: SetClientInfo,
+) -> Result<String, String> {
+    let id = clients::target_client(state, ctx, c.client.as_deref())?;
+    let Some(client) = state.clients.get_mut(&id) else {
+        return Err("no current client".to_string());
+    };
+    match c.key.as_str() {
+        "rtt" => {
+            let ms = c
+                .value
+                .parse::<u64>()
+                .map_err(|_| format!("set-client-info: rtt is whole milliseconds: {}", c.value))?;
+            client.info.rtt_ms = Some(ms);
+        }
+        "machines" => client.info.machines = Some(c.value),
+        key => return Err(format!("set-client-info: unknown key: {key}")),
+    }
+    clients::refresh(state, id, true);
     Ok(String::new())
 }
 
