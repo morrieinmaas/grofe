@@ -116,6 +116,7 @@ pub trait Prompt: Send {
 /// What a hook can reach.
 pub struct HookCtx<'a> {
     link: &'a Link,
+    conn: &'a Conn,
     host: &'a str,
     hello: &'a str,
     tty: &'a str,
@@ -156,6 +157,21 @@ impl HookCtx<'_> {
     /// Raises `prompt`, replacing one already up.
     pub fn prompt(&mut self, prompt: Box<dyn Prompt>) {
         *self.prompt = Some(prompt);
+    }
+
+    /// Takes the prompt down unanswered, if one is up, and redraws.
+    pub fn close_prompt(&mut self) {
+        if self.prompt.take().is_some() {
+            self.redraw();
+        }
+    }
+
+    /// Sends `bytes` to the server as typed input, outside [`Hook::on_input`]
+    /// (a result that arrives later).
+    pub fn send(&self, bytes: Vec<u8>) {
+        if !bytes.is_empty() {
+            self.conn.send(Frame::Input(bytes));
+        }
     }
 
     /// Whether a prompt is up.
@@ -399,14 +415,21 @@ impl Loop {
             return T::default();
         };
         let link = c.link.clone();
+        let had_prompt = self.overlay.is_some();
         let mut cx = HookCtx {
             link: &link,
+            conn: c,
             host: &a.host,
             hello: &self.params.hello,
             tty: client_tty(),
             prompt: &mut self.overlay,
         };
-        f(&mut a.hooks, &mut cx)
+        let out = f(&mut a.hooks, &mut cx);
+        // A prompt raised by a tick or an event shows at once.
+        if !had_prompt {
+            self.draw_prompt();
+        }
+        out
     }
 
     fn input(&mut self, a: &mut RemoteAttach, bytes: Vec<u8>) {
