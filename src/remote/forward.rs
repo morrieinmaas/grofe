@@ -225,6 +225,12 @@ pub struct Forwarding {
     forwarded: BTreeSet<u16>,
     /// Ports the user said no to, while they stay open.
     declined: BTreeSet<u16>,
+    /// Keys typed while a file paste is on its way (its directory, its
+    /// prompt, its upload): they go after the pasted text, so an Enter
+    /// cannot run a command before the paths are in it.
+    // ponytail: a paste whose answer never comes (another hook's prompt
+    // took its place) holds the keys after it until the client ends.
+    queued: Option<Vec<u8>>,
 }
 
 impl Forwarding {
@@ -240,6 +246,7 @@ impl Forwarding {
             pane_ports: HashMap::new(),
             forwarded: BTreeSet::new(),
             declined: BTreeSet::new(),
+            queued: None,
         }
     }
 
@@ -290,20 +297,24 @@ impl Forwarding {
                     self.ports(pane, ports.into_iter().collect(), &mut out);
                 }
             }
-            Input::Answer(answer) => self.answer(&answer, &mut out),
+            Input::Answer(answer) => self.answer(&answer, now, &mut out),
             Input::DirResolved(paste, dir) => match self.settings.upload_paste {
                 UploadMode::On => out.push(Action::Upload {
                     dir: dir.path,
                     paste,
                 }),
                 UploadMode::Ask => self.ask(Ask::Upload(paste, dir), &mut out),
-                UploadMode::Off => send(&mut out, &bracketed(&paste.original)),
+                UploadMode::Off => {
+                    send(&mut out, &bracketed(&paste.original));
+                    self.release(now, &mut out);
+                }
             },
             Input::Uploaded {
                 result: Ok(paths), ..
             } => {
                 let quoted: Vec<String> = paths.iter().map(|p| shell_quote(p)).collect();
                 send(&mut out, &bracketed(quoted.join(" ").as_bytes()));
+                self.release(now, &mut out);
             }
             Input::Uploaded {
                 paste,
@@ -312,6 +323,7 @@ impl Forwarding {
                 // The text stays: only the upload failed.
                 out.push(Action::Message(format!("grofe: {e}")));
                 send(&mut out, &bracketed(&paste.original));
+                self.release(now, &mut out);
             }
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
@@ -335,6 +347,9 @@ impl Forwarding {
     }
 
     fn keys(&mut self, bytes: &[u8], now: Instant, out: &mut Vec<Action>) {
+        if let Some(queued) = &mut self.queued {
+            return queued.extend_from_slice(bytes);
+        }
         if self.held.is_empty() {
             self.held_since = Some(now);
         }
@@ -347,6 +362,10 @@ impl Forwarding {
                     self.paste_since = None;
                     self.held_since = Some(now);
                     self.paste(content, out);
+                    if let Some(queued) = &mut self.queued {
+                        queued.append(&mut self.held);
+                        return;
+                    }
                     continue;
                 }
                 if self.held.len() > MAX_PASTE {
@@ -409,6 +428,7 @@ impl Forwarding {
             )));
             return send(out, &bracketed(&content));
         }
+        self.queued = Some(Vec::new());
         out.push(Action::ResolveDir(FilePaste {
             files,
             total,
@@ -477,7 +497,15 @@ impl Forwarding {
         }
     }
 
-    fn answer(&mut self, answer: &str, out: &mut Vec<Action>) {
+    /// The file paste is done (pasted, or its text is): the keys typed
+    /// meanwhile go now.
+    fn release(&mut self, now: Instant, out: &mut Vec<Action>) {
+        if let Some(queued) = self.queued.take() {
+            self.keys(&queued, now, out);
+        }
+    }
+
+    fn answer(&mut self, answer: &str, now: Instant, out: &mut Vec<Action>) {
         let Some(ask) = self.asks.pop_front() else {
             return;
         };
@@ -488,7 +516,10 @@ impl Forwarding {
                 dir: dir.path,
                 paste,
             }),
-            Ask::Upload(paste, _) => send(out, &bracketed(&paste.original)),
+            Ask::Upload(paste, _) => {
+                send(out, &bracketed(&paste.original));
+                self.release(now, out);
+            }
             Ask::Forward(port) if answer == "always" || answer == "a" => {
                 self.settings.forward_ports = ForwardMode::Auto;
                 self.forward(port, out);

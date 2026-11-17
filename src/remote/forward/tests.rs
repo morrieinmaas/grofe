@@ -466,3 +466,65 @@ fn settings_come_from_the_options_given_with_defaults_for_the_rest() {
     );
     assert_eq!(Settings::from_options(|_| None), Settings::default());
 }
+
+#[test]
+fn keys_typed_during_a_file_paste_go_after_its_text() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    // The paste and an Enter in one read, then more keys while it uploads.
+    let mut read = bracketed(escaped(&a).as_bytes());
+    read.extend(b"\r");
+    let got = f.handle(Input::Keys(read), now);
+    let [Action::ResolveDir(paste)] = got.as_slice() else {
+        panic!("{got:?}");
+    };
+    let paste = paste.clone();
+    assert_eq!(f.handle(keys(b" x"), now), []);
+    let dir = UploadDir {
+        path: "/r".into(),
+        shown: "/r".into(),
+    };
+    let got = f.handle(Input::DirResolved(paste.clone(), dir), now);
+    assert!(matches!(got.as_slice(), [Action::Upload { .. }]), "{got:?}");
+    assert_eq!(f.handle(keys(b"y"), now), []);
+    assert_eq!(
+        f.handle(
+            Input::Uploaded {
+                paste,
+                result: Ok(vec!["/r/a b.txt".into()])
+            },
+            now
+        ),
+        [Action::Send(
+            b"\x1b[200~'/r/a b.txt'\x1b[201~\r xy".to_vec()
+        )]
+    );
+    // Then keys go straight through again.
+    assert_eq!(f.handle(keys(b"z"), now), [Action::Send(b"z".to_vec())]);
+}
+
+#[test]
+fn keys_wait_for_a_declined_upload_too() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::Ask, ForwardMode::Ask);
+    let got = f.handle(Input::Keys(bracketed(escaped(&a).as_bytes())), now);
+    let [Action::ResolveDir(paste)] = got.as_slice() else {
+        panic!("{got:?}");
+    };
+    let dir = UploadDir {
+        path: "/r".into(),
+        shown: "/r".into(),
+    };
+    f.handle(Input::DirResolved(paste.clone(), dir), now);
+    // (While the prompt is up the client sends keys to it; these came
+    // before it showed.)
+    assert_eq!(f.handle(keys(b"ls"), now), []);
+    let mut want = bracketed(escaped(&a).as_bytes());
+    want.extend(b"ls");
+    assert_eq!(
+        f.handle(Input::Answer("n".into()), now),
+        [Action::Send(want)]
+    );
+}
