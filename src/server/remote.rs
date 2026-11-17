@@ -213,7 +213,7 @@ pub fn set_client_info(
 
 /// `list-ports [-a] [-t target]`: `<pane> <port>,<port>` for each pane of the
 /// window (or of every window) whose processes listen on a TCP port.
-pub fn list_ports(state: &State, ctx: &ClientCtx, c: ListPorts) -> Result<String, String> {
+pub fn list_ports(state: &mut State, ctx: &ClientCtx, c: ListPorts) -> Result<String, String> {
     let panes = ListPanes {
         target: c.target,
         format: None,
@@ -226,19 +226,30 @@ pub fn list_ports(state: &State, ctx: &ClientCtx, c: ListPorts) -> Result<String
         .into_iter()
         .filter_map(|(_, id)| Some((id, state.model.panes.get(&id)?.handle.pid()? as i32)))
         .collect();
-    // ponytail: an explicit verb, so it scans once here on the actor, for
-    // every listed pane together; the format and the poller never do.
-    let roots: Vec<i32> = pids.iter().map(|(_, pid)| *pid).collect();
-    let mut out = String::new();
-    for ((id, _), ports) in pids.iter().zip(procinfo::listening_ports(&roots)) {
-        if let Some(p) = state.model.panes.get(id) {
-            p.handle.set_ports(ports.clone());
-        }
-        if !ports.is_empty() {
-            out.push_str(&format!("{id} {}\n", join(&ports)));
-        }
-    }
-    Ok(out)
+    // The scan reads /proc (or libproc) for every listed pane: off the
+    // actor, as the poller's, with the answer sent from a job.
+    // ponytail: a deferred answer, so as with `run-shell`, output of commands
+    // before it in the same request is not printed.
+    let reply = crate::server::dispatch::defer_reply(state);
+    let jobs = state.jobs.clone();
+    tokio::task::spawn_blocking(move || {
+        let roots: Vec<i32> = pids.iter().map(|(_, pid)| *pid).collect();
+        let scanned = procinfo::listening_ports(&roots);
+        let job: Job = Box::new(move |state| {
+            let mut out = String::new();
+            for ((id, _), ports) in pids.iter().zip(scanned) {
+                if let Some(p) = state.model.panes.get(id) {
+                    p.handle.set_ports(ports.clone());
+                }
+                if !ports.is_empty() {
+                    out.push_str(&format!("{id} {}\n", join(&ports)));
+                }
+            }
+            let _ = reply.send(Ok(out));
+        });
+        let _ = jobs.blocking_send(job);
+    });
+    Ok(String::new())
 }
 
 /// `#{pane_ports}`: the ports comma-separated.
