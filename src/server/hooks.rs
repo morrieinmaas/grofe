@@ -1132,7 +1132,10 @@ fn client_event(state: &mut State, id: ClientId, name: &'static str) {
                     rows,
                 })
             }
-            "client-session-changed" => Some(Event::ClientSessionChanged { client, session }),
+            "client-session-changed" => {
+                state.events.client_moved(id, session);
+                Some(Event::ClientSessionChanged { client, session })
+            }
             _ => None,
         };
         if let Some(event) = event {
@@ -2031,6 +2034,12 @@ pub fn shell_env(state: &State, session: Option<SessionId>) -> Vec<(String, Stri
     env.extend(set);
     crate::compat::with_tmux_link(&mut env);
     env
+}
+
+/// The global environment's `name`, unless unset or hidden.
+pub fn global_var(state: &State, name: &str) -> Option<String> {
+    let global = state.hooks.global();
+    global.get(name).filter(|v| !v.hidden)?.value.clone()
 }
 
 fn visible(env: &Env) -> Vec<(String, String)> {

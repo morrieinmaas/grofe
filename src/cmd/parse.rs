@@ -952,6 +952,7 @@ pub(super) fn reboot_check(flags: &Args) -> Result<Command, ParseError> {
 
 pub(super) fn parse_subscribe(flags: &Args) -> Result<Command, ParseError> {
     let mut target = flags.target_opt('t')?;
+    let mut client = flags.val('c');
     // The usage is `subscribe <event>... [-t target]`: the flag comes after
     // the names, where the flag scan has already stopped.
     let mut events = Vec::new();
@@ -962,11 +963,20 @@ pub(super) fn parse_subscribe(flags: &Args) -> Result<Command, ParseError> {
                 .next()
                 .ok_or_else(|| ParseError::MissingValue("subscribe".to_string(), 't'))?;
             target = Some(parse_target(&value)?);
+        } else if word == "-c" {
+            let value = words
+                .next()
+                .ok_or_else(|| ParseError::MissingValue("subscribe".to_string(), 'c'))?;
+            client = Some(value);
         } else {
             events.push(word);
         }
     }
-    Ok(Command::Subscribe(Subscribe { events, target }))
+    Ok(Command::Subscribe(Subscribe {
+        events,
+        target,
+        client,
+    }))
 }
 
 pub(super) fn parse_attach_session(flags: &Args) -> Result<Command, ParseError> {
@@ -4031,6 +4041,7 @@ mod tests {
             Command::Subscribe(Subscribe {
                 events: vec!["pane-exited".to_string(), "pane-output".to_string()],
                 target: None,
+                client: None,
             })
         );
     }
@@ -4046,6 +4057,7 @@ mod tests {
         let want = Command::Subscribe(Subscribe {
             events: vec!["pane-exited".to_string()],
             target: Some(parse_target("%3").unwrap()),
+            client: None,
         });
         assert_eq!(
             parse(&argv(&["subscribe", "pane-exited", "-t", "%3"])).unwrap(),
@@ -4056,6 +4068,21 @@ mod tests {
             want
         );
         assert!(parse(&argv(&["subscribe", "pane-exited", "-t"])).is_err());
+    }
+
+    #[test]
+    fn subscribe_takes_a_client_to_follow() {
+        let want = Command::Subscribe(Subscribe {
+            events: vec!["open-url".to_string()],
+            target: None,
+            client: Some("/dev/x".to_string()),
+        });
+        for words in [
+            ["subscribe", "-c", "/dev/x", "open-url"],
+            ["subscribe", "open-url", "-c", "/dev/x"],
+        ] {
+            assert_eq!(parse(&argv(&words)).unwrap(), want);
+        }
     }
 
     #[test]
