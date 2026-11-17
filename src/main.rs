@@ -256,8 +256,13 @@ fn main() -> ExitCode {
         "control" if dialect() == Dialect::Grofe => fail("grofe control: takes no arguments"),
         // The remote end of `grofe -r host` (spec ssh-remote §1): the proxy
         // protocol on stdin and stdout. grofe's own verb.
-        "proxy" if dialect() == Dialect::Grofe && rest.len() == 1 => proxy_cmd(&globals),
-        "proxy" if dialect() == Dialect::Grofe => fail("grofe proxy: takes no arguments"),
+        "proxy" if dialect() == Dialect::Grofe && rest.len() == 1 => proxy_cmd(&globals, false),
+        // The roaming transport (spec ssh-remote §4): the same protocol over
+        // QUIC, after one bootstrap line on stdout.
+        "proxy" if dialect() == Dialect::Grofe && rest.len() == 2 && rest[1] == "--quic" => {
+            proxy_cmd(&globals, true)
+        }
+        "proxy" if dialect() == Dialect::Grofe => fail("grofe proxy: takes only --quic"),
         // grofe's own verb (T4.5): the server reads the snapshot and answers;
         // with no server there is nothing to lose, and none is started.
         "reboot-check" if dialect() == Dialect::Grofe => {
@@ -1059,11 +1064,23 @@ impl Drop for RawTty {
 
 /// `grofe proxy`: serves the proxy protocol on stdin and stdout. Channels
 /// reach the server socket this CLI would, started on demand as for any
-/// session-creating call.
-fn proxy_cmd(globals: &Globals) -> ExitCode {
+/// session-creating call. With `quic`, the same over QUIC instead
+/// (`grofe::remote::quic::server`): this process prints the bootstrap line
+/// and exits, a detached one serves.
+fn proxy_cmd(globals: &Globals, quic: bool) -> ExitCode {
     let (socket, own_dir) = globals.resolve();
+    // The detached QUIC proxy works from `/`, so a relative `-S` must not
+    // stay relative.
+    let socket = std::path::absolute(&socket).unwrap_or(socket);
+    let target = socket.clone();
     let connect: grofe::remote::proxy::Connect =
-        std::sync::Arc::new(move || connect_or_start(&socket, own_dir, true));
+        std::sync::Arc::new(move || connect_or_start(&target, own_dir, true));
+    if quic {
+        return match grofe::remote::quic::server::proxy_quic(&socket, connect) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(&format!("proxy --quic: {e}")),
+        };
+    }
     match grofe::remote::proxy::run(io::stdin(), io::stdout(), connect) {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => fail(&format!("proxy: {e}")),

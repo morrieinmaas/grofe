@@ -1381,6 +1381,18 @@ Default: `ask`
 
 grofe only: tmux does not have this option.
 
+## remote-quic-idle
+
+Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days.
+
+- **TOML key**: `remote-quic-idle` (integer)
+- **Scope**: global
+- **Values**: a whole number, at most 2147483647
+
+Default: `604800`
+
+grofe only: tmux does not have this option.
+
 ## remote-reconnect
 
 Keep a remote attach (grofe -r) alive across a dropped connection: show a reconnect bar and attach again, instead of exiting.
@@ -1414,6 +1426,18 @@ How grofe -r reaches the remote proxy: ssh, or quic (a roaming UDP link set up o
 - **Values**: `ssh`, `quic`
 
 Default: `ssh`
+
+grofe only: tmux does not have this option.
+
+## remote-udp-ports
+
+UDP ports grofe proxy --quic picks a free one from, as LOW-HIGH or one port; read on the remote when the roaming transport starts.
+
+- **TOML key**: `remote-udp-ports` (string)
+- **Scope**: global
+- **Values**: text
+
+Default: `60001-61000`
 
 grofe only: tmux does not have this option.
 

@@ -50,6 +50,10 @@ remote-release-url = "https://github.com/termage/grofe/releases/download"
   set by built-in defaults
 remote-transport = "ssh"
   set by built-in defaults
+remote-udp-ports = "60001-61000"
+  set by built-in defaults
+remote-quic-idle = 604800
+  set by built-in defaults
 set-clipboard = "external"
   set by built-in defaults
 focus-events = true

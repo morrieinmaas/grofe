@@ -108,6 +108,8 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "remote-reconnect",
     "remote-release-url",
     "remote-transport",
+    "remote-udp-ports",
+    "remote-quic-idle",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -419,6 +421,24 @@ pub(super) const BUILTINS: &[Builtin] = &[
         kind: Kind::Choice(&["ssh", "quic"]),
         scope: OptionScope::Global,
         default: "ssh",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-udp-ports",
+        doc: "UDP ports grofe proxy --quic picks a free one from, as LOW-HIGH or one port; read on the remote when the roaming transport starts.",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "60001-61000",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-quic-idle",
+        doc: "Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days.",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "604800",
         ..Builtin::PLAIN
     },
     Builtin {

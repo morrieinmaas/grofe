@@ -31,8 +31,11 @@ crossterm = "0.29.0"
 futures-util = { version = "0.3.34", features = ["sink"] }
 mlua = { version = "0.12", features = ["luau", "send"] }
 nix = { version = "0.31.3", features = ["user", "term", "process", "signal", "fs", "ioctl", "poll"] }
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
 regex = "1.13.1"
 regex-automata = { version = "0.4.18", default-features = false, features = ["std", "syntax", "hybrid", "unicode", "perf"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 thiserror = "2.0.20"
