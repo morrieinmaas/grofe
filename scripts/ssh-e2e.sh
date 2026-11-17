@@ -26,6 +26,7 @@
 #   GROFE_E2E_HOST           host alias of the container with grofe installed
 #   GROFE_E2E_BARE_HOST      host alias of the container without grofe
 #   GROFE_E2E_RELEASE_URL    http://127.0.0.1:<port>, the local release dir
+#                            (v<version>/ below it, as remote-release-url wants)
 #   GROFE_E2E_RUNTIME, GROFE_E2E_CONTAINER, GROFE_E2E_BARE_CONTAINER,
 #   GROFE_E2E_SCRIPT         for the helpers above
 #
@@ -46,19 +47,26 @@ target_container() { echo "${E2E_CONTAINER:-${GROFE_E2E_CONTAINER:?GROFE_E2E_CON
 
 e2e_exec() { "$(runtime)" exec "$(target_container)" "$@"; }
 
-# The interface the container's traffic leaves by (not always eth0 under
-# rootless podman).
-e2e_dev() { e2e_exec sh -c "ip route show default | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1"; }
+# The interface the ssh sessions' traffic leaves by: the route to the peer of
+# an established :22 connection, else the default route. Not always eth0:
+# rootless podman's port forwarder connects from inside the container's own
+# network namespace, so that traffic is on lo.
+e2e_dev() {
+  e2e_exec sh -c '
+    route_dev() { sed -n "s/.* dev \([^ ]*\).*/\1/p" | head -1; }
+    peer=$(ss -Htn state established "( sport = :22 )" | awk "{ print \$4 }" | sed "s/:[0-9]*\$//" | head -1)
+    if [ -n "$peer" ]; then ip route get "$peer" | route_dev; else ip route show default | route_dev; fi'
+}
 
 e2e_netem() {
   local dev
+  if [ "${1:-}" = clear ]; then
+    e2e_exec sh -c 'for d in $(ls /sys/class/net); do tc qdisc del dev "$d" root 2>/dev/null; done; true'
+    return
+  fi
   dev="$(e2e_dev)"
   [ -n "$dev" ] || dev=eth0
-  if [ "${1:-}" = clear ]; then
-    e2e_exec tc qdisc del dev "$dev" root 2>/dev/null || true
-  else
-    e2e_exec tc qdisc replace dev "$dev" root netem "$@"
-  fi
+  e2e_exec tc qdisc replace dev "$dev" root netem "$@"
 }
 
 # The per-session sshd processes run as the test user's "sshd-session: tester"
@@ -148,7 +156,10 @@ esac
 "$RT" create --name "${containers[0]}-bin" grofe-ssh-e2e:preinstalled >/dev/null
 "$RT" cp "${containers[0]}-bin:/usr/local/bin/grofe" "$tmp/grofe-linux"
 "$RT" rm -f "${containers[0]}-bin" >/dev/null
-scripts/ssh-e2e-release.sh "$tmp/release" "$tmp/grofe-linux" "$target" >/dev/null
+# Laid out as the GitHub release downloads are, v<version>/<asset>, which is
+# where the bootstrap install looks below remote-release-url.
+tag="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+scripts/ssh-e2e-release.sh "$tmp/release/$tag" "$tmp/grofe-linux" "$target" "$tag" >/dev/null
 
 # ponytail: a stdlib http.server on a port the OS picks; it ends after an hour
 # or at teardown, and serves one directory, no ranges or keep-alive.

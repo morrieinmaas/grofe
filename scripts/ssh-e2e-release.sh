@@ -9,8 +9,8 @@
 # writes <outdir>/grofe-<tag>-<target>.tar.gz (a directory of that name
 # holding grofe, README.md and LICENSE), a .sha256 per asset and SHA256SUMS
 # listing every asset, as the publish job does. <tag> defaults to v plus
-# Cargo.toml's version. The URL a client uses is the server's root, with the
-# assets directly below it.
+# Cargo.toml's version. The bootstrap reads <remote-release-url>/<tag>/<asset>,
+# so serve the parent of an <outdir> named <tag>.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
