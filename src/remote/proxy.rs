@@ -166,9 +166,17 @@ fn upload(chan: &Channel, dir: &str, name: &str) -> Result<String, String> {
     let dir = std::path::absolute(&dir).map_err(|e| e.to_string())?;
     let (mut file, path) = create_unique(&dir, name)?;
     let mut from_chan = chan.clone();
-    if let Err(e) = io::copy(&mut from_chan, &mut file).and_then(|_| file.flush()) {
+    let copied = io::copy(&mut from_chan, &mut file).and_then(|_| file.flush());
+    // Only `eof` completes a file: a close ends the channel mid way, and a
+    // truncated file must not stay.
+    let why = match copied {
+        Err(e) => Some(format!("upload failed: {e}")),
+        Ok(()) if !chan.got_eof() => Some("upload failed: closed before the end".to_string()),
+        Ok(()) => None,
+    };
+    if let Some(why) = why {
         let _ = std::fs::remove_file(&path);
-        return Err(format!("upload failed: {e}"));
+        return Err(why);
     }
     Ok(path.display().to_string())
 }

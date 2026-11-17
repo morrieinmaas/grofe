@@ -297,3 +297,61 @@ fn open_url_opens_through_the_local_opener() {
         String::from_utf8_lossy(&res.stderr)
     );
 }
+
+/// What is in `dir`, by name.
+fn names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[test]
+fn an_upload_closed_before_its_eof_leaves_no_file() {
+    let srv = TestServer::start();
+    let (child, conn) = spawn_proxy(&srv);
+    let dest = srv.home.join("cut");
+    // A close with no eof, as a client that died mid file sends.
+    let mut chan = conn
+        .open(&OpenSpec::Upload {
+            dir: dest.display().to_string(),
+            name: "half.bin".into(),
+        })
+        .unwrap();
+    chan.write_all(b"the first half").unwrap();
+    wait_until("the file to start", WAIT, || names(&dest) == ["half.bin"]);
+    chan.close("");
+    wait_until("the truncated file to go", WAIT, || names(&dest).is_empty());
+
+    // A local read error mid file: the upload fails and leaves nothing.
+    struct Broken(usize);
+    impl Read for Broken {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0 == 0 {
+                return Err(std::io::Error::other("disk gone"));
+            }
+            self.0 -= 1;
+            buf[0] = b'x';
+            Ok(1)
+        }
+    }
+    let err = conn
+        .conn()
+        .upload(dest.to_str().unwrap(), "broken.bin", Broken(3))
+        .unwrap_err();
+    assert!(err.to_string().contains("disk gone"), "{err}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(names(&dest).is_empty(), "{:?}", names(&dest));
+    // A whole upload still lands.
+    let path = conn
+        .conn()
+        .upload(dest.to_str().unwrap(), "whole.bin", &b"all of it"[..])
+        .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), b"all of it");
+    finish(child);
+}

@@ -423,6 +423,12 @@ impl Channel {
         self.0.mux.send(&Frame::Eof(self.id()))
     }
 
+    /// Whether the peer sent `eof`: it finished sending, rather than
+    /// closing the channel mid way.
+    pub fn got_eof(&self) -> bool {
+        lock(&self.0.shared.st).eof_in
+    }
+
     /// Whether the channel is closed, by either side or by the connection ending.
     pub fn is_closed(&self) -> bool {
         lock(&self.0.shared.st).closed.is_some()
@@ -782,7 +788,11 @@ impl ProxyConn {
             dir: dir.into(),
             name: name.into(),
         })?;
-        io::copy(&mut data, &mut chan)?;
+        if let Err(e) = io::copy(&mut data, &mut chan) {
+            // A reason, so the proxy never takes the part sent for the file.
+            chan.close(&format!("upload aborted: {e}"));
+            return Err(e);
+        }
         chan.shutdown_write()?;
         let mut path = String::new();
         chan.read_to_string(&mut path)?;
