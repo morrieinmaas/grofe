@@ -10,7 +10,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn install_from_the_release_dir_then_attach_and_no_second_install() {
     let e = e2e_or_skip!();
     let installed = format!("$HOME/.local/share/grofe/bin/{VERSION}/grofe");
-    let wipe = format!("{installed} kill-server 2>/dev/null; rm -rf $HOME/.local/share/grofe");
+    let wipe = format!(
+        "{installed} kill-server 2>/dev/null; rm -rf $HOME/.local/share/grofe $HOME/.local/state/grofe"
+    );
     // A clean slate, and the same again afterwards, pass or fail.
     let out = e.ssh_to(&e.bare_host, &wipe);
     assert!(out.status.success(), "{out:?}");

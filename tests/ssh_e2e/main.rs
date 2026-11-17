@@ -18,9 +18,12 @@ macro_rules! e2e_or_skip {
 
 mod attach;
 mod bootstrap;
+mod forward;
 mod harness;
+mod predict;
 #[path = "../acceptance/harness.rs"]
 #[allow(dead_code)]
 mod pty;
+mod quic;
 mod reconnect;
 mod smoke;

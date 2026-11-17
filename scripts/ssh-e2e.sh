@@ -28,7 +28,9 @@
 #   GROFE_E2E_RELEASE_URL    http://127.0.0.1:<port>, the local release dir
 #                            (v<version>/ below it, as remote-release-url wants)
 #   GROFE_E2E_RUNTIME, GROFE_E2E_CONTAINER, GROFE_E2E_BARE_CONTAINER,
-#   GROFE_E2E_SCRIPT         for the helpers above
+#   GROFE_E2E_SCRIPT, GROFE_E2E_NETEM_DEV  for the helpers above
+#   GROFE_E2E_UDP_PORTS      LOW-HIGH, UDP ports published as themselves on
+#                            127.0.0.1 (remote-udp-ports for QUIC)
 #
 # Everything is torn down on exit. The only host ssh ever reaches is a container
 # on 127.0.0.1. Works with docker and podman (GROFE_E2E_RUNTIME picks one).
@@ -64,7 +66,8 @@ e2e_netem() {
     e2e_exec sh -c 'for d in $(ls /sys/class/net); do tc qdisc del dev "$d" root 2>/dev/null; done; true'
     return
   fi
-  dev="$(e2e_dev)"
+  dev="${GROFE_E2E_NETEM_DEV:-}"
+  [ -n "$dev" ] || dev="$(e2e_dev)"
   [ -n "$dev" ] || dev=eth0
   e2e_exec tc qdisc replace dev "$dev" root netem "$@"
 }
@@ -112,12 +115,19 @@ echo "ssh-e2e: building images"
 ssh-keygen -q -t ed25519 -N '' -C ssh-e2e -f "$tmp/id"
 pubkey="$(cat "$tmp/id.pub")"
 
-start() { # start <container> <image>; prints the published ssh port
-  "$RT" run -d --init --name "$1" --cap-add NET_ADMIN -e "E2E_PUBKEY=$pubkey" \
-    -p 127.0.0.1::22 "$2" >/dev/null
-  "$RT" port "$1" 22 | head -1 | sed 's/.*://'
+# A few UDP ports for the QUIC transport, published as the same ports on
+# 127.0.0.1: the bootstrap line names the port the proxy bound in the
+# container, and the client dials that port on the ssh HostName.
+udp_lo=$((40000 + ($$ % 2000) * 4)) udp_hi=$((40000 + ($$ % 2000) * 4 + 3))
+
+start() { # start <container> <image> [run args...]; prints the published ssh port
+  local name="$1" image="$2"; shift 2
+  "$RT" run -d --init --name "$name" --cap-add NET_ADMIN -e "E2E_PUBKEY=$pubkey" \
+    -p 127.0.0.1::22 "$@" "$image" >/dev/null
+  "$RT" port "$name" 22 | head -1 | sed 's/.*://'
 }
-port="$(start "${containers[0]}" grofe-ssh-e2e:preinstalled)"
+port="$(start "${containers[0]}" grofe-ssh-e2e:preinstalled \
+  -p "127.0.0.1:$udp_lo-$udp_hi:$udp_lo-$udp_hi/udp")"
 bare_port="$(start "${containers[1]}" grofe-ssh-e2e:bare)"
 
 cfg="$tmp/ssh_config"
@@ -147,6 +157,24 @@ for h in grofe-e2e grofe-e2e-bare; do
   done
   [ -n "$ok" ] || { echo "ssh-e2e: $h never accepted a login" >&2; "$RT" logs "${containers[0]}" >&2 || true; exit 1; }
 done
+
+# The device host traffic reaches the container by, found once while an ssh
+# session is up (a QUIC scenario has none up when it calls e2e_netem), and
+# the same for TCP and UDP: rootless podman forwards from inside the
+# container (lo), docker from the bridge (eth0).
+ssh -F "$cfg" grofe-e2e sleep 30 </dev/null >/dev/null 2>&1 &
+hold_pid=$!
+netem_dev=""
+for _ in $(seq 50); do
+  if E2E_CONTAINER="${containers[0]}" e2e_exec ss -Htn state established "( sport = :22 )" | grep -q .; then
+    netem_dev="$(E2E_CONTAINER="${containers[0]}" e2e_dev)"
+    break
+  fi
+  sleep 0.1
+done
+kill "$hold_pid" 2>/dev/null || true
+wait "$hold_pid" 2>/dev/null || true
+echo "ssh-e2e: netem device ${netem_dev:-not found, e2e_netem uses the default route}"
 
 # The local release dir: the container's own binary, named for its target.
 case "$("$RT" image inspect --format '{{.Architecture}}' grofe-ssh-e2e:preinstalled)" in
@@ -187,6 +215,8 @@ export GROFE_E2E_RUNTIME="$RT"
 export GROFE_E2E_CONTAINER="${containers[0]}"
 export GROFE_E2E_BARE_CONTAINER="${containers[1]}"
 export GROFE_E2E_SCRIPT="$root/scripts/ssh-e2e.sh"
+export GROFE_E2E_NETEM_DEV="$netem_dev"
+export GROFE_E2E_UDP_PORTS="$udp_lo-$udp_hi"
 
 echo "ssh-e2e: running the scenarios"
 env -u GROFE -u GROFE_PANE -u TMUX -u TMUX_PANE \
