@@ -182,14 +182,35 @@ fn stable_ssh_agent_off_passes_the_clients_agent_through() {
 }
 
 #[test]
-fn browser_is_grofe_open_unless_forward_browser_is_off() {
+fn browser_is_the_grofe_open_shim_unless_forward_browser_is_off() {
     let srv = server();
     let (_, browser) = env_of_new_pane(&srv, "on", &["new-session", "-d", "-s", "main"]);
-    assert_eq!(browser, "grofe open");
+    // One absolute program, so `"$BROWSER" "$url"` works.
+    let shim = Path::new(&browser);
+    assert!(shim.is_absolute(), "{browser}");
+    assert_eq!(shim.file_name().unwrap(), "grofe-open");
     srv.cmd(&["set-option", "-g", "forward-browser", "off"])
         .expect("set");
-    let (_, browser) = env_of_new_pane(&srv, "off", &["split-window", "-t", "main"]);
-    assert_ne!(browser, "grofe open");
+    let (_, off) = env_of_new_pane(&srv, "off", &["split-window", "-t", "main"]);
+    assert_ne!(off, browser);
+}
+
+#[test]
+fn browser_works_quoted_when_grofe_is_not_on_the_path() {
+    let srv = TestServer::builder().path_env("/usr/bin:/bin").start();
+    let mut sub = srv.subscribe(&["open-url"]).expect("subscribe");
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "main",
+        "command -v grofe || \"$BROWSER\" 'https://example.com/b?c=d'; sleep 100",
+    ])
+    .expect("session");
+    match sub.next(WAIT).expect("the event") {
+        Event::OpenUrl { url, .. } => assert_eq!(url, "https://example.com/b?c=d"),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

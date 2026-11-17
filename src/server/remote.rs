@@ -139,9 +139,33 @@ pub fn pane_env(state: &State, session: SessionId, env: &mut Vec<(String, String
         let link = paths::agent_link(&state.socket, session.0);
         env.push(("SSH_AUTH_SOCK".to_string(), link.display().to_string()));
     }
-    if session_flag(state, session, "forward-browser") {
-        env.push(("BROWSER".to_string(), "grofe open".to_string()));
+    if session_flag(state, session, "forward-browser")
+        && let Some(shim) = OPEN_SHIM.get()
+    {
+        env.push(("BROWSER".to_string(), shim.display().to_string()));
     }
+}
+
+/// This server's `grofe-open` shim, set before it runs ([`install_open_shim`]).
+static OPEN_SHIM: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// The name of the shim `BROWSER` names.
+pub const OPEN_SHIM_NAME: &str = "grofe-open";
+
+/// Writes `dir/grofe-open`, a script that runs `exe open "$@"`, and makes it
+/// the `BROWSER` of new panes. `BROWSER` must be one program: programs run
+/// `"$BROWSER" "$url"`, and grofe may not be on the pane's `PATH` (a
+/// bootstrap install is not).
+pub fn install_open_shim(dir: &Path, exe: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let exe = exe.display().to_string().replace('\'', "'\\''");
+    let shim = dir.join(OPEN_SHIM_NAME);
+    let temp = dir.join(format!(".{OPEN_SHIM_NAME}.{}", std::process::id()));
+    std::fs::write(&temp, format!("#!/bin/sh\nexec '{exe}' open \"$@\"\n"))?;
+    std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&temp, &shim)?;
+    let _ = OPEN_SHIM.set(shim);
+    Ok(())
 }
 
 /// `open-url <url>`: tells the subscribers of `open-url` to open `url`.

@@ -721,7 +721,12 @@ fn install_tmux_shim(socket: &Path) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
-        std::os::unix::fs::symlink(exe, &link)
+        std::os::unix::fs::symlink(&exe, &link)?;
+        // And `BROWSER`'s shim beside it; without it panes get no `BROWSER`.
+        if let Err(e) = grofe::server::remote::install_open_shim(&dir, &exe) {
+            eprintln!("grofe server: no grofe-open shim in {}: {e}", dir.display());
+        }
+        Ok(())
     });
     match made {
         Ok(()) => grofe::compat::set_tmux_link_dir(dir),
