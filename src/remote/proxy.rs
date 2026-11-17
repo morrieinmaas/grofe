@@ -292,8 +292,11 @@ mod tests {
         let _listener = std::os::unix::net::UnixListener::bind(&live).unwrap();
         assert!(live_agent(&live));
         // What a dead ssh session leaves: a socket file nobody listens on.
+        // Made by a datagram socket, never a listener: a listener closed here
+        // can live on in a child another test forks meanwhile (macOS sets
+        // close-on-exec after the socket is made), and then still answer.
         let dead = dir.path().join("dead.sock");
-        drop(std::os::unix::net::UnixListener::bind(&dead).unwrap());
+        drop(std::os::unix::net::UnixDatagram::bind(&dead).unwrap());
         assert!(dead.exists());
         assert!(!live_agent(&dead));
         let file = dir.path().join("file");
