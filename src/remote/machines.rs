@@ -3,6 +3,8 @@
 //! machines (picker, `#{client_machines}`, combined agent list) are in
 //! [`view`]. Nothing here does network or terminal I/O.
 
+pub mod client;
+pub mod net;
 mod view;
 
 pub use view::*;
@@ -101,7 +103,7 @@ fn check_word(what: &str, value: &str) -> Result<(), String> {
 
 fn check(m: &Machine) -> Result<(), String> {
     check_name(&m.name)?;
-    check_word("target", &m.target)?;
+    crate::remote::ssh::check_dest(&m.target)?;
     if let Some(s) = &m.session {
         check_word("session", s)?;
     }
@@ -145,6 +147,24 @@ pub fn save(path: &Path, machines: &[Machine]) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
         format!("{}: {e}", path.display())
     })
+}
+
+/// The saved machines from the user's config dir. A file that cannot be
+/// read is reported on stderr and counts as none, so it never stops a
+/// local command.
+pub fn saved_all() -> Vec<Machine> {
+    let Some(dir) = crate::config::Env::from_process().config_dir else {
+        return Vec::new();
+    };
+    load(&machines_path(&dir)).unwrap_or_else(|e| {
+        eprintln!("grofe: {e}");
+        Vec::new()
+    })
+}
+
+/// The saved machine called `name`, if there is one.
+pub fn saved(name: &str) -> Option<Machine> {
+    saved_all().into_iter().find(|m| m.name == name)
 }
 
 /// Appends `m`; a name already saved is an error naming that entry.

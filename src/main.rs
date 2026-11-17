@@ -43,6 +43,8 @@ Options:
   --install        install grofe on the remote host if it has none (--no-install: never)
   --install-from p install the local binary p there instead of downloading a release
   --transport t    reach the remote over ssh (default) or quic
+  --machine name   run the command on a saved machine (see grofe machine ls)
+  --machines       this machine and every saved one in one window
   -V, --version    print grofe's version and exit
   -h, --help       print this help and exit
 
@@ -158,6 +160,9 @@ fn main() -> ExitCode {
         }
     };
     if let Some(code) = remote_route(&globals, &rest) {
+        return code;
+    }
+    if let Some(code) = machines_route(&globals, &rest) {
         return code;
     }
     // Bare `grofe`, like bare `tmux`, means `new-session` (but see
@@ -290,6 +295,24 @@ fn main() -> ExitCode {
             let hook = rest.iter().any(|a| a == "--hook");
             match rest.get(1).map(String::as_str) {
                 Some("setup") => grofe::agent_setup::run(&rest[2..]),
+                // Every machine's agents (spec ssh-remote §5).
+                Some("list") if rest.iter().any(|a| a == "--all-machines") => {
+                    let hello = match remote_hello() {
+                        Ok(h) => h,
+                        Err(e) => return fail(&e),
+                    };
+                    match grofe::remote::machines::net::all_agents_cmd(
+                        &globals.socket(),
+                        &hello,
+                        rest,
+                    ) {
+                        Ok(out) => {
+                            print!("{out}");
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => fail(&format!("grofe: {e}")),
+                    }
+                }
                 Some("report") if hook => grofe::agent_cli::run(&globals.socket(), rest),
                 // Outside a server a report is a no-op, never an error.
                 Some("report") => {
@@ -489,6 +512,10 @@ struct RemoteFlags {
     host: Option<String>,
     install: Install,
     transport: Option<String>,
+    /// `--machine <name>`: a saved machine, like `-r` (spec ssh-remote §5).
+    machine: Option<String>,
+    /// `--machines`: the multi-machine client.
+    machines: bool,
 }
 
 impl Globals {
@@ -554,12 +581,13 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
                 }
                 i += 2;
             }
-            "-r" | "--install-from" | "--transport" => {
+            "-r" | "--install-from" | "--transport" | "--machine" => {
                 let value = args
                     .get(i + 1)
                     .ok_or_else(|| format!("option {arg} requires an argument"))?;
                 match arg.as_str() {
                     "-r" => globals.remote.host = Some(value.clone()),
+                    "--machine" => globals.remote.machine = Some(value.clone()),
                     "--install-from" => {
                         globals.remote.install = Install::From(PathBuf::from(value))
                     }
@@ -569,6 +597,10 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
             }
             "--install" => {
                 globals.remote.install = Install::Yes;
+                i += 1;
+            }
+            "--machines" => {
+                globals.remote.machines = true;
                 i += 1;
             }
             "--no-install" => {
@@ -1652,20 +1684,37 @@ fn remote_route(globals: &Globals, rest: &[String]) -> Option<ExitCode> {
         .filter(|v| grofe::cmd::parse::canonical_name(v) == "attach-session")
         .and_then(|_| rest[1..].iter().position(|a| a.starts_with("ssh://")))
         .map(|i| i + 1);
-    match (&globals.remote.host, url) {
+    let host = match (&globals.remote.host, &globals.remote.machine) {
+        (Some(_), Some(_)) => return Some(fail("grofe: -r and --machine cannot go together")),
+        // `--machine local`: this machine, as without it.
+        (None, Some(m)) if m == grofe::remote::machines::LOCAL => None,
+        (None, Some(m)) if grofe::remote::machines::saved(m).is_none() => {
+            return Some(fail(&format!(
+                "grofe: no machine named '{m}' (grofe machine ls)"
+            )));
+        }
+        (host, machine) => host.as_ref().or(machine.as_ref()),
+    };
+    match (host, url) {
         (None, None) => None,
         (Some(_), Some(_)) => Some(fail("grofe: -r and an ssh:// target cannot go together")),
         (Some(host), None) => {
+            // A saved machine's name stands for its target, session and
+            // transport; anything else is an ssh target.
+            let saved = grofe::remote::machines::saved(host);
+            let target = saved.as_ref().map_or(host.as_str(), |m| m.target.as_str());
+            let session = saved.as_ref().and_then(|m| m.session.as_deref());
             // Without a command, `-r host` means `new-session -A -s main`.
             let argv = if rest.is_empty() {
-                ["new-session", "-A", "-s", "main"]
+                ["new-session", "-A", "-s", session.unwrap_or("main")]
                     .map(String::from)
                     .to_vec()
             } else {
                 rest.to_vec()
             };
-            match Target::parse_host(host) {
-                Ok(target) => Some(remote_main(&target, &globals.remote, &argv)),
+            let transport = saved.as_ref().and_then(|m| m.transport).map(|t| t.as_str());
+            match Target::parse_host(target) {
+                Ok(target) => Some(remote_main(&target, &globals.remote, transport, &argv)),
                 Err(e) => Some(fail(&format!("grofe: {e}"))),
             }
         }
@@ -1683,9 +1732,51 @@ fn remote_route(globals: &Globals, rest: &[String]) -> Option<ExitCode> {
             if let Some(session) = &target.session {
                 argv.extend(["-t".to_string(), session.clone()]);
             }
-            Some(remote_main(&target, &globals.remote, &argv))
+            Some(remote_main(&target, &globals.remote, None, &argv))
         }
     }
+}
+
+/// The multi-machine client (spec ssh-remote §5): `grofe --machines`, or
+/// bare `grofe` on a terminal outside a pane with enabled machines saved.
+fn machines_route(globals: &Globals, rest: &[String]) -> Option<ExitCode> {
+    if dialect() != Dialect::Grofe
+        || globals.remote.host.is_some()
+        || (!globals.remote.machines && !rest.is_empty())
+    {
+        return None;
+    }
+    let machines = grofe::remote::machines::saved_all();
+    let bare = rest.is_empty()
+        && std::env::var_os("GROFE").is_none_or(|v| v.is_empty())
+        && io::stdin().is_terminal()
+        && machines.iter().any(|m| m.enabled);
+    if !globals.remote.machines && !bare {
+        return None;
+    }
+    if !rest.is_empty() {
+        return Some(fail("grofe --machines: takes no command"));
+    }
+    if !io::stdin().is_terminal() {
+        return Some(fail("open terminal failed: not a terminal"));
+    }
+    let hello = match remote_hello() {
+        Ok(h) => h,
+        Err(e) => return Some(fail(&e)),
+    };
+    let opts = client::AttachOptions {
+        features: FEATURES.get().cloned().unwrap_or_default(),
+        ..Default::default()
+    };
+    Some(print_attach(grofe::remote::machines::client::run(
+        &globals.socket(),
+        &machines,
+        hello,
+        remote_ctx(),
+        opts,
+        std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
+        local_option("remote-reconnect").is_none_or(|v| v == "on"),
+    )))
 }
 
 /// The local config's value of option `name`, or its default.
@@ -1698,13 +1789,19 @@ fn local_option(name: &str) -> Option<String> {
 /// Runs `argv` on the remote: attach-type commands attach through an
 /// attach channel, everything else is one control request printed as the
 /// local CLI prints it.
-fn remote_main(target: &Target, flags: &RemoteFlags, argv: &[String]) -> ExitCode {
+fn remote_main(
+    target: &Target,
+    flags: &RemoteFlags,
+    saved_transport: Option<&str>,
+    argv: &[String],
+) -> ExitCode {
     if argv == ["ports"] {
         return remote_ports(target.host_name());
     }
     let transport = flags
         .transport
         .clone()
+        .or_else(|| saved_transport.map(String::from))
         .or_else(|| local_option("remote-transport"))
         .unwrap_or_else(|| "ssh".to_string());
     let release_url = grofe::remote::bootstrap::release_url(local_option("remote-release-url"));
