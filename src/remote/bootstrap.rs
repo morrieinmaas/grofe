@@ -58,28 +58,60 @@ pub fn release_file_url(base: &str, version: &str, file: &str) -> String {
     format!("{}/v{version}/{file}", base.trim_end_matches('/'))
 }
 
+/// Whether `url` is `http://` to a loopback literal (`127.0.0.0/8`,
+/// `[::1]`, `localhost`), the one place plain http is taken.
+pub fn loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(inner) => match inner.split_once(']') {
+            Some((h, after)) if after.is_empty() || after.starts_with(':') => h,
+            _ => return false,
+        },
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 /// Reads a release file: `curl` for `https://` (TLS 1.2 or later, and
 /// https only, redirects included), else from disk. Plain `http://` is
-/// refused: the archive and its sums would both come over it unchecked.
+/// refused, since the archive and its sums would both come over it
+/// unchecked, except to a loopback address (the container e2e serves its
+/// release dir there), and then without following redirects.
 pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    if url.starts_with("http://") {
+    let curl: &[&str] = if url.starts_with("https://") {
+        &[
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--tlsv1.2",
+            "-fsSL",
+        ]
+    } else if loopback_http(url) {
+        // A local test or mirror server: http, no redirects (no -L).
+        &["--proto", "=http", "-fsS"]
+    } else if url.starts_with("http://") {
         return Err(format!(
-            "refusing {}: release downloads must use https",
+            "refusing {}: release downloads must use https (plain http only on a loopback address)",
             ssh::sanitize(url)
         ));
-    }
-    if url.starts_with("https://") {
+    } else {
+        &[]
+    };
+    if !curl.is_empty() {
         let out = Command::new("curl")
-            .args([
-                "--proto",
-                "=https",
-                "--proto-redir",
-                "=https",
-                "--tlsv1.2",
-                "-fsSL",
-                "--",
-                url,
-            ])
+            .args(curl)
+            .args(["--", url])
             .stdin(Stdio::null())
             .output()
             .map_err(|e| format!("cannot run curl: {e}"))?;
@@ -484,6 +516,36 @@ mod tests {
             unpack(&tar("plain.tar.gz"), "grofe-v1-x/grofe").unwrap(),
             b"bin"
         );
+    }
+
+    #[test]
+    fn plain_http_is_taken_only_on_loopback() {
+        for ok in [
+            "http://127.0.0.1:8080/r",
+            "http://127.1.2.3/r",
+            "http://localhost:9/r",
+            "http://[::1]:9/r",
+            "http://[::1]/r",
+        ] {
+            assert!(loopback_http(ok), "{ok}");
+        }
+        for bad in [
+            "http://example.invalid/r",
+            "http://127.0.0.1.evil.example/r",
+            "http://localhost.evil.example/r",
+            "http://evil@127.0.0.1/r",
+            "http://128.0.0.1/r",
+            "http://[::2]/r",
+            "http://[::1]x/r",
+            "https://127.0.0.1/r",
+            "file:///r",
+        ] {
+            assert!(!loopback_http(bad), "{bad}");
+        }
+        // A loopback http URL is fetched (nothing listens on port 9, so
+        // curl fails) rather than refused.
+        let err = fetch("http://127.0.0.1:9/v1/SHA256SUMS").unwrap_err();
+        assert!(!err.contains("must use https"), "{err}");
     }
 
     #[test]
