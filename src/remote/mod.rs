@@ -7,5 +7,6 @@ pub mod proxy;
 pub mod proxy_proto;
 pub mod quic;
 pub mod reconnect;
+pub mod roam;
 pub mod session;
 pub mod ssh;

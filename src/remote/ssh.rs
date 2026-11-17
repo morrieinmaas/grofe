@@ -184,10 +184,15 @@ pub fn install_dir(version: &str) -> String {
 /// Cost: a user who upgrades the `PATH` grofe keeps using the installed
 /// one until it is removed.
 pub fn proxy_command(version: &str) -> String {
+    remote_grofe(version, "proxy")
+}
+
+/// As [`proxy_command`], running `grofe <args>` (`proxy --quic`, R7).
+pub fn remote_grofe(version: &str, args: &str) -> String {
     let script = format!(
         "b=\"$HOME/{dir}/grofe\"; \
-         if [ -x \"$b\" ]; then exec \"$b\" proxy; fi; \
-         if command -v grofe >/dev/null 2>&1; then exec grofe proxy; fi; \
+         if [ -x \"$b\" ]; then exec \"$b\" {args}; fi; \
+         if command -v grofe >/dev/null 2>&1; then exec grofe {args}; fi; \
          echo {marker} >&2; exit {MISSING_STATUS}",
         dir = install_dir(version),
         marker = shell_quote(MISSING_MARKER),
