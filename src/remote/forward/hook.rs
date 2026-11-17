@@ -262,7 +262,8 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input
             },
             Job::Message(text) => {
                 // `#` starts a format in a message; `##` is a plain one.
-                let argv = ["display-message", "-c", session::client_tty()]
+                let tty = session::client_tty();
+                let argv = ["display-message", "-c", tty.as_str()]
                     .map(String::from)
                     .into_iter()
                     .chain([text.replace('#', "##")])

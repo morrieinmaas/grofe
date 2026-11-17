@@ -8,7 +8,7 @@ use std::sync::mpsc::SyncSender;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder as _;
 
-use super::{Conn, DEFAULT_PREFIX, Failure, Kind, Params, client_tty, post};
+use super::{Conn, DEFAULT_PREFIX, Failure, Kind, Params, post, set_client_tty, tty_for};
 use crate::client::{self, Out};
 use crate::protocol::{Frame, FrameCodec, HELLO_REPLY_ID, Hello, Reply, encode_hello};
 use crate::remote::connect::Link;
@@ -27,12 +27,15 @@ pub(super) fn handshake(
     let mut chan = link
         .open_attach()
         .map_err(|e| Failure::Retry(e.to_string()))?;
-    send_hello(&link, &mut chan, p)?;
-    let session = attached_session(&link, &p.hello);
+    let tty = tty_for(generation);
+    set_client_tty(&tty);
+    send_hello(&link, &mut chan, p, &tty)?;
+    let session = attached_session(&link, &p.hello, &tty);
     let prefix = server_prefix(&link, &p.hello);
     let events = start_readers(&link, &chan, p, generation, out);
     Ok(Conn {
         link,
+        tty,
         attach: chan,
         session,
         prefix,
@@ -41,7 +44,7 @@ pub(super) fn handshake(
 }
 
 /// Sends the attach hello on `chan` and reads its one reply.
-fn send_hello(link: &Link, chan: &mut Channel, p: &Params) -> Result<(), Failure> {
+fn send_hello(link: &Link, chan: &mut Channel, p: &Params, tty: &str) -> Result<(), Failure> {
     let (cols, rows) = client::tty_size();
     let hello = encode_hello(&Hello::Attach {
         ctx: p.ctx.clone(),
@@ -54,7 +57,7 @@ fn send_hello(link: &Link, chan: &mut Channel, p: &Params) -> Result<(), Failure
         nest: p.opts.nest,
         created: p.opts.created,
         extras: p.opts.extras.clone(),
-        tty: Some(client_tty().to_string()),
+        tty: Some(tty.to_string()),
     })
     .map_err(|e| Failure::Fatal(e.to_string()))?;
     chan.write_all(format!("{hello}\n").as_bytes())
@@ -72,8 +75,8 @@ fn send_hello(link: &Link, chan: &mut Channel, p: &Params) -> Result<(), Failure
     }
 }
 
-/// The id of the session this client attached to, found by its tty.
-fn attached_session(link: &Link, hello: &str) -> Option<String> {
+/// The id of the session the client with `tty` attached to.
+fn attached_session(link: &Link, hello: &str, tty: &str) -> Option<String> {
     link.request(
         hello,
         &[
@@ -86,7 +89,7 @@ fn attached_session(link: &Link, hello: &str) -> Option<String> {
     .and_then(|out| {
         out.lines()
             .filter_map(|l| l.split_once(' '))
-            .find(|(tty, _)| *tty == client_tty())
+            .find(|(t, _)| *t == tty)
             .map(|(_, id)| id.trim().to_string())
     })
 }

@@ -19,12 +19,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod layout_glue;
 mod remote_cli;
 
-use remote_cli::{machines_route, remote_hello, remote_route};
+use remote_cli::{RemoteFlags, machines_route, open_url, proxy_cmd, remote_hello, remote_route};
 
 use grofe::client;
 use grofe::paths::{self, Env};
 use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
-use grofe::remote::bootstrap::Install;
 use grofe::server;
 use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
@@ -340,31 +339,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// `grofe open <url>`: asks the clients subscribed to `open-url` to open it
-/// (a remote client opens it on its own machine). With no server or no
-/// subscriber it opens the URL here, with `open` or `xdg-open`
-/// (`GROFE_OPENER`). Only http, https and file URLs are opened.
-fn open_url(socket: &Path, args: &[String]) -> ExitCode {
-    let [url] = args else {
-        return fail("grofe open: usage: grofe open <url>");
-    };
-    if let Err(e) = grofe::open::check(url) {
-        return fail(&format!("grofe open: refused {url:?}: {e}"));
-    }
-    let argv = ["open-url".to_string(), url.clone()];
-    let reply = UnixStream::connect(socket)
-        .map_err(|e| e.to_string())
-        .and_then(|stream| request(stream, socket, &argv));
-    match reply {
-        Ok(Reply::Ok { .. }) => ExitCode::SUCCESS,
-        Ok(Reply::Err { err, .. }) if err != grofe::open::NO_SUBSCRIBER => fail(&err),
-        _ => match grofe::open::open_locally(url) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => fail(&format!("grofe open: {e}")),
-        },
-    }
-}
-
 /// The dialect every hello this process sends carries: grofe, unless the
 /// tmux front end chose otherwise.
 static DIALECT: OnceLock<Dialect> = OnceLock::new();
@@ -506,19 +480,6 @@ struct Globals {
     remote: RemoteFlags,
 }
 
-/// `-r <host>`, `--install`, `--no-install`, `--install-from <path>`,
-/// `--transport <t>`: a call that runs on a remote host (spec ssh-remote §2).
-#[derive(Default)]
-struct RemoteFlags {
-    host: Option<String>,
-    install: Install,
-    transport: Option<String>,
-    /// `--machine <name>`: a saved machine, like `-r` (spec ssh-remote §5).
-    machine: Option<String>,
-    /// `--machines`: the multi-machine client.
-    machines: bool,
-}
-
 impl Globals {
     /// `-S` wins, then `-L`, then under the tmux name `$TMUX`'s socket (as
     /// tmux 3.7b's `main`), then `$GROFE` (set inside panes), then the
@@ -582,31 +543,8 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
                 }
                 i += 2;
             }
-            "-r" | "--install-from" | "--transport" | "--machine" => {
-                let value = args
-                    .get(i + 1)
-                    .ok_or_else(|| format!("option {arg} requires an argument"))?;
-                match arg.as_str() {
-                    "-r" => globals.remote.host = Some(value.clone()),
-                    "--machine" => globals.remote.machine = Some(value.clone()),
-                    "--install-from" => {
-                        globals.remote.install = Install::From(PathBuf::from(value))
-                    }
-                    _ => globals.remote.transport = Some(value.clone()),
-                }
-                i += 2;
-            }
-            "--install" => {
-                globals.remote.install = Install::Yes;
-                i += 1;
-            }
-            "--machines" => {
-                globals.remote.machines = true;
-                i += 1;
-            }
-            "--no-install" => {
-                globals.remote.install = Install::No;
-                i += 1;
+            s if remote_cli::REMOTE_FLAGS.contains(&s) => {
+                i = remote_cli::parse_flag(args, i, &mut globals.remote)?;
             }
             "--" => {
                 i += 1;
@@ -1097,31 +1035,6 @@ impl Drop for RawTty {
     fn drop(&mut self) {
         let _ =
             nix::sys::termios::tcsetattr(io::stdin(), nix::sys::termios::SetArg::TCSANOW, &self.0);
-    }
-}
-
-/// `grofe proxy`: serves the proxy protocol on stdin and stdout. Channels
-/// reach the server socket this CLI would, started on demand as for any
-/// session-creating call. With `quic`, the same over QUIC instead
-/// (`grofe::remote::quic::server`): this process prints the bootstrap line
-/// and exits, a detached one serves.
-fn proxy_cmd(globals: &Globals, quic: bool) -> ExitCode {
-    let (socket, own_dir) = globals.resolve();
-    // The detached QUIC proxy works from `/`, so a relative `-S` must not
-    // stay relative.
-    let socket = std::path::absolute(&socket).unwrap_or(socket);
-    let target = socket.clone();
-    let connect: grofe::remote::proxy::Connect =
-        std::sync::Arc::new(move || connect_or_start(&target, own_dir, true));
-    if quic {
-        return match grofe::remote::quic::server::proxy_quic(&socket, connect) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => fail(&format!("proxy --quic: {e}")),
-        };
-    }
-    match grofe::remote::proxy::run(io::stdin(), io::stdout(), connect) {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(e) => fail(&format!("proxy: {e}")),
     }
 }
 

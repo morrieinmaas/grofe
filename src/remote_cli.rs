@@ -3,18 +3,20 @@
 //! the proxy (spec ssh-remote §2) the way the local CLI runs it here.
 
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use grofe::client;
 use grofe::paths::Env;
 use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, encode_hello};
+use grofe::remote::bootstrap::Install;
 use grofe::remote::ssh::Target;
 use grofe::remote::{forward, session};
 
 use super::{
-    FEATURES, Globals, RemoteFlags, attach_argv_for_existing, attaches, dialect, fail, print_reply,
-    request_with, session_gone,
+    FEATURES, Globals, attach_argv_for_existing, attaches, connect_or_start, dialect, fail,
+    print_reply, request, request_with, session_gone,
 };
 
 /// A call for a remote host: `-r <host> [command...]`, or `attach
@@ -363,4 +365,112 @@ fn print_attach(result: Result<String, String>) -> ExitCode {
         }
         Err(e) => fail(&e),
     }
+}
+
+/// `grofe open <url>`: asks the clients subscribed to `open-url` to open it
+/// (a remote client opens it on its own machine). With no server or no
+/// subscriber it opens the URL here, with `open` or `xdg-open`
+/// (`GROFE_OPENER`). Only http, https and file URLs are opened.
+pub(super) fn open_url(socket: &Path, args: &[String]) -> ExitCode {
+    let [url] = args else {
+        return fail("grofe open: usage: grofe open <url>");
+    };
+    if let Err(e) = grofe::open::check(url) {
+        return fail(&format!("grofe open: refused {url:?}: {e}"));
+    }
+    let argv = ["open-url".to_string(), url.clone()];
+    let reply = UnixStream::connect(socket)
+        .map_err(|e| e.to_string())
+        .and_then(|stream| request(stream, socket, &argv));
+    match reply {
+        Ok(Reply::Ok { .. }) => ExitCode::SUCCESS,
+        Ok(Reply::Err { err, .. }) if err != grofe::open::NO_SUBSCRIBER => fail(&err),
+        _ => match grofe::open::open_locally(url) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(&format!("grofe open: {e}")),
+        },
+    }
+}
+
+/// `grofe proxy`: serves the proxy protocol on stdin and stdout. Channels
+/// reach the server socket this CLI would, started on demand as for any
+/// session-creating call. With `quic`, the same over QUIC instead
+/// (`grofe::remote::quic::server`): this process prints the bootstrap line
+/// and exits, a detached one serves.
+pub(super) fn proxy_cmd(globals: &Globals, quic: bool) -> ExitCode {
+    let (socket, own_dir) = globals.resolve();
+    // The detached QUIC proxy works from `/`, so a relative `-S` must not
+    // stay relative.
+    let socket = std::path::absolute(&socket).unwrap_or(socket);
+    let target = socket.clone();
+    let connect: grofe::remote::proxy::Connect =
+        std::sync::Arc::new(move || connect_or_start(&target, own_dir, true));
+    if quic {
+        return match grofe::remote::quic::server::proxy_quic(&socket, connect) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(&format!("proxy --quic: {e}")),
+        };
+    }
+    match grofe::remote::proxy::run(io::stdin(), io::stdout(), connect) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => fail(&format!("proxy: {e}")),
+    }
+}
+
+/// `-r <host>`, `--install`, `--no-install`, `--install-from <path>`,
+/// `--transport <t>`: a call that runs on a remote host (spec ssh-remote §2).
+#[derive(Default)]
+pub(super) struct RemoteFlags {
+    pub(super) host: Option<String>,
+    pub(super) install: Install,
+    pub(super) transport: Option<String>,
+    /// `--machine <name>`: a saved machine, like `-r` (spec ssh-remote §5).
+    pub(super) machine: Option<String>,
+    /// `--machines`: the multi-machine client.
+    pub(super) machines: bool,
+}
+
+/// The global options that belong to a remote call ([`RemoteFlags`]).
+pub(super) const REMOTE_FLAGS: &[&str] = &[
+    "-r",
+    "--install-from",
+    "--transport",
+    "--machine",
+    "--install",
+    "--machines",
+    "--no-install",
+];
+
+/// Reads the remote option at `args[i]` (one of [`REMOTE_FLAGS`]) into
+/// `flags`; the index after it (and after its value, if it takes one).
+pub(super) fn parse_flag(
+    args: &[String],
+    i: usize,
+    flags: &mut RemoteFlags,
+) -> Result<usize, String> {
+    let arg = args[i].as_str();
+    let value = || {
+        args.get(i + 1)
+            .cloned()
+            .ok_or_else(|| format!("option {arg} requires an argument"))
+    };
+    match arg {
+        "-r" => flags.host = Some(value()?),
+        "--machine" => flags.machine = Some(value()?),
+        "--install-from" => flags.install = Install::From(PathBuf::from(value()?)),
+        "--transport" => flags.transport = Some(value()?),
+        "--install" => {
+            flags.install = Install::Yes;
+            return Ok(i + 1);
+        }
+        "--machines" => {
+            flags.machines = true;
+            return Ok(i + 1);
+        }
+        _ => {
+            flags.install = Install::No;
+            return Ok(i + 1);
+        }
+    }
+    Ok(i + 2)
 }

@@ -504,3 +504,51 @@ fn a_hello_with_another_version_fails_the_connection() {
     assert!(err.contains("version 2"), "{err}");
     let _ = Dialect::Grofe;
 }
+
+/// A client that stays connected but sends nothing (its network went
+/// away under a lingering ssh) is taken for gone: the proxy exits and the
+/// server drops the attach behind it.
+#[test]
+fn a_silent_client_ends_the_proxy_and_its_attach() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "remote"]).unwrap();
+    let mut cmd = srv.command();
+    cmd.arg("proxy")
+        .env(grofe::remote::proxy::TEST_SILENCE_ENV, "1000")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().unwrap();
+    let conn = ProxyConn::new(child.stdout.take().unwrap(), child.stdin.take().unwrap()).unwrap();
+    let mut chan = conn.open(&OpenSpec::Attach).unwrap();
+    let hello = encode_hello(&Hello::Attach {
+        ctx: srv.ctx(),
+        cols: 80,
+        rows: 24,
+        term: "xterm-256color".into(),
+        caps: Caps::default(),
+        target: Some("remote".into()),
+        detach_others: false,
+        nest: false,
+        tty: None,
+        created: false,
+        extras: Default::default(),
+    })
+    .unwrap();
+    writeln!(chan, "{hello}").unwrap();
+    let mut head = [0u8; 4];
+    chan.read_exact(&mut head).unwrap();
+    assert!(srv.cmd(&["list-clients"]).unwrap().contains("remote"));
+    // From here the client sends nothing, and its pipes stay open.
+    let status = common::wait_child(child, Duration::from_secs(10)).expect("the proxy exits");
+    assert!(status.success(), "{status:?}");
+    common::wait_until(
+        "the server to drop the attach",
+        Duration::from_secs(10),
+        || {
+            srv.cmd(&["list-clients"])
+                .is_ok_and(|o| o.trim().is_empty())
+        },
+    );
+    drop(conn);
+}
