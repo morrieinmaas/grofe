@@ -132,3 +132,15 @@ wait_for_line() {
     run g list-panes -t m
     [ "${#lines[@]}" -eq 2 ]
 }
+
+@test "machine add, ls and rm as a script drives them" {
+    g machine add box box
+    g machine add quick quick --session work --transport quic
+    [ "$(g machine ls | awk '$1 == "box" { print $2 }')" = "box" ]
+    [ "$(g machine ls | awk '$1 == "quick" { print $3, $4, $5 }')" = "work quic on" ]
+    run g machine add box other
+    [ "$status" -eq 1 ]
+    g machine rm box
+    [ "$(g machine ls | awk '{ print $1 }')" = "quick" ]
+    [ ! -e "$SOCK" ]
+}
