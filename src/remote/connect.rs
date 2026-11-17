@@ -5,7 +5,7 @@
 //! two missed pings).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::process::{Child, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -353,45 +353,10 @@ fn hello_timeout() -> Duration {
 
 /// Runs `ssh ... -- <proxy command>` and checks the hello.
 fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError> {
-    let ssh_opts = SshOpts {
-        keepalive: ssh::wants_keepalive(target),
-        batch: opts.batch,
-    };
-    let remote = ssh::proxy_command(env!("CARGO_PKG_VERSION"));
-    let mut child = ssh::command()
-        .args(ssh::argv(target, ssh_opts, &remote))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| ConnectError::Failed(format!("cannot run {}: {e}", ssh::program())))?;
-    let (Some(stdin), Some(stdout), Some(stderr)) =
-        (child.stdin.take(), child.stdout.take(), child.stderr.take())
-    else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(ConnectError::Failed("ssh has no stdio".to_string()));
-    };
-    let said = keep_stderr(stderr);
-    // ssh may connect and the remote never answer: the hello wait is
-    // bounded, and its end kills ssh, which ends the read below.
-    let (answered, wait) = std::sync::mpsc::channel::<()>();
+    let (mut child, stdin, stdout, said) = spawn_ssh(target, opts)?;
     let pid = nix::unistd::Pid::from_raw(child.id() as i32);
-    let watchdog = std::thread::spawn(move || {
-        let timed_out = matches!(
-            wait.recv_timeout(hello_timeout()),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        );
-        if timed_out {
-            // Not reaped yet (only this function waits for it), so the pid
-            // is still this child's.
-            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
-        }
-        timed_out
-    });
-    let linked = Link::over(target.host_name(), stdout, stdin, None);
-    let _ = answered.send(());
-    let timed_out = watchdog.join().unwrap_or(false);
+    let (linked, timed_out) =
+        within_hello_timeout(pid, || Link::over(target.host_name(), stdout, stdin, None));
     match linked {
         Ok(link) if !timed_out => {
             *lock(&link.shared.end) = Some(kill_child(child));
@@ -413,6 +378,57 @@ fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError>
             Err(classify(e, status, &stderr))
         }
     }
+}
+
+/// Starts `ssh ... -- <proxy command>` with its stdio piped; its stdin and
+/// stdout, and a thread keeping what it says on stderr.
+fn spawn_ssh(
+    target: &Target,
+    opts: ConnectOpts,
+) -> Result<(Child, ChildStdin, ChildStdout, Stderr), ConnectError> {
+    let ssh_opts = SshOpts {
+        keepalive: ssh::wants_keepalive(target),
+        batch: opts.batch,
+    };
+    let remote = ssh::proxy_command(env!("CARGO_PKG_VERSION"));
+    let mut child = ssh::command()
+        .args(ssh::argv(target, ssh_opts, &remote))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| ConnectError::Failed(format!("cannot run {}: {e}", ssh::program())))?;
+    let (Some(stdin), Some(stdout), Some(stderr)) =
+        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ConnectError::Failed("ssh has no stdio".to_string()));
+    };
+    Ok((child, stdin, stdout, keep_stderr(stderr)))
+}
+
+/// Runs `hello` (the blocking hello exchange) with a bound: ssh may connect
+/// and the remote never answer, so after [`hello_timeout`] the process
+/// `pid` is killed, which ends the read. What `hello` gave, and whether
+/// the bound was hit.
+fn within_hello_timeout<T>(pid: nix::unistd::Pid, hello: impl FnOnce() -> T) -> (T, bool) {
+    let (answered, wait) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        let timed_out = matches!(
+            wait.recv_timeout(hello_timeout()),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        if timed_out {
+            // Not reaped yet (only the caller waits for it), so the pid is
+            // still this child's.
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+        }
+        timed_out
+    });
+    let got = hello();
+    let _ = answered.send(());
+    (got, watchdog.join().unwrap_or(false))
 }
 
 /// The exit code of a child whose stdout ended: waited for briefly, then
