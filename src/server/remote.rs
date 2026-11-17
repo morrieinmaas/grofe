@@ -132,8 +132,18 @@ pub fn pane_env(state: &State, session: SessionId, env: &mut Vec<(String, String
     if session_flag(state, session, "stable-ssh-agent") {
         // Even before a client with an agent has made the link: a session
         // made over a control channel (`grofe -r host`) has none yet, and its
-        // first pane must follow the attach that comes next.
+        // first pane must follow the attach that comes next. A link nothing
+        // made yet (a restored session, `new-session -d` with no agent)
+        // starts at the global environment's agent, so it is not left
+        // dangling in place of a working one.
         let link = paths::agent_link(&state.socket, session.0);
+        if std::fs::symlink_metadata(&link).is_err()
+            && let Some(agent) = crate::server::hooks::global_var(state, "SSH_AUTH_SOCK")
+                .filter(|a| Path::new(a).is_absolute() && Path::new(a) != link)
+            && let Err(e) = repoint(&link, Path::new(&agent))
+        {
+            eprintln!("grofe server: ssh-agent link {}: {e}", link.display());
+        }
         env.push(("SSH_AUTH_SOCK".to_string(), link.display().to_string()));
     }
     if session_flag(state, session, "forward-browser")

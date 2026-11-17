@@ -2036,6 +2036,12 @@ pub fn shell_env(state: &State, session: Option<SessionId>) -> Vec<(String, Stri
     env
 }
 
+/// The global environment's `name`, unless unset or hidden.
+pub fn global_var(state: &State, name: &str) -> Option<String> {
+    let global = state.hooks.global();
+    global.get(name).filter(|v| !v.hidden)?.value.clone()
+}
+
 fn visible(env: &Env) -> Vec<(String, String)> {
     env.iter()
         .filter(|(_, v)| !v.hidden)

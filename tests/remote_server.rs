@@ -142,9 +142,37 @@ fn a_client_with_no_agent_leaves_the_link_alone() {
         fs::read_link(link(&srv, 0)).expect("link"),
         Path::new("/tmp/agent-one")
     );
-    assert!(
-        fs::symlink_metadata(link(&srv, 1)).is_err(),
-        "no agent, no link"
+    // The new session's link starts at the global environment's agent
+    // (the server's own), or is not made when there is none.
+    let global = srv
+        .cmd(&["show-environment", "-g", "SSH_AUTH_SOCK"])
+        .ok()
+        .and_then(|l| l.trim().strip_prefix("SSH_AUTH_SOCK=").map(PathBuf::from));
+    assert_eq!(fs::read_link(link(&srv, 1)).ok(), global);
+}
+
+#[test]
+fn a_link_nothing_made_starts_at_the_global_agent() {
+    let srv = server();
+    srv.cmd(&["start-server"]).expect("start");
+    srv.cmd(&[
+        "set-environment",
+        "-g",
+        "SSH_AUTH_SOCK",
+        "/tmp/agent-global",
+    ])
+    .expect("global agent");
+    // A session made by a client with no agent: nothing points its link.
+    let mut cmd = srv.command();
+    cmd.env_remove("SSH_AUTH_SOCK")
+        .args(["new-session", "-d", "-s", "main"]);
+    assert!(run_bounded(cmd, CMD_TIMEOUT).status.success());
+    let (agent, _) = env_of_new_pane(&srv, "pane", &["split-window", "-t", "main"]);
+    let link = link(&srv, 0);
+    assert_eq!(agent, link.display().to_string());
+    assert_eq!(
+        fs::read_link(&link).expect("the link"),
+        Path::new("/tmp/agent-global")
     );
 }
 
