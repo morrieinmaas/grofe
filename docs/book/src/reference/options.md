@@ -1257,7 +1257,7 @@ Default: `default`
 
 ## predictive-echo
 
-Whether grofe -r draws typed characters at once, underlined, before the remote echoes them: auto does so when the round trip is 50 ms or more, on always, off never.
+Whether grofe -r draws typed characters at once, underlined, before the remote echoes them: auto does so when the round trip is 50 ms or more, on always, off never. Read from this machine's config.
 
 - **TOML key**: `predictive-echo` (string)
 - **Scope**: global

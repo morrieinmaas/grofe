@@ -112,7 +112,8 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
   mismatch, a switch to the alternate screen or a second without confirmation repaints from the
   real screen. Enter, control keys and escape sequences are never predicted, and nothing is
   predicted at a password prompt or while the pane has echo off. `predictive-echo` is `auto`
-  (default: on only for remote links with a round trip of 50 ms or more), `on` or `off`.
+  (default: on only for remote links with a round trip of 50 ms or more), `on` or `off`; it is
+  read from this machine's config, not the remote's.
 - **Round trip.** `#{client_rtt}` shows the link's smoothed round trip (`42ms`), for the status
   line. The remote client reports it with `set-client-info -t <client> rtt <ms>`; the same verb
   takes `machines <text>` for `#{client_machines}`.

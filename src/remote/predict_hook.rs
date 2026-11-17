@@ -2,10 +2,9 @@
 //! [`Hook`] that runs the [`Predictor`] on the attach stream, and reports
 //! the link's round trip time to the server for `#{client_rtt}`.
 //!
-//! `predictive-echo` is read from the remote server on every connection
-//! and followed through `option-changed`: `on` predicts always, `off`
-//! never (and keeps no mirror), `auto` while the smoothed RTT is 50 ms or
-//! more. The `pane-echo` hint of this client's active pane turns
+//! `predictive-echo` comes from this machine's config, as the CLI read it:
+//! `on` predicts always, `off` never (and keeps no mirror), `auto` while
+//! the smoothed RTT is 50 ms or more. The `pane-echo` hint of this client's active pane turns
 //! prediction off while that pane's pty has echo off. Every request runs
 //! off the main thread ([`HookCtx::request_bg`]), so a slow link never
 //! stalls typing.
@@ -43,6 +42,14 @@ impl Mode {
             "off" => Mode::Off,
             _ => Mode::Auto,
         }
+    }
+
+    /// The value in this machine's config (the default when it has none).
+    pub fn from_config() -> Mode {
+        crate::config::load(&crate::config::Env::from_process())
+            .ok()
+            .and_then(|r| r.options.get("predictive-echo").map(|v| Mode::parse(v)))
+            .unwrap_or(Mode::Auto)
     }
 
     /// Whether to predict at this smoothed RTT (none yet measured).
@@ -84,22 +91,16 @@ pub struct PredictHook {
     echo: HashMap<String, bool>,
     /// This client's active pane, once asked.
     active: Option<String>,
-    mode_rx: Option<Receiver<Result<String, String>>>,
     active_rx: Option<Receiver<Result<String, String>>>,
     /// The RTT last reported and when.
     reported: Option<(u64, Instant)>,
 }
 
-impl Default for PredictHook {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PredictHook {
-    pub fn new() -> PredictHook {
+    /// A hook for `predictive-echo` set to `mode`.
+    pub fn new(mode: Mode) -> PredictHook {
         PredictHook {
-            mode: Mode::Auto,
+            mode,
             predictor: None,
             size: (0, 0),
             on: false,
@@ -107,7 +108,6 @@ impl PredictHook {
             connection: None,
             echo: HashMap::new(),
             active: None,
-            mode_rx: None,
             active_rx: None,
             reported: None,
         }
@@ -133,11 +133,6 @@ impl PredictHook {
         self.active = None;
         self.active_rx = None;
         self.reported = None;
-        self.mode_rx = Some(cx.request_bg(vec![
-            "show-options".into(),
-            "-gv".into(),
-            "predictive-echo".into(),
-        ]));
         self.ask_active(cx);
         if let Some(p) = &mut self.predictor {
             p.resize(usize::from(self.size.0), usize::from(self.size.1));
@@ -153,27 +148,6 @@ impl PredictHook {
                 cx.client().into(),
                 "#{pane_id}".into(),
             ]));
-        }
-    }
-
-    fn set_mode(&mut self, cx: &mut HookCtx<'_>, mode: Mode) {
-        if mode == self.mode {
-            return;
-        }
-        let was_off = self.mode == Mode::Off;
-        self.mode = mode;
-        if mode == Mode::Off {
-            if let Some(mut p) = self.predictor.take() {
-                cx.draw(&p.set_enabled(false));
-            }
-            self.on = false;
-        } else if was_off {
-            // A fresh mirror needs the whole screen.
-            let _ = cx.request_bg(vec![
-                "refresh-client".into(),
-                "-t".into(),
-                cx.client().into(),
-            ]);
         }
     }
 
@@ -204,14 +178,6 @@ impl PredictHook {
 
     /// Follows the answers to the background requests and the RTT.
     fn update(&mut self, cx: &mut HookCtx<'_>) {
-        if let Some(rx) = &self.mode_rx
-            && let Ok(answer) = rx.try_recv()
-        {
-            self.mode_rx = None;
-            if let Ok(value) = answer {
-                self.set_mode(cx, Mode::parse(&value));
-            }
-        }
         if let Some(rx) = &self.active_rx
             && let Ok(answer) = rx.try_recv()
         {
@@ -260,7 +226,6 @@ impl Hook for PredictHook {
             "pane-focus",
             "window-focused",
             "client-session-changed",
-            "option-changed",
         ]
         .map(String::from)
         .to_vec()
@@ -303,11 +268,6 @@ impl Hook for PredictHook {
             }
             Some("pane-focus" | "window-focused" | "client-session-changed") => {
                 self.ask_active(cx);
-            }
-            Some("option-changed")
-                if field("name") == Some("predictive-echo") && field("scope") == Some("global") =>
-            {
-                self.set_mode(cx, Mode::parse(field("value").unwrap_or("auto")));
             }
             _ => return,
         }
@@ -379,7 +339,7 @@ mod tests {
 
     #[test]
     fn the_active_panes_echo_is_the_hint() {
-        let mut h = PredictHook::new();
+        let mut h = PredictHook::new(Mode::Auto);
         assert!(h.active_echoes(), "unknown counts as echoing");
         h.echo.insert("%1".into(), false);
         assert!(h.active_echoes(), "another pane's echo does not count");

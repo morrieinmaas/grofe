@@ -236,12 +236,16 @@ fn a_password_read_with_echo_off_gets_no_prediction() {
 }
 
 #[test]
-fn predictive_echo_off_draws_nothing_ahead() {
+fn predictive_echo_off_in_the_local_config_draws_nothing_ahead() {
     let r = Remote::new();
     r.srv.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    // The remote's own setting does not count: the option is this machine's.
     r.srv
-        .cmd(&["set-option", "-g", "predictive-echo", "off"])
+        .cmd(&["set-option", "-g", "predictive-echo", "on"])
         .unwrap();
+    let config = r.dir.path().join("local-config/grofe");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(config.join("config.toml"), "predictive-echo = \"off\"\n").unwrap();
     let mut h = r.attach();
     h.wait_for(common::PROMPT.trim());
     r.client_rtt();

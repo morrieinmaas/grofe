@@ -198,7 +198,9 @@ pub fn run(
         // attach moves between machines. Predictive echo follows any link.
         hooks: vec![
             Box::new(hook),
-            Box::new(crate::remote::predict_hook::PredictHook::new()),
+            Box::new(crate::remote::predict_hook::PredictHook::new(
+                crate::remote::predict_hook::Mode::from_config(),
+            )),
         ],
     };
     session::attach(local, attach)

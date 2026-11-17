@@ -434,7 +434,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "predictive-echo",
-        doc: "Whether grofe -r draws typed characters at once, underlined, before the remote echoes them: auto does so when the round trip is 50 ms or more, on always, off never.",
+        doc: "Whether grofe -r draws typed characters at once, underlined, before the remote echoes them: auto does so when the round trip is 50 ms or more, on always, off never. Read from this machine's config.",
         kind: Kind::Choice(&["auto", "on", "off"]),
         scope: OptionScope::Global,
         default: "auto",

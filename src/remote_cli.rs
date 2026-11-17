@@ -336,7 +336,9 @@ impl Remote {
                     Some(forward::forwards_dir(&Env::from_process())),
                     forward::Settings::from_options(local_option),
                 )),
-                Box::new(grofe::remote::predict_hook::PredictHook::new()),
+                Box::new(grofe::remote::predict_hook::PredictHook::new(
+                    grofe::remote::predict_hook::Mode::from_config(),
+                )),
             ],
         };
         session::attach(self.link, attach)
