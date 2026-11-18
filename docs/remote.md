@@ -80,7 +80,7 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
 - **Opening URLs.** Panes get `BROWSER` set to a small `grofe-open` program the server writes next to
   its `tmux` link, while `forward-browser` is on (the default), so a program that opens a link on the remote opens it on your machine. You can run
   `grofe open <url or path>` yourself too (a path becomes a `file://` URL). Only `http`, `https`
-  and `file` URLs are forwarded to your machine; anything else opens on the machine that ran it. A `file` URL
+  and `file` URLs are opened; anything else is refused with a message. A `file` URL
   must name an existing local file; it is refused when it is a directory or bundle, executable,
   or a script or launcher type (`.command`, `.app`, `.sh` and similar), and otherwise asks
   `open file:///...? [y/N]` first. Only URLs from a pane in the session you are attached

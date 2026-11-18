@@ -403,7 +403,7 @@ fn grofe_open_hands_the_url_to_a_subscriber_and_does_not_open_it() {
 }
 
 #[test]
-fn grofe_open_never_forwards_other_schemes_but_opens_them_here() {
+fn grofe_open_refuses_other_schemes_and_never_runs_the_opener() {
     let srv = server();
     let out = srv.home.join("opened");
     let opener = fake_opener(&srv, &out);
@@ -411,11 +411,13 @@ fn grofe_open_never_forwards_other_schemes_but_opens_them_here() {
     for url in ["javascript:alert(1)", "ftp://x"] {
         let mut cmd = srv.command();
         cmd.env(grofe::open::OPENER_ENV, &opener)
+            .env(grofe::open::PREV_BROWSER_ENV, &opener)
             .args(["open", url]);
         let res = run_bounded(cmd, CMD_TIMEOUT);
-        assert!(res.status.success(), "{url}: {}", res.stderr);
-        assert_eq!(fs::read_to_string(&out).expect("opened here"), url);
+        assert!(!res.status.success(), "{url}");
+        assert!(res.stderr.contains("refused"), "{}", res.stderr);
     }
+    assert!(!out.exists(), "no opener ran");
     assert!(
         sub.next(Duration::from_millis(300)).is_err(),
         "nothing reached the subscriber"
@@ -710,17 +712,14 @@ fn grofe_open_falls_back_to_the_panes_own_browser() {
     let (shim, prev) = text.split_once('|').unwrap();
     assert!(shim.ends_with("/grofe-open"), "{shim}");
     assert_eq!(prev, browser.display().to_string());
-    // With nobody to forward to, the user's own browser opens it, even a
-    // scheme that is never forwarded.
+    // With nobody to forward to, the user's own browser opens it; a scheme
+    // off the allow-list is still refused.
     assert_eq!(
         grofe_open_in_a_pane(&srv, "a", "https://example.com/p"),
         "0"
     );
-    assert_eq!(grofe_open_in_a_pane(&srv, "b", "ftp://example.com/f"), "0");
-    assert_eq!(
-        fs::read_to_string(&got).unwrap(),
-        "https://example.com/p\nftp://example.com/f\n"
-    );
+    assert_ne!(grofe_open_in_a_pane(&srv, "b", "ftp://example.com/f"), "0");
+    assert_eq!(fs::read_to_string(&got).unwrap(), "https://example.com/p\n");
 }
 
 #[test]
