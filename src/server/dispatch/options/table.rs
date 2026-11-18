@@ -442,7 +442,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
     },
     Builtin {
         name: "remote-quic-idle",
-        doc: "Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days.",
+        doc: "Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days; 0 is refused.",
         kind: Kind::Number {
             max: i32::MAX as i64,
         },

@@ -58,10 +58,12 @@ Once installed, that versioned binary is used even when an older grofe is on the
 ## Dropped connections
 
 The client notices a drop when the stream ends, ssh exits, or two pings in a row (one every
-5 seconds) go unanswered. Then:
+5 seconds) go unanswered while nothing else arrives either (a pong stuck behind data on a slow
+link is not a miss). Then:
 
 - the last screen stays up, and the bottom row shows
-  `grofe: reconnecting to devbox (attempt 1, next in 1s) · prefix d detach`;
+  `grofe: reconnecting to devbox (attempt 1, next in 1s) · prefix d detach` (`connecting`
+  in place of the countdown while an attempt runs);
 - your typing is dropped, except the detach key (the prefix, then `d`), which ends the client
   cleanly;
 - it retries after 0.5 s, 1, 2, 4 and so on, up to 30 s, with some jitter; a link that stays up

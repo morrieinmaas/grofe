@@ -1395,7 +1395,7 @@ grofe only: tmux does not have this option.
 
 ## remote-quic-idle
 
-Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days.
+Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days; 0 is refused.
 
 - **TOML key**: `remote-quic-idle` (integer)
 - **Scope**: global
