@@ -42,9 +42,28 @@ struct ChanShared {
     cv: Condvar,
 }
 
+/// Pings in flight and their pongs. A pong is kept only while its ping
+/// still waits, so one that comes back after its ping timed out is dropped
+/// instead of piling up.
 #[derive(Default)]
 struct Pongs {
+    waiting: HashSet<u64>,
     seen: HashSet<u64>,
+}
+
+impl Pongs {
+    /// A pong for `nonce` came in.
+    fn arrived(&mut self, nonce: u64) {
+        if self.waiting.contains(&nonce) {
+            self.seen.insert(nonce);
+        }
+    }
+
+    /// The ping for `nonce` is done waiting, answered or not.
+    fn done(&mut self, nonce: u64) -> bool {
+        self.waiting.remove(&nonce);
+        self.seen.remove(&nonce)
+    }
 }
 
 struct MuxInner {
@@ -332,21 +351,28 @@ impl Mux {
     /// connection ends.
     pub fn ping(&self, timeout: Duration) -> io::Result<Duration> {
         let nonce = self.inner.next_nonce.fetch_add(1, Ordering::SeqCst);
+        lock(&self.inner.pongs).waiting.insert(nonce);
         let start = Instant::now();
-        self.inner.send(&Frame::Ping(nonce))?;
+        if let Err(e) = self.inner.send(&Frame::Ping(nonce)) {
+            lock(&self.inner.pongs).done(nonce);
+            return Err(e);
+        }
         let deadline = start + timeout;
         let mut pongs = lock(&self.inner.pongs);
         loop {
-            if pongs.seen.remove(&nonce) {
+            if pongs.seen.contains(&nonce) {
+                pongs.done(nonce);
                 return Ok(start.elapsed());
             }
             if self.is_closed() {
+                pongs.done(nonce);
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "proxy connection closed",
                 ));
             }
             let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                pongs.done(nonce);
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "ping timed out"));
             };
             pongs = self
@@ -422,7 +448,7 @@ fn read_loop<R: Read>(
                 let _ = inner.send(&Frame::Pong(n));
             }
             Frame::Pong(n) => {
-                lock(&inner.pongs).seen.insert(n);
+                lock(&inner.pongs).arrived(n);
                 inner.pong_cv.notify_all();
             }
             Frame::Window(id, credit) => {
@@ -494,5 +520,26 @@ fn on_close(inner: &MuxInner, id: u32, reason: String) {
             local: false,
         });
         c.cv.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pong_after_its_ping_timed_out_is_dropped() {
+        let mut p = Pongs::default();
+        p.waiting.insert(1);
+        p.arrived(1);
+        assert!(p.done(1), "an answered ping sees its pong");
+        assert!(p.waiting.is_empty() && p.seen.is_empty());
+        // Ping 2 timed out (done without a pong); its pong comes late.
+        p.waiting.insert(2);
+        assert!(!p.done(2));
+        p.arrived(2);
+        // A pong nobody asked for.
+        p.arrived(99);
+        assert!(p.seen.is_empty(), "late pongs kept: {:?}", p.seen);
     }
 }
