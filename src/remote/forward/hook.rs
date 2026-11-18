@@ -321,31 +321,49 @@ impl Prompt for Answer {
             cx.send(send);
             return None;
         }
-        let answer = answer_keys(&mut self.decoder, &mut self.line, bytes)?;
+        let (answer, onward) = match answer_keys(&mut self.decoder, &mut self.line, bytes)? {
+            Answered::Line(line) => (line, Vec::new()),
+            Answered::No => (String::new(), Vec::new()),
+            Answered::Elsewhere => (String::new(), bytes.to_vec()),
+        };
         let mut core = lock(&self.core);
         if core.current != Some(self.id) {
             // A question already settled (its port went): just close.
-            return Some(session::Input::default());
+            return Some(session::Input::send(onward));
         }
         core.current = None;
         let actions = core.fw.handle(Input::Answer(answer), Instant::now());
-        let send = core.apply(&self.core, cx, actions);
+        let mut send = core.apply(&self.core, cx, actions);
+        send.extend(onward);
         Some(session::Input::send(send))
     }
 }
 
-/// Feeds typed `bytes` to a prompt's answer `line`: the answer once Enter
-/// is pressed, an empty one (no) on Escape or C-c.
-fn answer_keys(decoder: &mut Decoder, line: &mut String, bytes: &[u8]) -> Option<String> {
+/// What typed keys did to a prompt's answer.
+#[derive(Debug, PartialEq, Eq)]
+enum Answered {
+    /// Enter: the answer line.
+    Line(String),
+    /// Escape or C-c: no.
+    No,
+    /// A key that is no part of an answer (the prefix, an arrow, a control
+    /// key): no, and the keys go on to the pane, so the prefix (and its
+    /// detach) works while a prompt is up.
+    Elsewhere,
+}
+
+/// Feeds typed `bytes` to a prompt's answer `line`; `None` while the answer
+/// is still being typed.
+fn answer_keys(decoder: &mut Decoder, line: &mut String, bytes: &[u8]) -> Option<Answered> {
     let ctrl_c = parse_prefix("C-c").ok().flatten();
     for input in decoder.feed(bytes, Instant::now(), std::time::Duration::ZERO) {
         let Decoded::Key(key) = input else {
             continue;
         };
         match key.code {
-            KeyCode::Enter => return Some(std::mem::take(line)),
-            KeyCode::Escape => return Some(String::new()),
-            _ if ctrl_c.is_some_and(|c| key.matches(&c)) => return Some(String::new()),
+            KeyCode::Enter => return Some(Answered::Line(std::mem::take(line))),
+            KeyCode::Escape => return Some(Answered::No),
+            _ if ctrl_c.is_some_and(|c| key.matches(&c)) => return Some(Answered::No),
             KeyCode::Backspace => {
                 line.pop();
             }
@@ -356,7 +374,9 @@ fn answer_keys(decoder: &mut Decoder, line: &mut String, bytes: &[u8]) -> Option
             {
                 line.push(c)
             }
-            _ => {}
+            // Past the longest answer: more typing is ignored.
+            KeyCode::Char(c) if key.matches(&Key::plain(KeyCode::Char(c))) => {}
+            _ => return Some(Answered::Elsewhere),
         }
     }
     None
@@ -464,21 +484,25 @@ mod tests {
             let mut line = String::new();
             answer_keys(&mut Decoder::new(), &mut line, bytes)
         };
+        let line = |s: &str| Some(Answered::Line(s.to_string()));
         for (bytes, want) in [
-            (&b"y\r"[..], Some("y")),
-            (b"always\r", Some("always")),
-            (b"ab\x7f\r", Some("a")),
-            (b"\x1b", Some("")),
-            (b"\x03", Some("")),
+            (&b"y\r"[..], line("y")),
+            (b"always\r", line("always")),
+            (b"ab\x7f\r", line("a")),
+            (b"\x1b", Some(Answered::No)),
+            (b"\x03", Some(Answered::No)),
             (b"y", None),
-            (b"\x1b[A", None),
-            // The kitty keyboard protocol: Enter, Escape, C-c, Backspace.
-            (b"y\x1b[13u", Some("y")),
-            (b"\x1b[27u", Some("")),
-            (b"\x1b[99;5u", Some("")),
-            (b"ab\x1b[127u\x1b[13u", Some("a")),
+            // The prefix (its detach), an arrow: no, and on to the pane.
+            (b"\x02", Some(Answered::Elsewhere)),
+            (b"\x1b[A", Some(Answered::Elsewhere)),
+            // The kitty keyboard protocol: Enter, Escape, C-c, Backspace, C-b.
+            (b"y\x1b[13u", line("y")),
+            (b"\x1b[27u", Some(Answered::No)),
+            (b"\x1b[99;5u", Some(Answered::No)),
+            (b"ab\x1b[127u\x1b[13u", line("a")),
+            (b"\x1b[98;5u", Some(Answered::Elsewhere)),
         ] {
-            assert_eq!(answer(bytes).as_deref(), want, "{bytes:?}");
+            assert_eq!(answer(bytes), want, "{bytes:?}");
         }
     }
 

@@ -429,8 +429,11 @@ fn a_file_dropped_while_a_port_offer_is_up_still_uploads() {
     let remote = r.pane_dir().join("during-offer.txt");
     h.wait_for(&format!("echo '{}'", remote.display()));
     assert_eq!(fs::read_to_string(&remote).unwrap(), "dropped");
-    fs::write(r.root().join("stop-offer"), "").unwrap();
+    // The offer is still up (its port still listens), past its grace, as
+    // on a slow runner: the detach key must still work.
+    std::thread::sleep(Duration::from_millis(700));
     detach(h);
+    fs::write(r.root().join("stop-offer"), "").unwrap();
 }
 
 #[test]
