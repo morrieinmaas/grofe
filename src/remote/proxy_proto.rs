@@ -98,6 +98,47 @@ pub fn handshake<R: BufRead, W: Write>(
     decode_hello(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// The client's [`handshake`]: sends `mine`, then reads lines until one is
+/// a proxy hello, skipping what is not one (a JSON object without a
+/// `grofe-proxy` field, or not JSON at all). A remote shell's startup may
+/// print to stdout for a non-interactive `ssh host cmd` (a banner, an
+/// unguarded `echo` in `.bashrc`), and that comes before the proxy's hello.
+/// At most [`MAX_HELLO`] bytes are read in all. The proxy side stays strict.
+pub fn client_handshake<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    mine: &ProxyHello,
+) -> io::Result<ProxyHello> {
+    writer.write_all(encode_hello(mine).as_bytes())?;
+    writer.flush()?;
+    let mut budget = MAX_HELLO;
+    loop {
+        let mut line = String::new();
+        let n = reader.by_ref().take(budget).read_line(&mut line)?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                if budget == 0 {
+                    "no proxy hello in the first 64 KiB from the remote"
+                } else {
+                    "connection closed before the proxy hello"
+                },
+            ));
+        }
+        budget -= n as u64;
+        if looks_like_hello(&line) {
+            return decode_hello(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
+        }
+    }
+}
+
+/// Whether `line` is meant as a proxy hello (a JSON object naming the
+/// protocol version), however it then decodes.
+fn looks_like_hello(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line.trim_end())
+        .is_ok_and(|v| v.get("grofe-proxy").is_some())
+}
+
 // --- frames --------------------------------------------------------------------
 
 /// What an `open` frame asks for (its JSON payload).
@@ -297,7 +338,7 @@ impl ProxyConn {
     {
         let mut reader = BufReader::new(reader);
         let mut writer = writer;
-        let peer = handshake(&mut reader, &mut writer, &ProxyHello::current(&[]))?;
+        let peer = client_handshake(&mut reader, &mut writer, &ProxyHello::current(&[]))?;
         // The peer opening a channel is not part of version 1.
         let mux = Mux::start(reader, writer, Role::Client, |c, _| {
             c.close("unexpected open")
@@ -354,6 +395,59 @@ impl ProxyConn {
 mod tests {
     use super::*;
     use std::os::unix::net::UnixStream;
+
+    /// What the remote sent before the hello, then `hello`; the client's
+    /// view of it.
+    fn client_reads(before: &[u8], hello: &ProxyHello) -> io::Result<ProxyHello> {
+        let mut input = before.to_vec();
+        input.extend_from_slice(encode_hello(hello).as_bytes());
+        client_handshake(
+            &mut io::Cursor::new(input),
+            &mut Vec::new(),
+            &ProxyHello::current(&[]),
+        )
+    }
+
+    /// A shell startup that prints (a banner, an `echo` in `.bashrc`, a JSON
+    /// line of its own) comes before the hello and is skipped.
+    #[test]
+    fn the_client_skips_lines_before_the_hello() {
+        let hello = ProxyHello::current(&["attach"]);
+        let junk = b"Welcome to box!\n\n{\"motd\":1}\n[1,2]\nnot json\n";
+        assert_eq!(client_reads(junk, &hello).unwrap(), hello);
+        // A hello of another version after the junk is still refused.
+        let mut other = hello.clone();
+        other.proxy = 2;
+        let err = client_reads(junk, &other).unwrap_err();
+        assert!(err.to_string().contains("version 2"), "{err}");
+        // No hello within the 64 KiB budget.
+        let flood = "x".repeat(1000) + "\n";
+        let err = client_reads(flood.repeat(70).as_bytes(), &hello).unwrap_err();
+        assert!(err.to_string().contains("no proxy hello"), "{err}");
+        // EOF before any hello.
+        let err = client_handshake(
+            &mut io::Cursor::new(b"banner\n".to_vec()),
+            &mut Vec::new(),
+            &hello,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    /// The proxy side stays strict: its first line must be the hello.
+    #[test]
+    fn the_proxy_side_takes_only_a_hello_first() {
+        let mut input = b"junk\n".to_vec();
+        input.extend_from_slice(encode_hello(&ProxyHello::current(&[])).as_bytes());
+        assert!(
+            handshake(
+                &mut io::Cursor::new(input),
+                &mut Vec::new(),
+                &ProxyHello::current(&[])
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn data_past_the_window_closes_the_channel() {
