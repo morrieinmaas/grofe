@@ -67,6 +67,7 @@ mod hooks;
 
 pub(crate) use handshake::attached_session;
 use handshake::handshake;
+pub(crate) use handshake::pump_events;
 pub use hooks::{Hook, HookCtx, Input, Prompt, Switch};
 
 // ------------------------------------------------------------------ events

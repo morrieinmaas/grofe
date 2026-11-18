@@ -11,6 +11,8 @@ use grofe::client;
 use grofe::paths::Env;
 use grofe::protocol::{ATTACH_CHECK, ClientCtx, Dialect, Hello, Reply, encode_hello};
 use grofe::remote::bootstrap::Install;
+use grofe::remote::machines::Machine;
+use grofe::remote::machines::client::Side;
 use grofe::remote::ssh::Target;
 use grofe::remote::{forward, session};
 
@@ -83,6 +85,36 @@ pub(super) fn remote_route(globals: &Globals, rest: &[String]) -> Option<ExitCod
 /// The multi-machine client (spec ssh-remote §5): `grofe --machines`, or
 /// bare `grofe` on a terminal outside a pane with enabled machines saved.
 pub(super) fn machines_route(globals: &Globals, rest: &[String]) -> Option<ExitCode> {
+    let machines = wants_machines(globals, rest)?;
+    if !rest.is_empty() {
+        return Some(fail("grofe --machines: takes no command"));
+    }
+    if !io::stdin().is_terminal() {
+        return Some(fail("open terminal failed: not a terminal"));
+    }
+    let (local, remote) = match sides() {
+        Ok(s) => s,
+        Err(e) => return Some(fail(&e)),
+    };
+    let opts = client::AttachOptions {
+        features: FEATURES.get().cloned().unwrap_or_default(),
+        ..Default::default()
+    };
+    Some(print_attach(grofe::remote::machines::client::run(
+        &globals.socket(),
+        &machines,
+        local,
+        remote,
+        opts,
+        std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
+        local_option("remote-reconnect").is_none_or(|v| v == "on"),
+    )))
+}
+
+/// The saved machines when this call is the multi-machine client:
+/// `--machines`, or bare `grofe` on a terminal outside a pane with an
+/// enabled machine saved. The file is read only for those two.
+fn wants_machines(globals: &Globals, rest: &[String]) -> Option<Vec<Machine>> {
     if dialect() != Dialect::Grofe
         || globals.remote.host.is_some()
         || (!globals.remote.machines && !rest.is_empty())
@@ -94,18 +126,13 @@ pub(super) fn machines_route(globals: &Globals, rest: &[String]) -> Option<ExitC
         && std::env::var_os("GROFE").is_none_or(|v| v.is_empty())
         && io::stdin().is_terminal()
         && machines.iter().any(|m| m.enabled);
-    if !globals.remote.machines && !bare {
-        return None;
-    }
-    if !rest.is_empty() {
-        return Some(fail("grofe --machines: takes no command"));
-    }
-    if !io::stdin().is_terminal() {
-        return Some(fail("open terminal failed: not a terminal"));
-    }
-    use grofe::remote::machines::client::Side;
-    // This machine's server gets what the local CLI sends (the cwd and the
-    // whole environment), another machine's the filtered remote context.
+    (globals.remote.machines || bare).then_some(machines)
+}
+
+/// How the multi-machine client speaks to this machine's server (what the
+/// local CLI sends: the cwd and the whole environment) and to another
+/// machine's (the filtered remote context).
+fn sides() -> Result<(Side, Side), String> {
     let local_ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: None,
@@ -116,32 +143,15 @@ pub(super) fn machines_route(globals: &Globals, rest: &[String]) -> Option<ExitC
         dialect: dialect(),
         request: Default::default(),
     };
-    let sides = encode_hello(&Hello::Control(local_ctx.clone()))
-        .map_err(|e| e.to_string())
-        .and_then(|local| Ok((local, remote_hello()?)));
-    let (local_hello, remote_hello) = match sides {
-        Ok(h) => h,
-        Err(e) => return Some(fail(&e)),
+    let local = Side {
+        hello: encode_hello(&Hello::Control(local_ctx.clone())).map_err(|e| e.to_string())?,
+        ctx: local_ctx,
     };
-    let opts = client::AttachOptions {
-        features: FEATURES.get().cloned().unwrap_or_default(),
-        ..Default::default()
+    let remote = Side {
+        hello: remote_hello()?,
+        ctx: remote_ctx(),
     };
-    Some(print_attach(grofe::remote::machines::client::run(
-        &globals.socket(),
-        &machines,
-        Side {
-            hello: local_hello,
-            ctx: local_ctx,
-        },
-        Side {
-            hello: remote_hello,
-            ctx: remote_ctx(),
-        },
-        opts,
-        std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
-        local_option("remote-reconnect").is_none_or(|v| v == "on"),
-    )))
+    Ok((local, remote))
 }
 
 /// The local config's value of option `name`, or its default.
