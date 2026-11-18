@@ -123,18 +123,6 @@ fn blocked_line(host: &str, why: &str) -> String {
     )
 }
 
-/// [`Link::connect`] for [`Transport::Quic`]: one bootstrap, no install,
-/// and ssh when UDP gets no answer. Nothing is kept for a reconnect; the
-/// CLI uses [`Roaming`] for that.
-pub fn connect_once(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError> {
-    let b = bootstrap(target, opts.batch)?;
-    match attempt(target.host_name(), &dial_host(target), &b) {
-        Attempt::Linked(link) => Ok(link),
-        Attempt::Silent(_) => Link::connect(&Transport::Ssh(target.clone()), opts),
-        Attempt::Refused(why) => Err(ConnectError::Failed(why)),
-    }
-}
-
 /// A roaming remote: what a reconnect needs to come back over QUIC.
 pub struct Roaming {
     target: Target,

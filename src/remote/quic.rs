@@ -458,50 +458,14 @@ pub fn connect(host: &str, b: &Bootstrap) -> io::Result<QuicLink> {
 }
 
 fn connect_within(host: &str, b: &Bootstrap, wait: Duration) -> io::Result<QuicLink> {
-    let addr = (host, b.port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::other(format!("{host} has no address")))?;
+    let addr = resolve(host, b.port)?;
     let rt = Arc::new(runtime()?);
-    let socket = UdpSocket::bind(unspecified(&addr))?;
-    socket.set_nonblocking(true)?;
-    let endpoint = {
-        let _guard = rt.enter();
-        Endpoint::new(
-            EndpointConfig::default(),
-            None,
-            socket,
-            Arc::new(TokioRuntime),
-        )?
-    };
+    let endpoint = client_endpoint(&rt, &addr)?;
     let config = client_config(b.cert_sha256)?;
-    let token = b.token;
     let (conn, send, recv) = rt.block_on(async {
-        let connecting = endpoint
-            .connect_with(config, addr, SERVER_NAME)
-            .map_err(io::Error::other)?;
-        let conn = match tokio::time::timeout(wait, connecting).await {
-            Err(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("no answer from {host} port {} over UDP (blocked?)", b.port),
-                ));
-            }
-            Ok(Err(ConnectionError::TimedOut)) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("no answer from {host} port {} over UDP (blocked?)", b.port),
-                ));
-            }
-            Ok(Err(e)) => return Err(io::Error::other(format!("QUIC handshake failed: {e}"))),
-            Ok(Ok(c)) => c,
-        };
-        // The handshake is done and the certificate matched the pin: only
-        // now does the token leave this machine.
-        let (mut send, recv) = conn.open_bi().await.map_err(connection_error)?;
-        send.write_all(&token).await.map_err(write_error)?;
-        conn.set_receive_window(VarInt::from_u32(AUTHED_WINDOW));
-        Ok((conn, send, recv))
+        let conn = handshake(&endpoint, config, addr, wait, host, b.port).await?;
+        let (send, recv) = present_token(&conn, &b.token).await?;
+        Ok::<_, io::Error>((conn, send, recv))
     })?;
     let reader = QuicReader {
         rt: rt.handle().clone(),
@@ -519,6 +483,66 @@ fn connect_within(host: &str, b: &Bootstrap, wait: Duration) -> io::Result<QuicL
         conn,
         streams: Some((Box::new(reader), Box::new(writer))),
     })
+}
+
+/// The first address of `host` at `port`.
+fn resolve(host: &str, port: u16) -> io::Result<SocketAddr> {
+    (host, port)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::other(format!("{host} has no address")))
+}
+
+/// A client endpoint on a fresh local UDP socket of `addr`'s family.
+fn client_endpoint(rt: &Runtime, addr: &SocketAddr) -> io::Result<Endpoint> {
+    let socket = UdpSocket::bind(unspecified(addr))?;
+    socket.set_nonblocking(true)?;
+    let _guard = rt.enter();
+    Endpoint::new(
+        EndpointConfig::default(),
+        None,
+        socket,
+        Arc::new(TokioRuntime),
+    )
+}
+
+/// The QUIC handshake with the pinned certificate, within `wait`. No
+/// answer in time is `ErrorKind::TimedOut`.
+async fn handshake(
+    endpoint: &Endpoint,
+    config: quinn::ClientConfig,
+    addr: SocketAddr,
+    wait: Duration,
+    host: &str,
+    port: u16,
+) -> io::Result<quinn::Connection> {
+    let silent = || {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("no answer from {host} port {port} over UDP (blocked?)"),
+        )
+    };
+    let connecting = endpoint
+        .connect_with(config, addr, SERVER_NAME)
+        .map_err(io::Error::other)?;
+    match tokio::time::timeout(wait, connecting).await {
+        Err(_) | Ok(Err(ConnectionError::TimedOut)) => Err(silent()),
+        Ok(Err(e)) => Err(io::Error::other(format!("QUIC handshake failed: {e}"))),
+        Ok(Ok(c)) => Ok(c),
+    }
+}
+
+/// Opens the one stream and sends the token on it. Called only after the
+/// handshake, when the certificate matched the pin: only then does the
+/// token leave this machine.
+async fn present_token(
+    conn: &quinn::Connection,
+    token: &[u8; TOKEN_LEN],
+) -> io::Result<(SendStream, RecvStream)> {
+    let (mut send, recv) = conn.open_bi().await.map_err(connection_error)?;
+    send.write_all(token).await.map_err(write_error)?;
+    conn.set_receive_window(VarInt::from_u32(AUTHED_WINDOW));
+    Ok((send, recv))
 }
 
 pub mod server;

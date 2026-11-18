@@ -170,12 +170,20 @@ fn remote_main(
         .or_else(|| local_option("remote-transport"))
         .unwrap_or_else(|| "ssh".to_string());
     let release_url = grofe::remote::bootstrap::release_url(local_option("remote-release-url"));
-    let connected = match transport.as_str() {
-        "ssh" => grofe::remote::bootstrap::connect(target, &flags.install, &release_url)
-            .map(|link| (link, None)),
-        "quic" => grofe::remote::roam::Roaming::connect(target, &flags.install, &release_url)
-            .map(|(roaming, link)| (link, Some(std::sync::Arc::new(roaming)))),
+    // QUIC only for an attach: a one-shot over ssh starts no proxy, so it
+    // neither stops the one behind a running QUIC attach (one per instance)
+    // nor leaves a detached one behind.
+    let quic = match transport.as_str() {
+        "ssh" => false,
+        "quic" => attaches_remotely(argv),
         other => return fail(&format!("grofe: unknown transport {other:?} (ssh or quic)")),
+    };
+    let connected = if quic {
+        grofe::remote::roam::Roaming::connect(target, &flags.install, &release_url)
+            .map(|(roaming, link)| (link, Some(std::sync::Arc::new(roaming))))
+    } else {
+        grofe::remote::bootstrap::connect(target, &flags.install, &release_url)
+            .map(|link| (link, None))
     };
     let (link, roaming) = match connected {
         Ok(c) => c,
@@ -203,6 +211,16 @@ fn remote_main(
             Ok(reply) => print_reply(reply),
             Err(e) => fail(&e),
         },
+    }
+}
+
+/// Whether `argv` attaches there: `attach-session`, or a `new-session`
+/// without `-d`.
+fn attaches_remotely(argv: &[String]) -> bool {
+    match grofe::cmd::parse::canonical_name(&argv[0]) {
+        "attach-session" => true,
+        "new-session" => attaches(argv),
+        _ => false,
     }
 }
 
