@@ -307,8 +307,16 @@ fn main() -> ExitCode {
                         rest,
                     ) {
                         Ok(out) => {
-                            print!("{out}");
-                            ExitCode::SUCCESS
+                            print!("{}", out.table);
+                            for e in &out.errors {
+                                eprintln!("grofe: {e}");
+                            }
+                            // An offline machine is a row; a refusal fails.
+                            if out.errors.is_empty() {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::FAILURE
+                            }
                         }
                         Err(e) => fail(&format!("grofe: {e}")),
                     }

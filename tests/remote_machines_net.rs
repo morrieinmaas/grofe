@@ -730,3 +730,54 @@ fn the_machine_key_right_after_a_switch_opens_the_picker() {
     h.send("\x02d");
     h.wait_exit();
 }
+
+/// Only a default-format listing is kept as the last known agents: a run
+/// with `-F` leaves the cache the picker and offline rows read alone.
+#[test]
+fn a_formatted_listing_is_not_cached() {
+    let f = Fleet::new();
+    agent(&f.beta, "y", "claude", "done");
+    let list = |args: &[&str]| {
+        let mut all = vec!["agent", "list", "--all-machines"];
+        all.extend_from_slice(args);
+        let out = run_bounded(f.grofe(&all), CMD_TIMEOUT);
+        assert!(out.status.success(), "{out:?}");
+        out.stdout
+    };
+    list(&[]);
+    let formatted = list(&["-F", "state=#{agent_state}"]);
+    assert!(
+        formatted
+            .lines()
+            .any(|l| l.split_whitespace().collect::<Vec<_>>() == ["b", "state=done"]),
+        "{formatted}"
+    );
+    f.set_down("beta", true);
+    let offline = list(&[]);
+    let b: Vec<&str> = offline.lines().filter(|l| l.starts_with("b ")).collect();
+    assert_eq!(b.len(), 1, "{offline}");
+    assert!(b[0].contains("claude done offline"), "{offline}");
+}
+
+/// A server that refuses the request (a bad flag) is reported on stderr and
+/// fails the command; an unreachable machine is still an offline row.
+#[test]
+fn a_refused_listing_fails_and_says_where() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    let out = run_bounded(
+        f.grofe(&["agent", "list", "--all-machines", "-Q"]),
+        CMD_TIMEOUT,
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(out.stderr.contains("grofe: local: "), "{out:?}");
+    assert!(out.stderr.contains("grofe: a: "), "{out:?}");
+    assert!(
+        !out.stdout.contains("local") && !out.stdout.starts_with("a "),
+        "{out:?}"
+    );
+    assert!(
+        out.stdout.contains("b ") && out.stdout.contains("offline"),
+        "{out:?}"
+    );
+}

@@ -100,11 +100,32 @@ fn bounded<T: Send + 'static>(
     rx.recv_timeout(timeout).ok()
 }
 
+/// `agent list --all-machines` as it comes out: the table for stdout and
+/// the errors for stderr.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AllAgents {
+    pub table: String,
+    /// `<machine>: <error>`, sanitized: a server that answered with an
+    /// error (a bad flag), or a local server that could not be reached.
+    pub errors: Vec<String>,
+}
+
+/// What asking one machine came to.
+enum Asked {
+    /// The command's output, or the error the server answered with.
+    Answered(Result<String, String>),
+    /// No link in time: the machine is offline.
+    Unreachable,
+}
+
 /// `agent list --all-machines`: `argv` (the `agent list ...` words without
 /// `--all-machines`) on the local server and on every enabled machine at
 /// once, each waited for at most `timeout`. A reachable machine's output is
-/// kept as its last known agents; an unreachable one shows those, marked
-/// offline. With no local server the local part is empty.
+/// kept as its last known agents when it is in the default format (no
+/// `-F`, the format the picker reads back); an unreachable one shows those,
+/// marked offline. A machine that answered with an error is left out of the
+/// table and its error reported. With no local server the local part is
+/// empty.
 pub fn all_agents(
     socket: &Path,
     machines: &[Machine],
@@ -112,7 +133,7 @@ pub fn all_agents(
     argv: &[String],
     state_dir: &Path,
     timeout: Duration,
-) -> String {
+) -> AllAgents {
     let local = {
         let (socket, hello, argv) = (socket.to_path_buf(), hello.to_string(), argv.to_vec());
         std::thread::spawn(move || {
@@ -130,33 +151,51 @@ pub fn all_agents(
             let name = m.name.clone();
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let got = bounded(timeout, move || machine_link(&m)?.request(&hello, &argv));
-                let _ = tx.send(got);
+                let asked = bounded(timeout, move || match machine_link(&m) {
+                    Ok(link) => Asked::Answered(link.request(&hello, &argv)),
+                    Err(_) => Asked::Unreachable,
+                });
+                let _ = tx.send(asked.unwrap_or(Asked::Unreachable));
             });
             (name, rx)
         })
         .collect();
-    let mut listings = vec![(
-        LOCAL.to_string(),
-        AgentListing::Online(local.join().ok().and_then(Result::ok).unwrap_or_default()),
-    )];
-    for (name, rx) in remotes {
-        let listing = match rx.recv().ok().flatten() {
-            Some(Ok(text)) => {
-                let text = sanitize_lines(&text);
-                let _ = super::save_last_known(state_dir, &name, &text);
-                AgentListing::Online(text)
-            }
-            _ => AgentListing::Offline(super::last_known(state_dir, &name)),
-        };
-        listings.push((name, listing));
+    let cache = !argv.iter().any(|a| a.starts_with("-F"));
+    let mut out = AllAgents::default();
+    let mut listings = Vec::new();
+    match local.join().unwrap_or_else(|_| Err("panicked".to_string())) {
+        Ok(text) => listings.push((LOCAL.to_string(), AgentListing::Online(text))),
+        Err(e) => out.errors.push(error_line(LOCAL, &e)),
     }
-    combined_agent_list(&listings)
+    for (name, rx) in remotes {
+        match rx.recv().unwrap_or(Asked::Unreachable) {
+            Asked::Answered(Ok(text)) => {
+                let text = sanitize_lines(&text);
+                if cache {
+                    let _ = super::save_last_known(state_dir, &name, &text);
+                }
+                listings.push((name, AgentListing::Online(text)));
+            }
+            Asked::Answered(Err(e)) => out.errors.push(error_line(&name, &e)),
+            Asked::Unreachable => {
+                let last = super::last_known(state_dir, &name);
+                listings.push((name, AgentListing::Offline(last)));
+            }
+        }
+    }
+    out.table = combined_agent_list(&listings);
+    out
+}
+
+/// One machine's error, as stderr shows it.
+fn error_line(name: &str, err: &str) -> String {
+    let err = crate::remote::ssh::sanitize(err.trim_end());
+    format!("{}: {err}", crate::remote::ssh::sanitize(name))
 }
 
 /// `grofe agent list --all-machines [-F format]`: `args` is the whole argv
 /// from `agent` on.
-pub fn all_agents_cmd(socket: &Path, hello: &str, args: &[String]) -> io::Result<String> {
+pub fn all_agents_cmd(socket: &Path, hello: &str, args: &[String]) -> io::Result<AllAgents> {
     let argv: Vec<String> = args
         .iter()
         .filter(|a| *a != "--all-machines")
