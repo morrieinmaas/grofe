@@ -56,6 +56,7 @@ impl Remote {
 for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift 2
+case "$*" in *proxy*) echo $$ >> '{root}/proxies' ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 export SSH_AUTH_SOCK='{root}/agent.sock'
@@ -429,5 +430,35 @@ fn a_file_dropped_while_a_port_offer_is_up_still_uploads() {
     h.wait_for(&format!("echo '{}'", remote.display()));
     assert_eq!(fs::read_to_string(&remote).unwrap(), "dropped");
     fs::write(r.root().join("stop-offer"), "").unwrap();
+    detach(h);
+}
+
+#[test]
+fn an_upload_prompt_lost_with_the_link_comes_back_and_typing_reaches_the_pane() {
+    let r = Remote::new();
+    let local = r.file("across-a-drop.txt", "x");
+    let mut h = r.attach(&[]);
+    h.send("echo ");
+    h.send(pasted(&local));
+    h.wait_for("upload 1 file (1 B) to box:");
+    // The link drops with the prompt up; the client reconnects.
+    let proxy = fs::read_to_string(r.root().join("proxies")).unwrap();
+    let pid: i32 = proxy.lines().last().unwrap().trim().parse().unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    wait_until("the reconnect", WAIT, || {
+        fs::read_to_string(r.root().join("proxies")).is_ok_and(|p| p.lines().count() >= 2)
+    });
+    // The question is still there (after the redraw), and answering it
+    // frees the keyboard.
+    std::thread::sleep(Duration::from_millis(800));
+    h.wait_for("upload 1 file (1 B) to box:");
+    h.send("n\r");
+    std::thread::sleep(Duration::from_millis(300));
+    h.send("\recho after-the-drop\r");
+    h.wait_for("\nafter-the-drop");
     detach(h);
 }
