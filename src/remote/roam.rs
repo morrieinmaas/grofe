@@ -11,7 +11,9 @@ use std::process::Stdio;
 use std::sync::Mutex;
 
 use super::bootstrap::Install;
-use super::connect::{ConnectError, ConnectOpts, Link, Transport, classify};
+use super::connect::{
+    ConnectError, ConnectOpts, Link, NO_ANSWER, Transport, classify, within_hello_timeout,
+};
 use super::quic::{self, Bootstrap};
 use super::ssh::{self, SshOpts, Target};
 
@@ -58,19 +60,37 @@ pub fn proxy_failure(stderr: &str) -> Option<String> {
 pub fn bootstrap(target: &Target, batch: bool) -> Result<Bootstrap, BootError> {
     let remote = ssh::remote_grofe(env!("CARGO_PKG_VERSION"), QUIC_ARGS);
     let opts = SshOpts {
-        keepalive: ssh::Keepalive::default(),
+        keepalive: ssh::wants_keepalive(target),
         batch,
     };
-    let out = ssh::command()
+    let cannot = |e: io::Error| {
+        BootError::Connect(ConnectError::Failed(format!(
+            "cannot run {}: {e}",
+            ssh::program()
+        )))
+    };
+    let child = ssh::command()
         .args(ssh::argv(target, opts, &remote))
         .stdin(Stdio::null())
-        .output()
-        .map_err(|e| {
-            BootError::Connect(ConnectError::Failed(format!(
-                "cannot run {}: {e}",
-                ssh::program()
-            )))
-        })?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(cannot)?;
+    // Unattended (a reconnect), a stalled connect or a hung remote must not
+    // hold the reconnect forever: the same bound as the ssh transport's
+    // hello. Interactive, ssh may be waiting on a password.
+    let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+    let (out, timed_out) = if batch {
+        within_hello_timeout(pid, || child.wait_with_output())
+    } else {
+        (child.wait_with_output(), false)
+    };
+    if timed_out {
+        return Err(BootError::Connect(ConnectError::Failed(
+            NO_ANSWER.to_string(),
+        )));
+    }
+    let out = out.map_err(cannot)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success()

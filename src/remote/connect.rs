@@ -415,7 +415,10 @@ fn spawn_ssh(
 /// and the remote never answer, so after [`hello_timeout`] the process
 /// `pid` is killed, which ends the read. What `hello` gave, and whether
 /// the bound was hit.
-fn within_hello_timeout<T>(pid: nix::unistd::Pid, hello: impl FnOnce() -> T) -> (T, bool) {
+pub(crate) fn within_hello_timeout<T>(
+    pid: nix::unistd::Pid,
+    hello: impl FnOnce() -> T,
+) -> (T, bool) {
     let (answered, wait) = std::sync::mpsc::channel::<()>();
     let watchdog = std::thread::spawn(move || {
         let timed_out = matches!(
