@@ -174,6 +174,28 @@ struct State {
     boot: Option<Bootstrap>,
     /// UDP got no answer while ssh worked: ssh from now on.
     ssh_only: bool,
+    /// Reconnects in a row whose QUIC, after a fresh bootstrap, got no
+    /// answer while ssh worked.
+    silent: u32,
+}
+
+/// Silent reconnects in a row after which UDP counts as blocked for the
+/// session; fewer are a passing outage, and the next reconnect tries QUIC.
+const SILENT_GIVE_UP: u32 = 3;
+
+impl State {
+    /// QUIC worked: an outage is over.
+    fn linked(&mut self) {
+        self.silent = 0;
+    }
+
+    /// QUIC got no answer after a fresh bootstrap while ssh worked.
+    fn went_silent(&mut self) {
+        self.silent += 1;
+        if self.silent >= SILENT_GIVE_UP {
+            self.ssh_only = true;
+        }
+    }
 }
 
 impl Roaming {
@@ -206,6 +228,7 @@ impl Roaming {
             state: Mutex::new(State {
                 boot: Some(boot.clone()),
                 ssh_only: false,
+                silent: 0,
             }),
         };
         let link = match attempt(target.host_name(), &roaming.dial, &boot) {
@@ -233,6 +256,7 @@ impl Roaming {
             state: Mutex::new(State {
                 boot: None,
                 ssh_only: false,
+                silent: 0,
             }),
         }
     }
@@ -247,6 +271,7 @@ impl Roaming {
             state: Mutex::new(State {
                 boot: None,
                 ssh_only: true,
+                silent: 0,
             }),
         };
         let link = roaming.ssh(false)?;
@@ -280,6 +305,7 @@ impl Roaming {
         if let Some(b) = boot
             && let Attempt::Linked(link) = attempt(host, &self.dial, &b)
         {
+            self.state().linked();
             return Ok(link);
         }
         let b = match bootstrap(&self.target, true) {
@@ -292,10 +318,16 @@ impl Roaming {
         };
         self.state().boot = Some(b.clone());
         match attempt(host, &self.dial, &b) {
-            Attempt::Linked(link) => Ok(link),
+            Attempt::Linked(link) => {
+                self.state().linked();
+                Ok(link)
+            }
+            // ssh for now; the next reconnect tries QUIC again until
+            // SILENT_GIVE_UP of these in a row.
             Attempt::Silent(_) => {
-                self.state().ssh_only = true;
-                self.ssh(true)
+                let link = self.ssh(true)?;
+                self.state().went_silent();
+                Ok(link)
             }
             Attempt::Refused(why) => Err(why),
         }
@@ -305,6 +337,27 @@ impl Roaming {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn udp_counts_as_blocked_only_after_silent_reconnects_in_a_row() {
+        let mut s = State {
+            boot: None,
+            ssh_only: false,
+            silent: 0,
+        };
+        s.went_silent();
+        s.went_silent();
+        assert!(!s.ssh_only, "two silent reconnects gave up on UDP");
+        s.linked();
+        s.went_silent();
+        s.went_silent();
+        assert!(
+            !s.ssh_only,
+            "a QUIC link in between did not reset the count"
+        );
+        s.went_silent();
+        assert!(s.ssh_only);
+    }
 
     #[test]
     fn a_failed_proxy_quic_is_told_from_an_old_grofe() {

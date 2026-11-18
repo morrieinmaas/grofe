@@ -164,6 +164,9 @@ pub fn proxy_quic(socket: &Path, connect: Connect) -> io::Result<()> {
     if let Some(dir) = server_log.parent() {
         crate::paths::ensure_private_dir(dir)?;
     }
+    // Held until the bootstrap line is out, so the next start of this
+    // instance sees this one's pid file, written, and stops it.
+    let _starting = start_lock(&server_log)?;
     stop_older(&server_log);
     let token = random32()?;
     let seed = random32()?;
@@ -204,6 +207,33 @@ pub fn proxy_quic(socket: &Path, connect: Connect) -> io::Result<()> {
     std::process::exit(0)
 }
 
+/// Serialises the starts of one instance's `proxy --quic` on
+/// `<instance>-quic.lock`, so two at once cannot both miss each other in
+/// [`stop_older`] and both stay. A POSIX record lock: it belongs to this
+/// process only, so the forked proxy never inherits it, and it goes when
+/// the returned file is dropped or this process exits.
+fn start_lock(server_log: &Path) -> io::Result<std::fs::File> {
+    let stem = server_log
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "grofe".into());
+    let path = server_log.with_file_name(format!("{stem}-quic.lock"));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)?;
+    // SAFETY: a plain C struct; every field is set or zero on purpose.
+    let mut lock: nix::libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = nix::libc::F_WRLCK as _;
+    lock.l_whence = nix::libc::SEEK_SET as _;
+    // l_start 0 and l_len 0: the whole file.
+    nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_SETLKW(&lock)).map_err(io::Error::from)?;
+    Ok(file)
+}
+
 /// Stops the other `grofe proxy --quic` processes of the instance whose
 /// server log is `server_log` (one proxy per instance) and removes their
 /// pid files. A live proxy holds an exclusive lock on its pid file for as
@@ -242,7 +272,8 @@ fn stop_older(server_log: &Path) {
             Err((mut file, nix::errno::Errno::EWOULDBLOCK)) => {
                 let mut text = String::new();
                 let _ = io::Read::read_to_string(&mut file, &mut text);
-                // Empty while the proxy that holds it is still writing it.
+                // Never empty once [`start_lock`] is free again: the start
+                // that holds it writes the pid before it lets go.
                 let Ok(pid) = text.trim().parse::<i32>() else {
                     continue;
                 };
