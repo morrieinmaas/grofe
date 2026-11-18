@@ -325,6 +325,14 @@ fn ping_loop(shared: std::sync::Weak<Shared>, every: Duration) {
                     Some(old) => (old * 7 + sample) / 8,
                 });
             }
+            // A pong queues behind the channel data sent before it, so on a
+            // slow link a busy channel (a big output, an upload, a redraw)
+            // makes it late. Spec §2's "two missed pings" counts a ping as
+            // missed only when nothing at all came in for its whole wait: a
+            // late pong on a link still delivering data is no miss.
+            Err(e) if e.kind() == io::ErrorKind::TimedOut && s.conn.idle() < every => {
+                missed = 0;
+            }
             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                 missed += 1;
                 if missed >= MISSED_PINGS {
@@ -554,6 +562,69 @@ mod tests {
         let (a, b) = UnixStream::pair().unwrap();
         (&b).write_all(encode_hello(hello).as_bytes()).unwrap();
         (a, b)
+    }
+
+    /// The ping loop over `link` with interval `every`, as `Link::start`
+    /// runs it.
+    fn ping_with(link: &Link, every: Duration) {
+        let weak = Arc::downgrade(&link.shared);
+        std::thread::spawn(move || ping_loop(weak, every));
+    }
+
+    fn wait_dropped_within(link: &Link, bound: Duration) -> bool {
+        let deadline = std::time::Instant::now() + bound;
+        while std::time::Instant::now() < deadline {
+            if link.dropped().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// Pongs that never come, on a link still delivering data (a busy
+    /// channel ahead of them on a slow line), are no missed pings; a link
+    /// that sends nothing at all still drops after two.
+    #[test]
+    fn data_still_arriving_keeps_a_link_whose_pongs_are_late() {
+        let every = Duration::from_millis(100);
+        // Flowing: the peer answers no ping but keeps sending frames.
+        let (a, b) = fake_proxy(&ProxyHello::current(&[]));
+        let link = Link::over("box", a.try_clone().unwrap(), a, None).unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flowing = {
+            let (stop, mut b) = (Arc::clone(&stop), b.try_clone().unwrap());
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    // Data for a channel the client does not know: ignored, but
+                    // it is traffic.
+                    let frame = crate::remote::proxy_proto::Frame::Data(2, vec![0; 64]);
+                    if crate::remote::proxy_proto::write_frame(&mut b, &frame).is_err() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            })
+        };
+        ping_with(&link, every);
+        assert!(
+            !wait_dropped_within(&link, every * 10),
+            "dropped while data flowed: {:?}",
+            link.dropped()
+        );
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        flowing.join().unwrap();
+        // Now silent: two missed pings drop it.
+        assert!(
+            wait_dropped_within(&link, every * 10),
+            "a silent link stays"
+        );
+        assert!(
+            link.dropped().unwrap().contains("pings"),
+            "{:?}",
+            link.dropped()
+        );
+        drop(b);
     }
 
     #[test]

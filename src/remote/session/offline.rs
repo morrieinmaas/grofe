@@ -186,7 +186,8 @@ impl Loop {
         let State::Offline { next } = &self.state else {
             return;
         };
-        let secs = next.map_or(0, |t| {
+        // No `next` while an attempt is in flight: it says "connecting".
+        let secs = next.map(|t| {
             t.saturating_duration_since(Instant::now())
                 .as_secs_f64()
                 .ceil() as u64

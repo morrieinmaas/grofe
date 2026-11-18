@@ -120,10 +120,12 @@ impl Default for Jitter {
 }
 
 /// The reconnect bar.
-pub fn bar_text(host: &str, attempt: u32, next_secs: u64) -> String {
-    format!(
-        "grofe: reconnecting to {host} (attempt {attempt}, next in {next_secs}s) · prefix d detach"
-    )
+pub fn bar_text(host: &str, attempt: u32, next_secs: Option<u64>) -> String {
+    let when = match next_secs {
+        Some(s) => format!("next in {s}s"),
+        None => "connecting".to_string(),
+    };
+    format!("grofe: reconnecting to {host} (attempt {attempt}, {when}) · prefix d detach")
 }
 
 /// `text` on the bottom row in reverse video, padded or cut to the width,
@@ -213,10 +215,14 @@ mod tests {
 
     #[test]
     fn the_bar_fills_the_bottom_row_in_reverse_video() {
-        let text = bar_text("box", 3, 4);
+        let text = bar_text("box", 3, Some(4));
         assert_eq!(
             text,
             "grofe: reconnecting to box (attempt 3, next in 4s) · prefix d detach"
+        );
+        assert_eq!(
+            bar_text("box", 2, None),
+            "grofe: reconnecting to box (attempt 2, connecting) · prefix d detach"
         );
         let row = String::from_utf8(bottom_row("hi", 6, 24)).unwrap();
         assert_eq!(row, "\x1b7\x1b[24;1H\x1b[0m\x1b[7mhi    \x1b[0m\x1b8");
