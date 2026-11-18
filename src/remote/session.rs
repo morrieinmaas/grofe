@@ -65,6 +65,7 @@ const DEFAULT_PREFIX: &str = "C-b";
 mod handshake;
 mod hooks;
 
+pub(crate) use handshake::attached_session;
 use handshake::handshake;
 pub use hooks::{Hook, HookCtx, Input, Prompt, Switch};
 
@@ -367,10 +368,7 @@ impl Loop {
     /// a sleep, `clocks` being the previous look) and keeps the bar drawn.
     fn offline_step(&mut self, a: &RemoteAttach, clocks: Clocks, now: Clocks) {
         if let State::Offline { next } = &mut self.state {
-            if woke(clocks, now) && next.is_some() {
-                *next = Some(now.mono);
-            }
-            if next.is_some_and(|t| now.mono >= t) {
+            if attempt_due(next, clocks, now) {
                 *next = None;
                 self.attempt(a);
             }
@@ -615,7 +613,7 @@ impl Loop {
             return Some(Err(if why.is_empty() {
                 "lost server".to_string()
             } else {
-                format!("lost server: {why}")
+                format!("lost server: {}", crate::remote::ssh::sanitize(&why))
             }));
         }
         let now = Instant::now();
@@ -731,9 +729,46 @@ fn draw_bottom_row(text: &str) {
     let _ = client::write_tty(&bottom_row(text, cols, rows));
 }
 
+/// Whether the next attempt (`next`, none while one is in flight) is due at
+/// `now`, `before` being the previous look at the clocks: a wake from sleep
+/// (the wall clock jumped past the monotonic one) brings it forward to now.
+fn attempt_due(next: &mut Option<Instant>, before: Clocks, now: Clocks) -> bool {
+    if woke(before, now) && next.is_some() {
+        *next = Some(now.mono);
+    }
+    next.is_some_and(|t| now.mono >= t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spec: a resumed wake from sleep (a wall clock jump over 5 s) retries
+    /// at once, however long the backoff had left.
+    #[test]
+    fn a_wake_from_sleep_makes_the_next_attempt_due_at_once() {
+        let mono = Instant::now();
+        let wall = std::time::SystemTime::now();
+        let before = Clocks { mono, wall };
+        let later = |m: u64, w: u64| Clocks {
+            mono: mono + Duration::from_secs(m),
+            wall: wall + Duration::from_secs(w),
+        };
+        let far = Some(mono + Duration::from_secs(30));
+        // No jump: the 30 s wait stands.
+        let mut next = far;
+        assert!(!attempt_due(&mut next, before, later(1, 1)));
+        assert_eq!(next, far);
+        // A 10 s jump: due now.
+        let mut next = far;
+        assert!(attempt_due(&mut next, before, later(1, 11)));
+        // While an attempt is in flight a wake starts no second one.
+        let mut none = None;
+        assert!(!attempt_due(&mut none, before, later(1, 11)));
+        // The wait running out is due too.
+        let mut next = far;
+        assert!(attempt_due(&mut next, before, later(30, 30)));
+    }
 
     #[test]
     fn the_client_tty_is_unique_per_connection_and_not_a_real_device() {
