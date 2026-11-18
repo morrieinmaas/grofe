@@ -4,8 +4,11 @@
 //! offline rows.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::server::input::{Decoder, Input as Decoded, KeyCode, Mods};
 
 #[cfg(doc)]
 use super::LOCAL;
@@ -90,33 +93,31 @@ pub struct Picker {
 impl Picker {
     /// Feeds the keys in `input` with `count` machines listed. Up and down
     /// move the selection (stopping at the ends), Enter chooses it, Escape
-    /// closes, and `M-1`..`M-9` (ESC then the digit) choose that row at
-    /// once. The first key that chooses or closes ends the input; other
-    /// bytes are ignored.
+    /// closes, and `M-1`..`M-9` choose that row at once. Keys are decoded
+    /// as the server decodes them, so legacy bytes and the kitty keyboard
+    /// protocol's both work. The first key that chooses or closes ends the
+    /// input; other keys are ignored.
     pub fn handle(&mut self, input: &[u8], count: usize) -> Option<PickerOutcome> {
-        let mut i = 0;
-        while i < input.len() {
-            let rest = &input[i..];
-            let (len, key) = match rest {
-                [0x1b, b'[' | b'O', b'A', ..] => (3, Key::Up),
-                [0x1b, b'[' | b'O', b'B', ..] => (3, Key::Down),
-                [0x1b, d @ b'1'..=b'9', ..] => (2, Key::Jump(usize::from(d - b'1'))),
-                [0x1b, b'[' | b'O', ..] => (rest.len(), Key::Other),
-                [0x1b] => (1, Key::Escape),
-                [0x1b, ..] => (1, Key::Escape),
-                [b'\r' | b'\n', ..] => (1, Key::Enter),
-                _ => (1, Key::Other),
+        let keys = Decoder::new().feed(input, Instant::now(), Duration::ZERO);
+        for key in keys {
+            let Decoded::Key(key) = key else {
+                continue;
             };
-            i += len;
-            match key {
-                Key::Up => self.selected = self.selected.saturating_sub(1),
-                Key::Down if self.selected + 1 < count => self.selected += 1,
-                Key::Enter if count > 0 => return Some(PickerOutcome::Choose(self.selected)),
-                Key::Jump(n) if n < count => {
-                    self.selected = n;
-                    return Some(PickerOutcome::Choose(n));
+            let plain = key.mods == Mods::default();
+            match key.code {
+                KeyCode::Up if plain => self.selected = self.selected.saturating_sub(1),
+                KeyCode::Down if plain && self.selected + 1 < count => self.selected += 1,
+                KeyCode::Enter if plain && count > 0 => {
+                    return Some(PickerOutcome::Choose(self.selected));
                 }
-                Key::Escape => return Some(PickerOutcome::Close),
+                KeyCode::Escape if plain => return Some(PickerOutcome::Close),
+                KeyCode::Char(d @ '1'..='9') if key.mods == alt() => {
+                    let n = d as usize - '1' as usize;
+                    if n < count {
+                        self.selected = n;
+                        return Some(PickerOutcome::Choose(n));
+                    }
+                }
                 _ => {}
             }
         }
@@ -124,13 +125,12 @@ impl Picker {
     }
 }
 
-enum Key {
-    Up,
-    Down,
-    Enter,
-    Escape,
-    Jump(usize),
-    Other,
+/// Alt and nothing else.
+fn alt() -> Mods {
+    Mods {
+        alt: true,
+        ..Mods::default()
+    }
 }
 
 /// One picker row's text, before it is fitted to the box: the `M-` digit,
@@ -372,6 +372,19 @@ mod tests {
         assert_eq!(Picker::default().handle(b"\r", 0), None);
         // An unknown escape sequence is not an Escape.
         assert_eq!(p.handle(b"\x1b[5~", 3), None);
+    }
+
+    /// The remote client turns on the kitty keyboard protocol where the
+    /// terminal has it: the same keys arrive as `CSI ... u`.
+    #[test]
+    fn picker_keys_in_the_kitty_protocol() {
+        let mut p = Picker::default();
+        assert_eq!(p.handle(b"\x1b[27u", 3), Some(PickerOutcome::Close));
+        assert_eq!(p.handle(b"\x1b[50;3u", 3), Some(PickerOutcome::Choose(1)));
+        assert_eq!(p.selected, 1);
+        assert_eq!(p.handle(b"\x1b[13u", 3), Some(PickerOutcome::Choose(1)));
+        // Shifted digits are not a jump.
+        assert_eq!(p.handle(b"\x1b[50;4u", 3), None);
     }
 
     struct Size(usize, usize);

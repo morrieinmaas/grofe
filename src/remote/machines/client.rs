@@ -11,18 +11,20 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::net::{AGENT_FORMAT, local_link, machine_link, parse_agents, sanitize_lines};
-use super::{LOCAL, Link as LinkState, Machine, MachineView, Picker, PickerOutcome, Transport};
-use super::{client_machines, last_known, render_picker, save_last_known};
+use super::{LOCAL, Link as LinkState, Machine, MachineView, Transport};
+use super::{last_known, save_last_known};
 use crate::client::AttachOptions;
 use crate::protocol::ClientCtx;
 use crate::protocol::{Reply, Request};
 use crate::remote::connect::{Link, read_reply};
+use crate::remote::forward::{self, ForwardHook};
 use crate::remote::roam::Roaming;
-use crate::remote::session::{self, Hook, HookCtx, Input, Prompt, RemoteAttach, Switch};
+use crate::remote::session::{self, RemoteAttach};
 use crate::remote::ssh::Target;
+use crate::server::input::{Decoder, Key, KeyCode, parse_key};
 
 /// How often a connected machine's view is read again without an event
 /// (notifications send none).
@@ -53,6 +55,10 @@ struct Notices {
     queue: Arc<Mutex<Vec<String>>>,
 }
 
+mod hook;
+
+use hook::MachinesHook;
+
 /// The session a machine is attached to when none is saved for it: what
 /// `grofe -r host` attaches to.
 const DEFAULT_SESSION: &str = "main";
@@ -71,23 +77,53 @@ fn lock(s: &Shared) -> MutexGuard<'_, Vec<Entry>> {
     s.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// How the client speaks to one kind of server: the attach hello's
+/// context and the control hello.
+#[derive(Clone)]
+pub struct Side {
+    pub hello: String,
+    pub ctx: ClientCtx,
+}
+
 /// Everything a watcher or a switch needs to reach machine `i` again.
 #[derive(Clone)]
 struct Reach {
     socket: PathBuf,
     machine: Option<Machine>,
+    /// This machine's own context for the local server (its cwd and whole
+    /// environment, as the local CLI sends), the filtered one elsewhere.
+    side: Side,
     /// A machine saved with `quic`: the one roaming remote its attaches
     /// share, made on the first attach, so a relink reuses its token.
     roaming: Arc<OnceLock<Arc<Roaming>>>,
 }
 
 impl Reach {
-    fn new(socket: &Path, machine: Option<Machine>) -> Reach {
+    fn new(socket: &Path, machine: Option<Machine>, side: Side) -> Reach {
         Reach {
             socket: socket.to_path_buf(),
             machine,
+            side,
             roaming: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// The forwarding hook for an attach here: none for the local server,
+    /// which is this machine.
+    fn forward(&self) -> Option<ForwardHook> {
+        let m = self.machine.as_ref()?;
+        let host = Target::parse_host(&m.target).ok()?;
+        let option = |name: &str| {
+            crate::config::load(&crate::config::Env::from_process())
+                .ok()
+                .and_then(|r| r.options.get(name).cloned())
+        };
+        Some(ForwardHook::new(
+            host.host_name(),
+            &self.side.hello,
+            Some(forward::forwards_dir(&crate::paths::Env::from_process())),
+            forward::Settings::from_options(option),
+        ))
     }
 
     /// A control link for the watcher: the local proxy, or ssh. Never a
@@ -130,21 +166,26 @@ impl Reach {
 
 /// Runs the multi-machine client: watchers for the local server and every
 /// enabled machine in `machines`, then an attach to the local server with
-/// [`MachinesHook`]. `ctx`, `opts`, `term` and `reconnect` are as for a
-/// remote attach; `hello` is the control hello.
+/// [`MachinesHook`]. `local` is how this machine's own CLI speaks to its
+/// server, `remote` how it speaks to another machine's; `opts`, `term` and
+/// `reconnect` are as for a remote attach.
 pub fn run(
     socket: &Path,
     machines: &[Machine],
-    hello: String,
-    ctx: ClientCtx,
+    local: Side,
+    remote: Side,
     opts: AttachOptions,
     term: String,
     reconnect: bool,
 ) -> Result<String, String> {
     let state_dir = crate::paths::state_dir(&crate::paths::Env::from_process());
-    let reaches: Vec<Reach> = std::iter::once(None)
-        .chain(machines.iter().filter(|m| m.enabled).cloned().map(Some))
-        .map(|machine| Reach::new(socket, machine))
+    let reaches: Vec<Reach> = std::iter::once(Reach::new(socket, None, local.clone()))
+        .chain(
+            machines
+                .iter()
+                .filter(|m| m.enabled)
+                .map(|m| Reach::new(socket, Some(m.clone()), remote.clone())),
+        )
         .collect();
     let shared: Shared = Arc::new(Mutex::new(
         reaches
@@ -156,6 +197,7 @@ pub fn run(
             })
             .collect(),
     ));
+    let hello = local.hello.clone();
     let local = local_link(socket)?;
     let key = machine_key(&local, &hello);
     let target = ensure_session(&local, &hello, None)?;
@@ -169,7 +211,7 @@ pub fn run(
         let (shared, reach, hello, dir, notices) = (
             Arc::clone(&shared),
             reach.clone(),
-            hello.clone(),
+            reach.side.hello.clone(),
             state_dir.clone(),
             notices.clone(),
         );
@@ -180,22 +222,23 @@ pub fn run(
         shared: Arc::clone(&shared),
         reaches: reaches.clone(),
         key,
+        decoder: Decoder::new(),
         current: Arc::clone(&notices.current),
         notices: Arc::clone(&notices.queue),
-        hello: hello.clone(),
+        forward: Arc::new(Mutex::new(None)),
         sent: None,
     };
     let reach = reaches[0].clone();
     let attach = RemoteAttach {
         host: LOCAL.to_string(),
         control_hello: hello,
-        ctx,
+        ctx: reach.side.ctx.clone(),
         opts: AttachOptions { target, ..opts },
         term,
         reconnect,
         relink: Arc::new(move || reach.connect()),
-        // ponytail: no forwarding hook here; it is keyed by one host and the
-        // attach moves between machines. Predictive echo follows any link.
+        // Forwarding lives in MachinesHook, keyed to the machine on screen.
+        // Predictive echo follows any link.
         hooks: vec![
             Box::new(hook),
             Box::new(crate::remote::predict_hook::PredictHook::new()),
@@ -219,15 +262,19 @@ fn offline_view(machine: Option<&Machine>, state_dir: &Path) -> MachineView {
     }
 }
 
-/// `machine-key` from the local server as the bytes a terminal sends for
-/// it; `M-m` when it cannot be read.
-fn machine_key(link: &Link, hello: &str) -> Vec<u8> {
+/// `machine-key` from the local server; `M-m` when it cannot be read.
+fn machine_key(link: &Link, hello: &str) -> Key {
     let argv = ["show-options", "-gv", "machine-key"].map(String::from);
     let name = link.request(hello, &argv).unwrap_or_default();
-    let modes = crate::types::InputModes::default();
-    crate::cmd::keys::key_bytes(name.trim(), &modes)
-        .or_else(|| crate::cmd::keys::key_bytes("M-m", &modes))
-        .unwrap_or_else(|| b"\x1bm".to_vec())
+    parse_key(name.trim())
+        .or_else(|_| parse_key("M-m"))
+        .unwrap_or(Key::new(
+            KeyCode::Char('m'),
+            crate::server::input::Mods {
+                alt: true,
+                ..Default::default()
+            },
+        ))
 }
 
 /// Makes sure `session` exists on the server behind `link` (creating it
@@ -436,153 +483,10 @@ fn views(shared: &Shared) -> Vec<MachineView> {
     lock(shared).iter().map(|e| e.view.clone()).collect()
 }
 
-/// The client side of the machines: `machine-key` opens the picker, and
-/// the `#{client_machines}` text goes to the attached server whenever it
-/// changes.
-struct MachinesHook {
-    shared: Shared,
-    reaches: Vec<Reach>,
-    key: Vec<u8>,
-    /// The machine attached to.
-    current: Arc<AtomicUsize>,
-    /// Notifications from machines not on screen, to show locally.
-    notices: Arc<Mutex<Vec<String>>>,
-    hello: String,
-    /// The text last sent, and to which machine.
-    sent: Option<(usize, String)>,
-}
-
-impl Hook for MachinesHook {
-    fn on_input(&mut self, cx: &mut HookCtx<'_>, bytes: Vec<u8>) -> Input {
-        let Some(at) = find(&bytes, &self.key) else {
-            return Input::send(bytes);
-        };
-        let current = self.current.load(Ordering::SeqCst);
-        cx.prompt(Box::new(PickerPrompt {
-            shared: Arc::clone(&self.shared),
-            reaches: self.reaches.clone(),
-            picker: Picker { selected: current },
-            current: Arc::clone(&self.current),
-            hello: self.hello.clone(),
-        }));
-        // ponytail: keys typed after the machine key in the same read are
-        // dropped, not fed to the picker.
-        Input::send(bytes[..at].to_vec())
-    }
-
-    fn tick(&mut self, cx: &mut HookCtx<'_>, _now: Instant) {
-        let waiting = std::mem::take(&mut *self.notices.lock().unwrap_or_else(|p| p.into_inner()));
-        for text in waiting {
-            // As the server sends its own (OSC 9): the terminal shows it.
-            cx.draw(&crate::server::notify::desktop::osc9(&text));
-        }
-        let current = self.current.load(Ordering::SeqCst);
-        let text = client_machines(&views(&self.shared));
-        if self.sent.as_ref() == Some(&(current, text.clone())) {
-            return;
-        }
-        let argv = client_info_argv(cx.client(), &text);
-        // In the background, so a slow link never stalls the client. An
-        // older server has no such verb: the segment stays empty there.
-        drop(cx.request_bg(argv));
-        self.sent = Some((current, text));
-    }
-}
-
-/// The request that sets `#{client_machines}` for `client` on the server
-/// it is attached to.
-fn client_info_argv(client: &str, text: &str) -> Vec<String> {
-    ["set-client-info", "-t", client, "machines", text]
-        .map(String::from)
-        .to_vec()
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return None;
-    }
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-/// The `M-m` picker as a [`Prompt`] drawn as a box.
-struct PickerPrompt {
-    shared: Shared,
-    reaches: Vec<Reach>,
-    picker: Picker,
-    current: Arc<AtomicUsize>,
-    hello: String,
-}
-
-impl Prompt for PickerPrompt {
-    fn text(&self) -> String {
-        format!("machines: {}", client_machines(&views(&self.shared)))
-    }
-
-    fn overlay(&self, cols: u16, rows: u16) -> Option<Vec<u8>> {
-        Some(render_picker(
-            &views(&self.shared),
-            self.picker.selected,
-            cols,
-            rows,
-        ))
-    }
-
-    fn key(&mut self, cx: &mut HookCtx<'_>, bytes: &[u8]) -> Option<Input> {
-        let count = self.reaches.len();
-        let i = match self.picker.handle(bytes, count)? {
-            PickerOutcome::Close => return Some(Input::default()),
-            PickerOutcome::Choose(i) => i,
-        };
-        if i == self.current.load(Ordering::SeqCst) {
-            return Some(Input::default());
-        }
-        // An offline machine cannot be attached to: the picker stays up.
-        let watched = lock(&self.shared)[i].link.clone()?;
-        let host = lock(&self.shared)[i].view.name.clone();
-        let reach = self.reaches[i].clone();
-        let target = reach.session();
-        let (first, hello, session) = (reach.clone(), self.hello.clone(), target.clone());
-        cx.switch(Switch {
-            // On the switch's thread: the QUIC link (or the watcher's) and
-            // the session there, so a slow machine never stalls the keys.
-            connect: Box::new(move || {
-                let link = if first.quic() {
-                    first.attach_link()?
-                } else {
-                    watched
-                };
-                ensure_session(&link, &hello, session.as_deref())?;
-                Ok(link)
-            }),
-            host,
-            target,
-            relink: Arc::new(move || reach.attach_link()),
-        });
-        self.current.store(i, Ordering::SeqCst);
-        Some(Input::default())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn client_machines_goes_out_as_set_client_info() {
-        assert_eq!(
-            client_info_argv("/dev/grofe-remote/1-2", "local a!"),
-            [
-                "set-client-info",
-                "-t",
-                "/dev/grofe-remote/1-2",
-                "machines",
-                "local a!"
-            ]
-        );
-    }
-
-    /// An event the server writes in the same packet as the subscribe
-    /// reply still counts.
     #[test]
     fn an_event_sent_with_the_reply_is_seen() {
         let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -665,13 +569,6 @@ mod tests {
     }
 
     #[test]
-    fn the_key_is_found_inside_input() {
-        assert_eq!(find(b"ab\x1bmcd", b"\x1bm"), Some(2));
-        assert_eq!(find(b"abc", b"\x1bm"), None);
-        assert_eq!(find(b"abc", b""), None);
-    }
-
-    #[test]
     fn a_saved_machine_attaches_to_its_session_or_main() {
         let mut m = Machine {
             name: "box".into(),
@@ -680,7 +577,18 @@ mod tests {
             transport: None,
             enabled: true,
         };
-        let reach = |m: Option<Machine>| Reach::new(Path::new(""), m);
+        let side = Side {
+            hello: String::new(),
+            ctx: ClientCtx {
+                cwd: PathBuf::new(),
+                pane: None,
+                env: Vec::new(),
+                client: None,
+                dialect: Default::default(),
+                request: Default::default(),
+            },
+        };
+        let reach = |m: Option<Machine>| Reach::new(Path::new(""), m, side.clone());
         assert_eq!(reach(None).session(), None);
         assert_eq!(reach(Some(m.clone())).session().as_deref(), Some("main"));
         m.session = Some("dev".into());

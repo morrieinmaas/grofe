@@ -421,12 +421,19 @@ fn a_switch_leaves_no_subscription_behind() {
         })
         .min()
         .unwrap();
-    for (key, on_alpha) in [("\x1b2", "main"), ("\x1b1", "")] {
+    for (key, on_alpha, what) in [
+        ("\x1b2", "main", "the switch to alpha"),
+        ("\x1b1", "", "the switch back"),
+    ] {
         h.send("\x1bm");
         h.wait_for(BOX);
         h.send(key);
-        h.wait_until("the switch", Duration::from_secs(20), |_| {
+        h.wait_until(what, Duration::from_secs(20), |_| {
             clients(&f.alpha) == on_alpha
+        });
+        // The new attach's own screen replaces the picker once it is up.
+        h.wait_until("the new screen", Duration::from_secs(20), |t| {
+            !t.contains(BOX)
         });
     }
     h.wait_until(
@@ -568,6 +575,154 @@ fn a_background_machine_notification_shows_locally() {
     h.wait_for_output(b"\x1b]9;grofe: a: claude blocked: approve?", from);
     h.send("\x1bm");
     h.wait_until("a marked", Duration::from_secs(10), |t| t.contains("2!a"));
+    h.send("\x1b");
+    h.wait_until("the picker closed", Duration::from_secs(10), |t| {
+        !t.contains(BOX)
+    });
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// With the kitty keyboard protocol on (the client turns it on where the
+/// terminal has it), Alt+m, Alt+digit and Escape arrive as `CSI ... u`; the
+/// picker still opens, jumps and closes.
+#[test]
+fn the_picker_takes_kitty_encoded_keys() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    let mut cmd = f.grofe(&["--machines"]);
+    cmd.env("GROFE_TEST_CAPS", "kitty_keys");
+    let mut h = Harness::spawn(cmd, 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    h.send("\x1b[109;3u");
+    h.wait_for(BOX);
+    h.send("\x1b[27u");
+    h.wait_until("the picker closed", Duration::from_secs(10), |t| {
+        !t.contains(BOX)
+    });
+    h.send("\x1b[109;3u");
+    h.wait_until("alpha connected", Duration::from_secs(20), |t| {
+        t.contains(BOX)
+            && t.lines()
+                .any(|l| l.contains("2 a") && l.contains("connected"))
+    });
+    h.send("\x1b[50;3u");
+    h.wait_until("alpha attached", Duration::from_secs(20), |_| {
+        clients(&f.alpha) == "main"
+    });
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// Bare `grofe` with machines saved still starts the local session where
+/// the user is, with the user's environment, as without machines.
+#[test]
+fn bare_grofe_with_machines_starts_main_in_the_cwd() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    let proj = f.root().join("proj");
+    fs::create_dir_all(&proj).unwrap();
+    let mut cmd = f.grofe(&[]);
+    cmd.current_dir(&proj).env("DISPLAY", ":42");
+    let mut h = Harness::spawn(cmd, 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    let path = f
+        .local
+        .cmd(&["display-message", "-p", "-t", "main", "#{session_path}"])
+        .unwrap();
+    assert_eq!(
+        fs::canonicalize(path.trim()).unwrap(),
+        fs::canonicalize(&proj).unwrap()
+    );
+    let display = f
+        .local
+        .cmd(&["show-environment", "-t", "main", "DISPLAY"])
+        .unwrap();
+    assert_eq!(display.trim(), "DISPLAY=:42");
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// After a switch to a remote machine, its forwarding works: `grofe open`
+/// in its pane runs this machine's opener.
+#[test]
+fn a_switched_to_machine_forwards_urls() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    f.alpha.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    let out = f.root().join("opened");
+    let opener = f.root().join("opener");
+    fs::write(
+        &opener,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n", out.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&opener, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut cmd = f.grofe(&["--machines"]);
+    cmd.env(grofe::open::OPENER_ENV, &opener);
+    let mut h = Harness::spawn(cmd, 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    h.send("\x1bm");
+    h.wait_until("alpha connected", Duration::from_secs(20), |t| {
+        t.contains(BOX)
+            && t.lines()
+                .any(|l| l.contains("2 a") && l.contains("connected"))
+    });
+    h.send("\x1b2");
+    h.wait_until("alpha attached", Duration::from_secs(20), |_| {
+        clients(&f.alpha) == "main"
+    });
+    let open = format!(
+        "GROFE_OPENER=/bin/false {} open 'https://example.com/from-alpha'",
+        env!("CARGO_BIN_EXE_grofe")
+    );
+    // The forwarding hook subscribes with the attach; retry until it does.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !out.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the url never opened here"
+        );
+        f.alpha
+            .cmd(&["send-keys", "-t", "main", &open, "Enter"])
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert!(
+        fs::read_to_string(&out)
+            .unwrap()
+            .starts_with("https://example.com/from-alpha\n")
+    );
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// Keys typed while a switch attaches are taken as typed once it is up,
+/// hooks included: the machine key pressed right after a switch opens the
+/// picker there instead of reaching the new machine's shell.
+#[test]
+fn the_machine_key_right_after_a_switch_opens_the_picker() {
+    let f = Fleet::new();
+    f.set_down("beta", true);
+    f.alpha.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    let mut h = Harness::spawn(f.grofe(&["--machines"]), 100, 30);
+    h.wait_for(common::PROMPT.trim());
+    h.send("\x1bm");
+    h.wait_until("alpha connected", Duration::from_secs(20), |t| {
+        t.contains(BOX)
+            && t.lines()
+                .any(|l| l.contains("2 a") && l.contains("connected"))
+    });
+    h.send("\x1b2");
+    std::thread::sleep(Duration::from_millis(20));
+    h.send("\x1bm");
+    h.wait_until("alpha attached", Duration::from_secs(20), |_| {
+        clients(&f.alpha) == "main"
+    });
+    h.wait_until("the picker open on alpha", Duration::from_secs(20), |t| {
+        t.contains(BOX)
+    });
+    // The picker answers, so it is the live one, not a stale drawing.
     h.send("\x1b");
     h.wait_until("the picker closed", Duration::from_secs(10), |t| {
         !t.contains(BOX)
