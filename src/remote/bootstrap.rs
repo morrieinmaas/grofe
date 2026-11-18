@@ -275,14 +275,21 @@ fn upload(target: &Target, binary: &[u8]) -> Result<(), String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cannot run {}: {e}", ssh::program()))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(binary)
-            .map_err(|e| format!("copying grofe to {}: {e}", target.host_name()))?;
-    }
+    // A remote command that fails early (mkdir refused, disk full) closes
+    // stdin: the write fails, and why is on its stderr, so ssh is waited for
+    // either way.
+    let written = match child.stdin.take() {
+        Some(mut stdin) => stdin.write_all(binary),
+        None => Ok(()),
+    };
     let out = child
         .wait_with_output()
         .map_err(|e| format!("waiting for ssh: {e}"))?;
+    if let Err(e) = written
+        && out.status.success()
+    {
+        return Err(format!("copying grofe to {}: {e}", target.host_name()));
+    }
     if !out.status.success() {
         return Err(format!(
             "installing on {} failed: {}",

@@ -60,7 +60,9 @@ for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
 [ -e '{root}/down' ] && {{ echo "ssh: connect to host box: Connection refused" >&2; exit 255; }}
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift 2
-case "$*" in *proxy*) echo $$ >> '{root}/proxies'; [ -e '{root}/hang' ] && exec sleep 60; [ -e '{root}/banner' ] && echo "Welcome to box! Last login: today" ;; esac
+case "$*" in *proxy*) echo $$ >> '{root}/proxies'; [ -e '{root}/hang' ] && exec sleep 60; [ -e '{root}/banner' ] && echo "Welcome to box! Last login: today" ;;
+  *grofe.tmp*) [ -e '{root}/readonly' ] && {{ echo "mkdir: cannot create directory: Read-only file system" >&2; exit 1; }} ;;
+esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 unset GROFE_PANE TMUX
@@ -583,4 +585,24 @@ fn a_banner_before_the_proxy_hello_is_skipped() {
     let out = run_bounded(r.client(&["list-sessions"]), CMD_TIMEOUT);
     assert!(out.status.success(), "{out:?}");
     assert!(out.stdout.contains("greeted:"), "{out:?}");
+}
+
+/// An install whose remote command fails at once (a read-only home) closes
+/// ssh's stdin mid-copy: the remote's own reason is reported, not the
+/// broken pipe, and ssh is reaped.
+#[test]
+fn an_install_that_fails_early_reports_the_remotes_reason() {
+    let r = Remote::new(false);
+    fs::write(r.root().join("readonly"), "").unwrap();
+    // Bigger than a pipe buffer, so the write meets the closed pipe.
+    let bin = r.root().join("big");
+    fs::write(&bin, vec![b'#'; 4 << 20]).unwrap();
+    let out = run_bounded(
+        r.client(&["--install-from", bin.to_str().unwrap(), "list-sessions"]),
+        CMD_TIMEOUT,
+    );
+    assert!(!out.status.success(), "{out:?}");
+    assert!(out.stderr.contains("Read-only file system"), "{out:?}");
+    assert!(!out.stderr.contains("Broken pipe"), "{out:?}");
+    assert!(!r.installed().exists());
 }
