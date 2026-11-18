@@ -2,12 +2,13 @@
 //! ([`run_slow`]) the forwarding hook runs off the input thread.
 
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::text::tilde;
-use super::{Action, FALLBACK_UPLOAD_DIR, Input, UploadDir};
+use super::{Action, FALLBACK_UPLOAD_DIR, FilePaste, Input, UploadDir};
 use crate::protocol::{ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
 use crate::remote::connect::Link;
 use crate::remote::proxy_proto::{Channel, OpenSpec, ProxyConn};
@@ -51,7 +52,11 @@ pub fn opener(cell: LinkCell) -> Opener {
 pub fn is_slow(action: &Action) -> bool {
     matches!(
         action,
-        Action::OpenUrl(_) | Action::ResolveDir(_) | Action::Upload { .. }
+        Action::OpenUrl(_)
+            | Action::ResolveDir(_)
+            | Action::Upload { .. }
+            | Action::CheckFiles { .. }
+            | Action::CheckOpen(_)
     )
 }
 
@@ -63,15 +68,26 @@ pub fn run_slow(link: &Link, target: Option<&str>, action: Action) -> Option<Inp
         Action::ResolveDir(paste) => {
             Some(Input::DirResolved(paste, upload_dir(link.conn(), target)))
         }
-        Action::Upload { dir, paste } => {
-            let (arrived, error) = upload_files(link.conn(), &dir, &paste.files);
-            Some(Input::Uploaded {
-                paste,
-                arrived,
-                error,
-            })
-        }
+        Action::Upload { dir, paste } => Some(upload(link, &dir, paste, &AtomicBool::new(false))),
+        Action::CheckFiles { paths, original } => Some(Input::FilesChecked {
+            original,
+            files: check_files(paths),
+        }),
+        Action::CheckOpen(url) => Some(Input::OpenChecked(super::text::local_file_to_open(&url))),
         _ => None,
+    }
+}
+
+/// Runs an [`Action::Upload`] of `paste` into `dir`, stopping once
+/// `cancel` is set; the [`Input::Uploaded`] that answers it.
+pub fn upload(link: &Link, dir: &str, paste: FilePaste, cancel: &AtomicBool) -> Input {
+    let done = upload_files(link.conn(), dir, &paste.files, &paste.sizes, cancel);
+    Input::Uploaded {
+        paste,
+        arrived: done.arrived,
+        error: done.error,
+        cancelled: done.cancelled,
+        grew: done.grew,
     }
 }
 
@@ -157,29 +173,89 @@ fn control(conn: &ProxyConn, requests: &[Vec<String>]) -> Result<Vec<String>, St
     Ok(answers)
 }
 
-/// Uploads each of `files` into `dir` on the remote; the remote paths, in
-/// order, until one fails; and why that one failed.
+/// What [`upload_files`] did: the remote paths of the files that arrived,
+/// in order; why the next one failed (the rest were not tried); whether it
+/// was cancelled; and the names of files that grew after the paste.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Upload {
+    pub arrived: Vec<String>,
+    pub error: Option<String>,
+    pub cancelled: bool,
+    pub grew: Vec<String>,
+}
+
+/// Uploads each of `files` into `dir` on the remote, at most its `sizes`
+/// entry (its size when pasted) of each, stopping at the first failure or
+/// once `cancel` is set.
 pub fn upload_files(
     conn: &ProxyConn,
     dir: &str,
     files: &[PathBuf],
-) -> (Vec<String>, Option<String>) {
-    let mut arrived = Vec::new();
-    for path in files {
-        let one = || {
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| format!("cannot upload {}: no name", path.display()))?;
-            let file =
-                File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            conn.upload(dir, name, file)
-                .map_err(|e| format!("upload of {name} failed: {e}"))
+    sizes: &[u64],
+    cancel: &AtomicBool,
+) -> Upload {
+    let mut done = Upload::default();
+    for (path, &size) in files.iter().zip(sizes) {
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => {
+                done.error = Some(format!("cannot upload {}: no name", path.display()));
+                return done;
+            }
         };
-        match one() {
-            Ok(remote) => arrived.push(remote),
-            Err(e) => return (arrived, Some(e)),
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                done.error = Some(format!("cannot read {}: {e}", path.display()));
+                return done;
+            }
+        };
+        let reader = Cancellable {
+            inner: file.take(size),
+            cancel,
+        };
+        match conn.upload(dir, &name, reader) {
+            Ok(remote) => done.arrived.push(remote),
+            Err(_) if cancel.load(Ordering::SeqCst) => {
+                done.cancelled = true;
+                return done;
+            }
+            Err(e) => {
+                done.error = Some(format!("upload of {name} failed: {e}"));
+                return done;
+            }
+        }
+        if std::fs::metadata(path).is_ok_and(|m| m.len() > size) {
+            done.grew.push(name);
         }
     }
-    (arrived, None)
+    done
+}
+
+/// A reader that fails once `cancel` is set, which ends the upload channel
+/// with a reason (the proxy then removes the partial file).
+struct Cancellable<'a, R> {
+    inner: R,
+    cancel: &'a AtomicBool,
+}
+
+impl<R: Read> Read for Cancellable<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err(io::Error::other("upload cancelled"));
+        }
+        self.inner.read(buf)
+    }
+}
+
+/// Each of `paths` with its size, when every one is a local regular file;
+/// `None` otherwise (a directory, a missing path: the paste stays text).
+pub fn check_files(paths: Vec<PathBuf>) -> Option<Vec<(PathBuf, u64)>> {
+    paths
+        .into_iter()
+        .map(|p| {
+            let meta = std::fs::metadata(&p).ok().filter(|m| m.is_file())?;
+            Some((p, meta.len()))
+        })
+        .collect()
 }

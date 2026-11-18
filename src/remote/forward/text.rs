@@ -279,6 +279,7 @@ mod tests {
     fn prompt_texts() {
         let paste = FilePaste {
             files: vec!["/a".into(), "/b".into()],
+            sizes: vec![3_000_000, 100_000],
             total: 3_100_000,
             original: Vec::new(),
         };
@@ -292,6 +293,7 @@ mod tests {
         );
         let one = FilePaste {
             files: vec!["/a".into()],
+            sizes: vec![12],
             total: 12,
             original: Vec::new(),
         };
