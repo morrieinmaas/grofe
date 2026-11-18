@@ -86,7 +86,8 @@ wait_for_line() {
 @test "no GROFE variables reach the binary" {
     run env
     [ "$status" -eq 0 ]
-    ! grep -q '^GROFE' <<<"$output"
+    # Only the harness's own switch that keeps test servers off the desktop.
+    ! grep '^GROFE' <<<"$output" | grep -qv '^GROFE_NOTIFY_DESKTOP='
 }
 
 @test "M1 scenario: new-session, split-window, send-keys echo hi, capture-pane" {
