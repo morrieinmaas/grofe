@@ -29,7 +29,19 @@ pub(super) fn handshake(
         .map_err(|e| Failure::Retry(e.to_string()))?;
     let tty = tty_for(generation);
     set_client_tty(&tty);
-    send_hello(&link, &mut chan, p, &tty)?;
+    match send_hello(&link, &mut chan, p, &tty) {
+        // The remembered session is gone (or refused): attach to the
+        // server's choice on a fresh channel rather than end the client.
+        Err(Failure::Fatal(_)) if p.fallback && p.opts.target.is_some() => {
+            let mut anywhere = p.clone();
+            anywhere.opts.target = None;
+            chan = link
+                .open_attach()
+                .map_err(|e| Failure::Retry(e.to_string()))?;
+            send_hello(&link, &mut chan, &anywhere, &tty)?;
+        }
+        other => other?,
+    }
     let session = attached_session(&link, &p.hello, &tty);
     let prefix = server_prefix(&link, &p.hello);
     let events = start_readers(&link, &chan, p, generation, out);
@@ -76,7 +88,7 @@ fn send_hello(link: &Link, chan: &mut Channel, p: &Params, tty: &str) -> Result<
 }
 
 /// The id of the session the client with `tty` attached to.
-fn attached_session(link: &Link, hello: &str, tty: &str) -> Option<String> {
+pub(super) fn attached_session(link: &Link, hello: &str, tty: &str) -> Option<String> {
     link.request(
         hello,
         &[

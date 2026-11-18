@@ -411,21 +411,90 @@ fn hosts_that_look_like_ssh_options_never_reach_ssh() {
 /// gives up after the hello timeout instead of hanging.
 #[test]
 fn a_silent_remote_times_out_instead_of_hanging() {
+    // A reconnect is unattended: its hello wait is bounded, so a remote
+    // that never answers cannot stall the backoff.
     let r = Remote::new(true);
+    let mut h = r.attach(&[], &[("GROFE_TEST_HELLO_MS", "500")]);
+    h.wait_for(common::PROMPT.trim());
     fs::write(r.root().join("hang"), "").unwrap();
-    let mut cmd = r.client(&["list-sessions"]);
-    cmd.env("GROFE_TEST_HELLO_MS", "500");
-    let started = Instant::now();
-    let out = run_bounded(cmd, CMD_TIMEOUT);
-    assert!(!out.status.success(), "{out:?}");
-    assert!(
-        out.stderr.contains("no answer from the remote proxy"),
-        "{out:?}"
-    );
-    assert!(started.elapsed() < Duration::from_secs(10));
-    // The hung ssh was killed.
-    let pid = r.proxy(1);
+    kill(r.proxy(1), Signal::SIGKILL).unwrap();
+    h.wait_for(BAR);
+    // Hung attempts time out and the count goes on.
+    h.wait_for_timeout("(attempt 3,", Duration::from_secs(20));
+    let hung = r.proxy(2);
     common::wait_until("the silent ssh to die", CMD_TIMEOUT, || {
-        common::process_gone(pid)
+        common::process_gone(hung)
     });
+    fs::remove_file(r.root().join("hang")).unwrap();
+    h.wait_until("the reconnect", Duration::from_secs(40), |t| {
+        !t.contains(BAR)
+    });
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// The session the only remote client is attached to, by name.
+fn client_session(r: &Remote) -> String {
+    r.srv
+        .cmd(&["list-clients", "-F", "#{session_name}"])
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// A `switch-client` on the remote is followed: the reconnect goes back to
+/// the session the client switched to, even with the first one killed.
+#[test]
+fn a_reconnect_returns_to_the_session_switched_to() {
+    let r = Remote::new(true);
+    let mut h = r.attach(&[], &[]);
+    h.wait_for(common::PROMPT.trim());
+    r.srv.cmd(&["new-session", "-d", "-s", "other"]).unwrap();
+    let client = r
+        .srv
+        .cmd(&["list-clients", "-F", "#{client_name}"])
+        .unwrap();
+    r.srv
+        .cmd(&["switch-client", "-c", client.trim(), "-t", "other"])
+        .unwrap();
+    common::wait_until("the switch", CMD_TIMEOUT, || client_session(&r) == "other");
+    // The client learns of it from the event, off its main thread.
+    common::quiet_period(Duration::from_millis(500));
+    r.srv.cmd(&["kill-session", "-t", "main"]).unwrap();
+    kill(r.proxy(1), Signal::SIGKILL).unwrap();
+    h.wait_for(BAR);
+    h.wait_until("the reconnect", Duration::from_secs(20), |t| {
+        !t.contains(BAR)
+    });
+    common::wait_until("back on other", CMD_TIMEOUT, || {
+        client_session(&r) == "other"
+    });
+    h.send("\x02d");
+    h.wait_exit();
+}
+
+/// A remembered session killed while offline: the reattach takes the
+/// server's choice instead of ending the client.
+#[test]
+fn a_reattach_to_a_killed_session_falls_back_to_the_servers_choice() {
+    let r = Remote::new(true);
+    r.srv.cmd(&["new-session", "-d", "-s", "spare"]).unwrap();
+    let mut h = r.attach(&["attach", "-t", "spare"], &[]);
+    h.wait_for(common::PROMPT.trim());
+    r.srv.cmd(&["new-session", "-d", "-s", "keep"]).unwrap();
+    r.set_down(true);
+    kill(r.proxy(1), Signal::SIGKILL).unwrap();
+    h.wait_for(BAR);
+    r.srv.cmd(&["kill-session", "-t", "spare"]).unwrap();
+    r.set_down(false);
+    h.wait_until("the reconnect", Duration::from_secs(20), |t| {
+        !t.contains(BAR)
+    });
+    common::wait_until("attached to keep", CMD_TIMEOUT, || {
+        client_session(&r) == "keep"
+    });
+    h.send("echo still-here\r");
+    h.wait_for("still-here");
+    h.send("\x02d");
+    h.wait_exit();
 }

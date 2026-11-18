@@ -86,6 +86,9 @@ enum Kind {
     Server(serde_json::Value),
     /// A reconnect attempt finished.
     Connected(Result<Box<Conn>, Failure>),
+    /// The session this connection's client is attached to now (it
+    /// followed a `switch-client`).
+    Session(String),
 }
 
 /// Why a (re)connect failed.
@@ -154,6 +157,24 @@ pub struct RemoteAttach {
     pub hooks: Vec<Box<dyn Hook>>,
 }
 
+/// The event a client's session switch raises; the loop always follows it.
+const SESSION_CHANGED: &str = "client-session-changed";
+
+/// The events the hooks name, plus [`SESSION_CHANGED`], each once.
+fn hook_events(hooks: &[Box<dyn Hook>]) -> Vec<String> {
+    let mut events: Vec<String> = Vec::new();
+    for e in hooks
+        .iter()
+        .flat_map(|h| h.events())
+        .chain([SESSION_CHANGED.to_string()])
+    {
+        if !events.contains(&e) {
+            events.push(e);
+        }
+    }
+    events
+}
+
 /// What every (re)attach sends.
 #[derive(Clone)]
 struct Params {
@@ -163,6 +184,9 @@ struct Params {
     caps: Caps,
     hello: String,
     events: Vec<String>,
+    /// A reattach whose target (the remembered session) is refused
+    /// attaches to the server's choice instead of ending the client.
+    fallback: bool,
 }
 
 /// One connection: its link and attach channel.
@@ -220,7 +244,8 @@ fn run(
         term: a.term.clone(),
         caps: probed.caps,
         hello: a.control_hello.clone(),
-        events: a.hooks.iter().flat_map(|h| h.events()).collect(),
+        events: hook_events(&a.hooks),
+        fallback: false,
     };
     let conn = match handshake(link, &params, 1, &out_tx) {
         Ok(c) => c,
@@ -497,7 +522,7 @@ impl Loop {
         self.params.ctx = to.ctx;
         self.params.hello = to.hello;
         // The hooks may want other events there (a new forwarding hook).
-        self.params.events = a.hooks.iter().flat_map(|h| h.events()).collect();
+        self.params.events = hook_events(&a.hooks);
         self.params.opts.target = to.target;
         self.params.opts.created = false;
         self.params.opts.detach_others = false;
@@ -527,12 +552,22 @@ impl Loop {
             Kind::Exit(reason) => return Some(Ok(reason)),
             Kind::Suspend => client::suspend(&self.out_tx),
             Kind::Lost(why) => return self.lost(a, why),
-            Kind::Server(value) => self.with_hooks(a, |hooks, cx| {
-                for h in hooks {
-                    h.on_event(cx, &value);
+            Kind::Server(value) => {
+                if value.get("event").and_then(|e| e.as_str()) == Some(SESSION_CHANGED) {
+                    self.follow_session();
                 }
-            }),
+                self.with_hooks(a, |hooks, cx| {
+                    for h in hooks {
+                        h.on_event(cx, &value);
+                    }
+                });
+            }
             Kind::Connected(result) => return self.connected(a, result),
+            Kind::Session(id) => {
+                if let State::Online(c) = &mut self.state {
+                    c.session = Some(id);
+                }
+            }
         }
         None
     }
@@ -632,6 +667,21 @@ impl Loop {
         None
     }
 
+    /// Re-reads, off the main thread, which session this connection's
+    /// client is on, so a reconnect after a `switch-client` goes back to it.
+    fn follow_session(&self) {
+        let State::Online(c) = &self.state else {
+            return;
+        };
+        let (link, hello, tty) = (c.link.clone(), self.params.hello.clone(), c.tty.clone());
+        let (out, generation) = (self.out_tx.clone(), self.generation);
+        std::thread::spawn(move || {
+            if let Some(id) = handshake::attached_session(&link, &hello, &tty) {
+                post(&out, generation, Kind::Session(id));
+            }
+        });
+    }
+
     /// Starts a reconnect attempt on its own thread.
     fn attempt(&mut self, a: &RemoteAttach) {
         self.generation += 1;
@@ -639,6 +689,8 @@ impl Loop {
         let relink = Arc::clone(&a.relink);
         let mut params = self.params.clone();
         params.opts.created = false;
+        // The remembered session may be gone: then the server picks.
+        params.fallback = true;
         params.opts.detach_others = false;
         params.opts.extras.cwd = None;
         let out = self.out_tx.clone();

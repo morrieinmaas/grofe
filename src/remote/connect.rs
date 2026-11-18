@@ -335,7 +335,8 @@ fn ping_loop(shared: std::sync::Weak<Shared>, every: Duration) {
     }
 }
 
-/// How long a connect waits for the proxy's hello once ssh runs.
+/// How long an unattended ([`ConnectOpts::batch`]) connect waits for the
+/// proxy's hello once ssh runs.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Test hook: [`HELLO_TIMEOUT`] in milliseconds. Test-only.
@@ -355,8 +356,14 @@ fn hello_timeout() -> Duration {
 fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError> {
     let (mut child, stdin, stdout, said) = spawn_ssh(target, opts)?;
     let pid = nix::unistd::Pid::from_raw(child.id() as i32);
-    let (linked, timed_out) =
-        within_hello_timeout(pid, || Link::over(target.host_name(), stdout, stdin, None));
+    let hello = || Link::over(target.host_name(), stdout, stdin, None);
+    // Only an unattended connect is bounded: an interactive one may be
+    // waiting on a password, a host key question or a security key touch.
+    let (linked, timed_out) = if opts.batch {
+        within_hello_timeout(pid, hello)
+    } else {
+        (hello(), false)
+    };
     match linked {
         Ok(link) if !timed_out => {
             *lock(&link.shared.end) = Some(kill_child(child));
