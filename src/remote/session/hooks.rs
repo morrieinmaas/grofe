@@ -85,6 +85,11 @@ pub struct Switch {
     pub host: String,
     /// The session to attach to there (`None`: the server picks).
     pub target: Option<String>,
+    /// The attach hello's context there, and the control hello for its
+    /// requests: this machine's own for the local server, the filtered
+    /// remote one for another.
+    pub ctx: crate::protocol::ClientCtx,
+    pub hello: String,
     /// Makes a new link to that host for a reconnect; it must never prompt.
     pub relink: Arc<dyn Fn() -> Result<Link, String> + Send + Sync>,
 }

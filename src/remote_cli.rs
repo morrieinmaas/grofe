@@ -103,7 +103,23 @@ pub(super) fn machines_route(globals: &Globals, rest: &[String]) -> Option<ExitC
     if !io::stdin().is_terminal() {
         return Some(fail("open terminal failed: not a terminal"));
     }
-    let hello = match remote_hello() {
+    use grofe::remote::machines::client::Side;
+    // This machine's server gets what the local CLI sends (the cwd and the
+    // whole environment), another machine's the filtered remote context.
+    let local_ctx = ClientCtx {
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        pane: None,
+        env: std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+            .collect(),
+        client: None,
+        dialect: dialect(),
+        request: Default::default(),
+    };
+    let sides = encode_hello(&Hello::Control(local_ctx.clone()))
+        .map_err(|e| e.to_string())
+        .and_then(|local| Ok((local, remote_hello()?)));
+    let (local_hello, remote_hello) = match sides {
         Ok(h) => h,
         Err(e) => return Some(fail(&e)),
     };
@@ -114,8 +130,14 @@ pub(super) fn machines_route(globals: &Globals, rest: &[String]) -> Option<ExitC
     Some(print_attach(grofe::remote::machines::client::run(
         &globals.socket(),
         &machines,
-        hello,
-        remote_ctx(),
+        Side {
+            hello: local_hello,
+            ctx: local_ctx,
+        },
+        Side {
+            hello: remote_hello,
+            ctx: remote_ctx(),
+        },
         opts,
         std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
         local_option("remote-reconnect").is_none_or(|v| v == "on"),

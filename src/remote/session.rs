@@ -474,6 +474,11 @@ impl Loop {
         let generation = self.generation;
         a.host = to.host;
         a.relink = to.relink;
+        a.control_hello = to.hello.clone();
+        self.params.ctx = to.ctx;
+        self.params.hello = to.hello;
+        // The hooks may want other events there (a new forwarding hook).
+        self.params.events = a.hooks.iter().flat_map(|h| h.events()).collect();
         self.params.opts.target = to.target;
         self.params.opts.created = false;
         self.params.opts.detach_others = false;
@@ -508,7 +513,7 @@ impl Loop {
                     h.on_event(cx, &value);
                 }
             }),
-            Kind::Connected(result) => return self.connected(result),
+            Kind::Connected(result) => return self.connected(a, result),
         }
         None
     }
@@ -576,16 +581,22 @@ impl Loop {
     }
 
     /// A reconnect or switch attempt finished.
-    fn connected(&mut self, result: Result<Box<Conn>, Failure>) -> Option<Result<String, String>> {
+    fn connected(
+        &mut self,
+        a: &mut RemoteAttach,
+        result: Result<Box<Conn>, Failure>,
+    ) -> Option<Result<String, String>> {
         match result {
             Ok(conn) => {
                 self.backoff.connected(Instant::now());
                 self.detach = DetachKey::new(conn.prefix);
-                if let Some(held) = self.held.take().filter(|h| !h.is_empty()) {
-                    conn.send(Frame::Input(held));
-                }
                 self.state = State::Online(conn);
                 self.bar.clear();
+                // Typed during a switch: as if typed now, so the hooks see
+                // it too (the machine key may be in it).
+                if let Some(held) = self.held.take().filter(|h| !h.is_empty()) {
+                    self.input(a, held);
+                }
                 let _ = self.out_tx.try_send(Out::Wake);
             }
             Err(Failure::Fatal(e)) => return Some(Err(e)),
