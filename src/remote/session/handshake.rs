@@ -227,7 +227,7 @@ fn read_events(
 /// `deliver` until it returns false or the channel ends. One reader serves
 /// the reply and every line after it, so an event that came in the same
 /// read as the reply (the subscribe-time snapshots) is kept.
-fn pump_events<S: Read + Write>(
+pub(crate) fn pump_events<S: Read + Write>(
     chan: S,
     hello: &str,
     events: &[String],

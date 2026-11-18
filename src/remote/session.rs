@@ -66,6 +66,7 @@ mod handshake;
 mod hooks;
 
 use handshake::handshake;
+pub(crate) use handshake::pump_events;
 pub use hooks::{Hook, HookCtx, Input, Prompt, Switch};
 
 // ------------------------------------------------------------------ events

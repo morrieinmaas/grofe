@@ -6,7 +6,6 @@
 //! channel: [`MachinesHook`] opens the picker on `machine-key` and switches
 //! the attach ([`HookCtx::switch`]) to the row chosen.
 
-use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -18,11 +17,10 @@ use super::{LOCAL, Link as LinkState, Machine, MachineView, Transport};
 use super::{last_known, save_last_known};
 use crate::client::AttachOptions;
 use crate::protocol::ClientCtx;
-use crate::protocol::{Reply, Request};
-use crate::remote::connect::{Link, read_reply};
+use crate::remote::connect::Link;
 use crate::remote::forward::{self, ForwardHook};
 use crate::remote::roam::Roaming;
-use crate::remote::session::{self, RemoteAttach};
+use crate::remote::session::{self, RemoteAttach, pump_events};
 use crate::remote::ssh::Target;
 use crate::server::input::{Decoder, Key, KeyCode, parse_key};
 
@@ -179,25 +177,9 @@ pub fn run(
     reconnect: bool,
 ) -> Result<String, String> {
     let state_dir = crate::paths::state_dir(&crate::paths::Env::from_process());
-    let reaches: Vec<Reach> = std::iter::once(Reach::new(socket, None, local.clone()))
-        .chain(
-            machines
-                .iter()
-                .filter(|m| m.enabled)
-                .map(|m| Reach::new(socket, Some(m.clone()), remote.clone())),
-        )
-        .collect();
-    let shared: Shared = Arc::new(Mutex::new(
-        reaches
-            .iter()
-            .map(|r| Entry {
-                machine: r.machine.clone(),
-                view: offline_view(r.machine.as_ref(), &state_dir),
-                link: None,
-            })
-            .collect(),
-    ));
-    let hello = local.hello.clone();
+    let reaches = reaches(socket, machines, local, remote);
+    let shared = entries(&reaches, &state_dir);
+    let hello = reaches[0].side.hello.clone();
     let local = local_link(socket)?;
     let key = machine_key(&local, &hello);
     let target = ensure_session(&local, &hello, None)?;
@@ -206,18 +188,7 @@ pub fn run(
         entries[0].link = Some(local.clone());
         entries[0].view.link = LinkState::Connected;
     }
-    let notices = Notices::default();
-    for (i, reach) in reaches.iter().enumerate() {
-        let (shared, reach, hello, dir, notices) = (
-            Arc::clone(&shared),
-            reach.clone(),
-            reach.side.hello.clone(),
-            state_dir.clone(),
-            notices.clone(),
-        );
-        let first = (i == 0).then(|| local.clone());
-        std::thread::spawn(move || watch(shared, i, reach, &hello, &dir, first, notices));
-    }
+    let notices = start_watchers(&reaches, &shared, &local, &state_dir);
     let hook = MachinesHook {
         shared: Arc::clone(&shared),
         reaches: reaches.clone(),
@@ -247,6 +218,51 @@ pub fn run(
         ],
     };
     session::attach(local, attach)
+}
+
+/// The local server first, then every enabled machine.
+fn reaches(socket: &Path, machines: &[Machine], local: Side, remote: Side) -> Vec<Reach> {
+    std::iter::once(Reach::new(socket, None, local))
+        .chain(
+            machines
+                .iter()
+                .filter(|m| m.enabled)
+                .map(|m| Reach::new(socket, Some(m.clone()), remote.clone())),
+        )
+        .collect()
+}
+
+/// One entry per machine, each offline with its last known agents until
+/// its watcher reaches it.
+fn entries(reaches: &[Reach], state_dir: &Path) -> Shared {
+    Arc::new(Mutex::new(
+        reaches
+            .iter()
+            .map(|r| Entry {
+                machine: r.machine.clone(),
+                view: offline_view(r.machine.as_ref(), state_dir),
+                link: None,
+            })
+            .collect(),
+    ))
+}
+
+/// A watcher thread per machine, the local one starting on `local`; where
+/// their notifications go.
+fn start_watchers(reaches: &[Reach], shared: &Shared, local: &Link, state_dir: &Path) -> Notices {
+    let notices = Notices::default();
+    for (i, reach) in reaches.iter().enumerate() {
+        let (shared, reach, hello, dir, notices) = (
+            Arc::clone(shared),
+            reach.clone(),
+            reach.side.hello.clone(),
+            state_dir.to_path_buf(),
+            notices.clone(),
+        );
+        let first = (i == 0).then(|| local.clone());
+        std::thread::spawn(move || watch(shared, i, reach, &hello, &dir, first, notices));
+    }
+    notices
 }
 
 /// The view of a machine not (yet) reached: offline, with its last known
@@ -348,7 +364,8 @@ fn watch(
         let (tx, rx) = mpsc::channel();
         if let Ok(chan) = link.open_control() {
             let hello = hello.to_string();
-            std::thread::spawn(move || subscribe(chan, &hello, EVENTS, |v| tx.send(v).is_ok()));
+            let events: Vec<String> = EVENTS.iter().map(|e| e.to_string()).collect();
+            std::thread::spawn(move || pump_events(chan, &hello, &events, |v| tx.send(v).is_ok()));
         }
         while link.dropped().is_none() {
             refresh(&shared, i, &link, hello, state_dir);
@@ -372,47 +389,6 @@ fn link_state(failed: Option<u32>) -> LinkState {
     match failed {
         Some(n) if n < GIVE_UP => LinkState::Reconnecting,
         _ => LinkState::Offline,
-    }
-}
-
-/// Subscribes to `events` on `chan` and calls `seen` for every event line
-/// after the reply, until it returns false or the channel ends. One reader
-/// serves the reply and the events, so events that arrive with the reply
-/// are not lost.
-fn subscribe<S: Read + Write>(
-    mut chan: S,
-    hello: &str,
-    events: &[&str],
-    mut seen: impl FnMut(serde_json::Value) -> bool,
-) {
-    let mut argv = vec!["subscribe".to_string()];
-    argv.extend(events.iter().map(|e| e.to_string()));
-    let Ok(req) = serde_json::to_string(&Request {
-        id: 1,
-        argv,
-        ..Default::default()
-    }) else {
-        return;
-    };
-    if chan
-        .write_all(format!("{hello}\n{req}\n").as_bytes())
-        .is_err()
-    {
-        return;
-    }
-    let mut reader = std::io::BufReader::new(chan);
-    if !matches!(read_reply(&mut reader), Ok(Reply::Ok { .. })) {
-        return;
-    }
-    let mut line = String::new();
-    while matches!(reader.read_line(&mut line), Ok(n) if n > 0) {
-        let event = serde_json::from_str::<serde_json::Value>(&line).ok();
-        line.clear();
-        if let Some(event) = event.filter(|e| e.get("event").is_some())
-            && !seen(event)
-        {
-            return;
-        }
     }
 }
 
@@ -488,34 +464,6 @@ fn views(shared: &Shared) -> Vec<MachineView> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_event_sent_with_the_reply_is_seen() {
-        let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
-        let server = std::thread::spawn(move || {
-            let mut got = Vec::new();
-            let mut buf = [0u8; 4096];
-            while got.iter().filter(|b| **b == b'\n').count() < 2 {
-                let n = theirs.read(&mut buf).unwrap();
-                got.extend_from_slice(&buf[..n]);
-            }
-            theirs
-                .write_all(b"{\"id\":1,\"ok\":true,\"out\":\"\"}\n{\"event\":\"agent-changed\"}\n")
-                .unwrap();
-            String::from_utf8(got).unwrap()
-        });
-        let mut seen = 0;
-        subscribe(ours, "HELLO", &["agent-changed"], |_| {
-            seen += 1;
-            true
-        });
-        let sent = server.join().unwrap();
-        assert!(
-            sent.starts_with("HELLO\n") && sent.contains("agent-changed"),
-            "{sent}"
-        );
-        assert_eq!(seen, 1);
-    }
 
     #[test]
     fn a_dropped_machine_reconnects_before_it_counts_as_offline() {
