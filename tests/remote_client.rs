@@ -366,6 +366,8 @@ fn the_detach_key_ends_the_client_while_offline() {
     h.wait_for(BAR);
     // The first retry is attempt 1; the one after the failed one, 2.
     h.wait_for("grofe: reconnecting to box (attempt 1, next in 1s) · prefix d detach");
+    // While that attempt runs the bar says so (drawn, if only briefly).
+    h.wait_for_output("(attempt 1, connecting) · prefix d detach".as_bytes(), 0);
     h.wait_for("(attempt 2,");
     h.send("\x02d");
     h.wait_exit();

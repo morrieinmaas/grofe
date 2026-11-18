@@ -360,6 +360,11 @@ impl ProxyConn {
         self.mux.ping(timeout)
     }
 
+    /// How long since the peer last sent any frame.
+    pub fn idle(&self) -> std::time::Duration {
+        self.mux.idle()
+    }
+
     pub fn is_closed(&self) -> bool {
         self.mux.is_closed()
     }
