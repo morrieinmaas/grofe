@@ -16,7 +16,8 @@ use grofe::protocol::{Hello, Reply, Request, encode_hello};
 use grofe::remote::connect::Link;
 use grofe::remote::forward::LinkCell;
 use grofe::remote::forward::{
-    Action, Executor, ForwardMode, Forwarding, Input, Settings, UploadMode, list_forwards,
+    Action, ForwardMode, Forwarder, Forwarding, Input, Settings, UploadMode, is_slow,
+    list_forwards, opener, run_slow,
 };
 use grofe::remote::proxy_proto::OpenSpec;
 
@@ -40,9 +41,47 @@ fn finish(mut child: Child) {
     let _ = child.wait();
 }
 
+/// The I/O the forwarding hook does, through the same shipped pieces: the
+/// slow actions by [`run_slow`], forwards by a [`Forwarder`].
+struct Io {
+    link: Link,
+    target: Option<String>,
+    forwarder: Forwarder,
+}
+
+impl Io {
+    fn new(link: Link, target: Option<String>, state: Option<PathBuf>) -> Io {
+        let forwarder = Forwarder::new("host", opener(LinkCell::new(link.clone())), state);
+        Io {
+            link,
+            target,
+            forwarder,
+        }
+    }
+
+    fn run(&mut self, action: Action) -> Option<Input> {
+        match action {
+            Action::StartForward(remote) => Some(Input::Forwarded {
+                remote,
+                local: self.forwarder.start(remote),
+            }),
+            Action::StopForward(remote) => {
+                self.forwarder.stop(remote);
+                None
+            }
+            a if is_slow(&a) => run_slow(&self.link, self.target.as_deref(), a),
+            _ => None,
+        }
+    }
+
+    fn forwards(&self) -> Vec<grofe::remote::forward::Forward> {
+        self.forwarder.forwards()
+    }
+}
+
 /// Feeds `input` to `fw`, runs every I/O action and feeds its answer back,
 /// answering each prompt with `answer`; the client actions, in order.
-fn drive(fw: &mut Forwarding, exec: &mut Executor, input: Input, answer: &str) -> Vec<Action> {
+fn drive(fw: &mut Forwarding, exec: &mut Io, input: Input, answer: &str) -> Vec<Action> {
     let mut client = Vec::new();
     let mut inputs = vec![input];
     while let Some(input) = inputs.pop() {
@@ -99,12 +138,7 @@ fn a_pasted_file_pair_is_uploaded_to_the_panes_directory() {
     );
 
     let mut fw = Forwarding::new("host", settings(UploadMode::Ask, ForwardMode::Off));
-    let mut exec = Executor::new(
-        LinkCell::new(conn.clone()),
-        "host",
-        Some("main".into()),
-        None,
-    );
+    let mut exec = Io::new(conn.clone(), Some("main".into()), None);
     let mut prompts = Vec::new();
     let mut client = Vec::new();
     for action in drive(&mut fw, &mut exec, Input::Keys(pasted.into_bytes()), "y") {
@@ -161,12 +195,7 @@ fn a_remote_port_is_forwarded_until_it_goes() {
     let (child, conn) = spawn_proxy(&srv);
     let state = tempfile::tempdir().unwrap();
     let mut fw = Forwarding::new("host", settings(UploadMode::Off, ForwardMode::Auto));
-    let mut exec = Executor::new(
-        LinkCell::new(conn.clone()),
-        "host",
-        None,
-        Some(state.path().to_path_buf()),
-    );
+    let mut exec = Io::new(conn.clone(), None, Some(state.path().to_path_buf()));
     let pane = "%1".parse().unwrap();
     let opened = Input::Event(Event::PortsChanged {
         pane,
@@ -258,7 +287,7 @@ fn open_url_child() {
     assert_eq!(next(), None, "subscribed");
 
     let mut fw = Forwarding::new("host", Settings::default());
-    let mut exec = Executor::new(LinkCell::new(conn.clone()), "host", None, None);
+    let mut exec = Io::new(conn.clone(), None, None);
     srv.cmd(&["open-url", "https://example.com/x?y=1"]).unwrap();
     let event = next().unwrap();
     assert_eq!(drive(&mut fw, &mut exec, Input::Event(event), ""), []);

@@ -1,12 +1,11 @@
-//! The I/O of uploads and URLs over the proxy connection, and [`Executor`],
-//! which runs every I/O action.
+//! The I/O of uploads and URLs over the proxy connection: the slow actions
+//! ([`run_slow`]) the forwarding hook runs off the input thread.
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use super::ports::{Forward, Forwarder};
 use super::text::tilde;
 use super::{Action, FALLBACK_UPLOAD_DIR, Input, UploadDir};
 use crate::protocol::{ClientCtx, Dialect, Hello, Reply, Request, encode_hello};
@@ -69,57 +68,6 @@ pub fn run_slow(link: &Link, target: Option<&str>, action: Action) -> Option<Inp
             Some(Input::Uploaded { paste, result })
         }
         _ => None,
-    }
-}
-
-/// Runs the I/O [`Action`]s of one remote client.
-pub struct Executor {
-    link: LinkCell,
-    /// The `-t` target whose active pane's directory takes uploads (the
-    /// attached session); `None` lets the server choose.
-    target: Option<String>,
-    forwarder: Forwarder,
-}
-
-impl Executor {
-    /// An executor for a client of `host`; `state_dir` is where
-    /// [`list_forwards`](super::list_forwards) looks (`None`: no state file).
-    pub fn new(
-        link: LinkCell,
-        host: &str,
-        target: Option<String>,
-        state_dir: Option<PathBuf>,
-    ) -> Executor {
-        let forwarder = Forwarder::new(host, opener(link.clone()), state_dir);
-        Executor {
-            link,
-            target,
-            forwarder,
-        }
-    }
-
-    /// Runs `action` if it is an I/O one (it may block: an upload); the
-    /// input that answers it. The client's own actions return `None`.
-    pub fn run(&mut self, action: Action) -> Option<Input> {
-        match action {
-            Action::StartForward(remote) => Some(Input::Forwarded {
-                remote,
-                local: self.forwarder.start(remote),
-            }),
-            Action::StopForward(remote) => {
-                self.forwarder.stop(remote);
-                None
-            }
-            a if is_slow(&a) => match self.link.get() {
-                Some(link) => run_slow(&link, self.target.as_deref(), a),
-                None => None,
-            },
-            _ => None,
-        }
-    }
-
-    pub fn forwards(&self) -> Vec<Forward> {
-        self.forwarder.forwards()
     }
 }
 

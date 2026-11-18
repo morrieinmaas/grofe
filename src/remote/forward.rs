@@ -6,8 +6,8 @@
 //! server, control events, prompt answers, I/O results, time) and returns
 //! [`Action`]s. The client does the screen actions ([`Action::Send`],
 //! [`Action::Prompt`], [`Action::Offer`], [`Action::ClearPrompt`], [`Action::Message`]);
-//! [`Executor`] does the I/O ones over the proxy connection and answers
-//! with the [`Input`] to feed back.
+//! [`ForwardHook`] does the I/O ones over the proxy connection ([`run_slow`],
+//! [`Forwarder`]) and answers with the [`Input`] to feed back.
 
 mod exec;
 mod hook;
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use crate::event::Event;
 use crate::types::PaneId;
 
-pub use exec::{Executor, LinkCell, Opener, is_slow, opener, run_slow, upload_dir, upload_files};
+pub use exec::{LinkCell, Opener, is_slow, opener, run_slow, upload_dir, upload_files};
 pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
 use text::count_files;
