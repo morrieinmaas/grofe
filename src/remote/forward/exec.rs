@@ -69,6 +69,15 @@ pub fn run_slow(link: &Link, target: Option<&str>, action: Action) -> Option<Inp
             Some(Input::DirResolved(paste, upload_dir(link.conn(), target)))
         }
         Action::Upload { dir, paste } => Some(upload(link, &dir, paste, &AtomicBool::new(false))),
+        local @ (Action::CheckFiles { .. } | Action::CheckOpen(_)) => run_local(local),
+        _ => None,
+    }
+}
+
+/// Runs a check of local paths ([`Action::CheckFiles`], [`Action::CheckOpen`]):
+/// no connection needed.
+pub fn run_local(action: Action) -> Option<Input> {
+    match action {
         Action::CheckFiles { paths, original } => Some(Input::FilesChecked {
             original,
             files: check_files(paths),

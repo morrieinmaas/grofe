@@ -25,8 +25,8 @@ use crate::event::Event;
 use crate::types::PaneId;
 
 pub use exec::{
-    LinkCell, Opener, Upload, check_files, is_slow, opener, run_slow, upload, upload_dir,
-    upload_files,
+    LinkCell, Opener, Upload, check_files, is_slow, opener, run_local, run_slow, upload,
+    upload_dir, upload_files,
 };
 pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
@@ -182,7 +182,7 @@ pub enum Input {
     },
     /// The attached session's prefix key, which goes through while an
     /// upload holds typing back (so prefix+d still detaches).
-    Prefix(Option<crate::server::input::Key>),
+    Prefix(crate::server::input::Key),
     /// [`Action::StartForward`]'s result: the local port, or why not.
     Forwarded {
         remote: u16,
@@ -337,7 +337,7 @@ impl Forwarding {
             Input::OpenChecked(Err(e)) => {
                 out.push(Action::Message(format!("grofe: not opening a url: {e}")))
             }
-            Input::Prefix(prefix) => self.prefix = prefix,
+            Input::Prefix(prefix) => self.prefix = Some(prefix),
             Input::DirResolved(paste, dir) => self.dir_resolved(paste, dir, now, &mut out),
             Input::Uploaded {
                 paste,
@@ -414,6 +414,9 @@ impl Forwarding {
         now: Instant,
         out: &mut Vec<Action>,
     ) {
+        if !self.pending_is(&paste.original) {
+            return; // given up meanwhile (Esc)
+        }
         match self.settings.upload_paste {
             UploadMode::On => {
                 self.uploading = true;
@@ -486,12 +489,18 @@ impl Forwarding {
 
     fn keys(&mut self, bytes: &[u8], now: Instant, out: &mut Vec<Action>) {
         if let Some(held) = &mut self.queued {
-            match held.take(bytes, self.uploading) {
+            match held.take(bytes) {
                 typing::Typed::Queued => {}
                 typing::Typed::Through => send(out, bytes),
-                typing::Typed::Cancel => out.push(Action::CancelUpload),
+                typing::Typed::Cancel if self.uploading => out.push(Action::CancelUpload),
+                typing::Typed::Cancel => self.give_up(now, out),
                 typing::Typed::Dropped { first: true } => out.push(Action::Message(
-                    "grofe: typing dropped while the upload runs (Esc cancels it)".to_string(),
+                    if self.uploading {
+                        "grofe: typing dropped while the upload runs (Esc cancels it)"
+                    } else {
+                        "grofe: typing dropped while the paste is looked at (Esc pastes it as text)"
+                    }
+                    .to_string(),
                 )),
                 typing::Typed::Dropped { first: false } => {}
             }
@@ -567,7 +576,7 @@ impl Forwarding {
             return send(out, &bracketed(&content));
         };
         // Typing waits from here until the paste is done.
-        self.queued = Some(typing::Held::new(self.prefix));
+        self.queued = Some(typing::Held::new(content.clone(), self.prefix));
         out.push(Action::CheckFiles {
             paths,
             original: content,
@@ -582,6 +591,9 @@ impl Forwarding {
         now: Instant,
         out: &mut Vec<Action>,
     ) {
+        if !self.pending_is(&content) {
+            return; // given up meanwhile (Esc)
+        }
         let Some(files) = files else {
             send(out, &bracketed(&content));
             return self.release(now, out);
@@ -671,6 +683,23 @@ impl Forwarding {
             Ask::Forward(port) => forward_prompt(&self.host, *port),
             Ask::Open(url) => format!("open {url}? [y/N]"),
         }
+    }
+
+    /// Whether the paste typing waits for is the one with this text.
+    fn pending_is(&self, original: &[u8]) -> bool {
+        self.queued.as_ref().is_some_and(|h| h.original == original)
+    }
+
+    /// Esc or C-c before the upload: the paste goes as text, and the typing
+    /// held behind it after it. A check or a lookup still running is left
+    /// to finish unheard.
+    fn give_up(&mut self, now: Instant, out: &mut Vec<Action>) {
+        let Some(held) = &self.queued else { return };
+        let original = held.original.clone();
+        self.asks
+            .retain(|a| !matches!(a, Ask::Upload(p, _) if p.original == original));
+        send(out, &bracketed(&original));
+        self.release(now, out);
     }
 
     /// The file paste is done (pasted, or its text is): the keys typed

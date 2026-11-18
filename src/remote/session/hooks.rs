@@ -140,6 +140,11 @@ pub struct HookCtx<'a> {
 }
 
 impl HookCtx<'_> {
+    /// The attached session's prefix key, as the attach read it.
+    pub fn prefix(&self) -> crate::server::input::Key {
+        self.conn.prefix
+    }
+
     /// The live link: open channels (`tcp`, `upload`), read the RTT.
     pub fn link(&self) -> &Link {
         self.link

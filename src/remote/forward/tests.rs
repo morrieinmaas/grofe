@@ -163,17 +163,15 @@ fn declining_an_upload_pastes_the_text() {
     let (_d, a, _) = files();
     let mut f = fw(UploadMode::Ask, ForwardMode::Ask);
     let now = Instant::now();
-    let paste = FilePaste {
-        files: vec![a.clone()],
-        sizes: vec![3_000_000],
-        total: 3_000_000,
-        original: escaped(&a).into_bytes(),
+    let got = run(&mut f, Input::Keys(bracketed(escaped(&a).as_bytes())), now);
+    let [Action::ResolveDir(paste)] = got.as_slice() else {
+        panic!("{got:?}");
     };
     let dir = UploadDir {
         path: "/x".into(),
         shown: "/x".into(),
     };
-    run(&mut f, Input::DirResolved(paste, dir), now);
+    run(&mut f, Input::DirResolved(paste.clone(), dir), now);
     let want = bracketed(escaped(&a).as_bytes());
     assert_eq!(
         run(&mut f, Input::Answer("".into()), now),
@@ -746,4 +744,84 @@ fn a_file_that_grew_while_uploading_is_named() {
             Action::Send(b"\x1b[200~'/r/a b.txt'\x1b[201~".to_vec())
         ]
     );
+}
+
+#[test]
+fn esc_while_a_paste_is_looked_at_gives_it_up_as_text() {
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = b"\x1b[200~/hung/mount/file\x1b[201~";
+    // The check runs elsewhere (and may never come back).
+    let got = f.handle(keys(paste), now);
+    assert!(
+        matches!(got.as_slice(), [Action::CheckFiles { .. }]),
+        "{got:?}"
+    );
+    assert_eq!(f.handle(keys(b"ls"), now), []);
+    // Esc: the paste as text, then what was typed, and typing flows again.
+    let mut want = paste.to_vec();
+    want.extend(b"ls");
+    assert_eq!(f.handle(keys(b"\x1b"), now), [Action::Send(want)]);
+    assert_eq!(f.handle(keys(b"x"), now), [Action::Send(b"x".to_vec())]);
+    // The check answering late changes nothing.
+    let late = Input::FilesChecked {
+        original: b"/hung/mount/file".to_vec(),
+        files: Some(vec![("/hung/mount/file".into(), 1)]),
+    };
+    assert_eq!(f.handle(late, now), []);
+}
+
+#[test]
+fn c_c_while_the_directory_is_looked_up_gives_the_paste_up_too() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let got = run(&mut f, Input::Keys(bracketed(escaped(&a).as_bytes())), now);
+    let [Action::ResolveDir(paste)] = got.as_slice() else {
+        panic!("{got:?}");
+    };
+    let paste = paste.clone();
+    assert_eq!(
+        f.handle(keys(b"\x03"), now),
+        [Action::Send(bracketed(escaped(&a).as_bytes()))]
+    );
+    let dir = UploadDir {
+        path: "/r".into(),
+        shown: "/r".into(),
+    };
+    assert_eq!(
+        f.handle(Input::DirResolved(paste, dir), now),
+        [],
+        "no upload"
+    );
+}
+
+#[test]
+fn the_typing_cap_message_says_what_esc_does_now() {
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    f.handle(keys(b"\x1b[200~/hung/file\x1b[201~"), now);
+    f.handle(Input::Keys(vec![b'x'; typing::MAX_QUEUED]), now);
+    assert_eq!(
+        f.handle(keys(b"y"), now),
+        [Action::Message(
+            "grofe: typing dropped while the paste is looked at (Esc pastes it as text)".into()
+        )]
+    );
+}
+
+#[test]
+fn a_known_prefix_is_kept() {
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let c_a = crate::server::input::parse_prefix("C-a").unwrap().unwrap();
+    f.handle(Input::Prefix(c_a), now);
+    f.handle(keys(b"\x1b[200~/hung/file\x1b[201~"), now);
+    // The session's C-a goes through; C-b is just typing now.
+    assert_eq!(
+        f.handle(keys(b"\x01"), now),
+        [Action::Send(b"\x01".to_vec())]
+    );
+    assert_eq!(f.handle(keys(b"d"), now), [Action::Send(b"d".to_vec())]);
+    assert_eq!(f.handle(keys(b"\x02"), now), []);
 }

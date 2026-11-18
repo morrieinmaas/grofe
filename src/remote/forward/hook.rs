@@ -18,7 +18,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use super::exec::{LinkCell, is_slow, opener, run_slow, upload};
+use super::exec::{LinkCell, is_slow, opener, run_local, run_slow, upload};
 use super::ports::Forwarder;
 use super::{Action, Forwarding, Input, Settings};
 use crate::event::Event;
@@ -50,6 +50,8 @@ struct Core {
     link: LinkCell,
     jobs: Sender<Job>,
     done: Receiver<Input>,
+    /// Where the threads of local checks send their answers.
+    done_tx: Sender<Input>,
     /// The proxy connection last seen (its address), to tell a reconnect.
     conn: Option<usize>,
     /// The id of the forwarding prompt up, if one is; ids count up.
@@ -87,13 +89,15 @@ impl ForwardHook {
         let (done_tx, done) = channel();
         let worker_link = link.clone();
         let hello = hello.to_string();
-        std::thread::spawn(move || worker(worker_link, hello, job_rx, done_tx));
+        let worker_done = done_tx.clone();
+        std::thread::spawn(move || worker(worker_link, hello, job_rx, worker_done));
         let core = Core {
             fw: Forwarding::new(host, settings),
             forwarder: Forwarder::new(host, opener(link.clone()), state_dir),
             link,
             jobs,
             done,
+            done_tx,
             conn: None,
             current: None,
             next_id: 0,
@@ -111,7 +115,7 @@ impl ForwardHook {
     /// Feeds `input` and runs what comes of it; the bytes for the server.
     fn feed(&self, cx: &mut HookCtx<'_>, input: Input) -> Vec<u8> {
         let mut core = self.lock();
-        core.connected(cx.link());
+        core.connected(cx.link(), cx.prefix());
         let actions = core.fw.handle(input, Instant::now());
         core.apply(&self.core, cx, actions)
     }
@@ -125,7 +129,10 @@ impl Core {
     /// Points the forwards at `link` and, on a new connection (the first,
     /// or a reconnect), reads the ports again: what changed
     /// while the link was down sent no event this client saw.
-    fn connected(&mut self, link: &Link) {
+    fn connected(&mut self, link: &Link, prefix: crate::server::input::Key) {
+        // The prefix the attach read: it goes through while an upload holds
+        // typing.
+        self.fw.handle(Input::Prefix(prefix), Instant::now());
         let conn = std::ptr::from_ref::<ProxyConn>(link.conn()) as usize;
         if self.conn != Some(conn) {
             self.conn = Some(conn);
@@ -194,6 +201,18 @@ impl Core {
                         .jobs
                         .send(Job::Upload(upload, Arc::clone(&self.cancel)));
                 }
+                // Local path checks on a thread each, with no round trip: a
+                // path on a hung mount blocks only its own thread, never the
+                // worker (events, uploads' lookups) or the input thread.
+                // ponytail: such a thread stays blocked until the mount answers.
+                check @ (Action::CheckFiles { .. } | Action::CheckOpen(_)) => {
+                    let done = self.done_tx.clone();
+                    std::thread::spawn(move || {
+                        if let Some(input) = run_local(check) {
+                            let _ = done.send(input);
+                        }
+                    });
+                }
                 slow => {
                     debug_assert!(is_slow(&slow));
                     let _ = self.jobs.send(Job::Slow(slow));
@@ -218,7 +237,7 @@ impl Hook for ForwardHook {
             return;
         };
         let mut core = self.lock();
-        core.connected(cx.link());
+        core.connected(cx.link(), cx.prefix());
         let jobs = match event {
             // Ours: the subscription follows this client.
             Event::ClientSessionChanged { .. } => vec![Job::Resync],
@@ -232,7 +251,7 @@ impl Hook for ForwardHook {
 
     fn tick(&mut self, cx: &mut HookCtx<'_>, now: Instant) {
         let mut core = self.lock();
-        core.connected(cx.link());
+        core.connected(cx.link(), cx.prefix());
         let mut inputs = vec![Input::Tick];
         while let Ok(done) = core.done.try_recv() {
             inputs.push(done);
@@ -408,16 +427,6 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input
             Job::Event(event) => Input::Event(event),
             Job::Resync => {
                 session = attached_session(&link, &hello);
-                // The session's prefix, which goes through while an upload
-                // holds typing.
-                if let Some(s) = &session {
-                    let argv = ["show-options", "-Av", "-t", s, "prefix"].map(String::from);
-                    let prefix = link
-                        .request(&hello, &argv)
-                        .ok()
-                        .and_then(|p| crate::server::input::parse_prefix(p.trim()).ok().flatten());
-                    let _ = done.send(Input::Prefix(prefix));
-                }
                 match &session {
                     Some(s) => Input::Resync(session_ports(&link, &hello, s)),
                     None => continue,
