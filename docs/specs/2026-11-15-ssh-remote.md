@@ -67,9 +67,11 @@ uses separate `ssh host 'mkdir -p ... && cat > ...'` runs). Never sudo, never to
 the remote's config. `--install-from <path>` installs a local file instead (air-gapped hosts).
 
 **Drop and reconnect.** The client detects a drop by EOF, an ssh exit, or two missed pings
-(ping every 5 s on the proxy protocol). Then:
+(ping every 5 s on the proxy protocol; a ping counts as missed only when no frame at all arrived
+during its wait, so a pong stuck behind data on a slow link is late, not missed). Then:
 - the last frame stays on screen; the bottom row shows a reverse-video bar
-  `grofe: reconnecting to <host> (attempt N, next in Ns) · prefix d detach` drawn by the client;
+  `grofe: reconnecting to <host> (attempt N, next in Ns) · prefix d detach` drawn by the client
+  (`connecting` in place of the countdown while an attempt runs);
 - input is dropped, except the detach key, which ends the client cleanly;
 - retries back off 0.5 s, 1, 2, 4 ... capped at 30 s, with ±20% jitter; a connection that stays
   up 60 s resets the backoff; a resumed wake from sleep (wall clock jump over 5 s) retries at once;
