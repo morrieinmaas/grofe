@@ -17,7 +17,7 @@ fn a_killed_sshd_reconnects_with_the_output_made_meanwhile() {
     let local = e.local();
     let _cleanup = local.server_cleanup(&e, false);
     let mut h = local.attach(local.grofe(&["-r", &e.host]));
-    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    local.wait_prompt(&e, &mut h);
     h.send("echo e2e-$((6*7))-before\r");
     h.wait_for_timeout("e2e-42-before", REMOTE_TIMEOUT);
 
@@ -49,7 +49,7 @@ fn netem_total_loss_is_a_drop_and_clearing_it_reconnects() {
     let local = e.local();
     let _cleanup = local.server_cleanup(&e, true);
     let mut h = local.attach(local.grofe(&["-r", &e.host]));
-    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    local.wait_prompt(&e, &mut h);
     h.send("echo e2e-$((6*7))-before\r");
     h.wait_for_timeout("e2e-42-before", REMOTE_TIMEOUT);
 

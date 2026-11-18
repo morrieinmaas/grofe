@@ -24,7 +24,7 @@ fn dash_r_attaches_and_a_command_s_output_shows() {
     let local = e.local();
     let _cleanup = local.server_cleanup(&e, false);
     let mut h = local.attach(local.grofe(&["-r", &e.host]));
-    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    local.wait_prompt(&e, &mut h);
     // The output is not in the typed line: 6*7 is computed there.
     h.send("echo e2e-$((6*7))-attach\r");
     h.wait_for_timeout("e2e-42-attach", REMOTE_TIMEOUT);

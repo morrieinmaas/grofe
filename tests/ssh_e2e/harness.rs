@@ -165,6 +165,34 @@ impl Local {
         }
     }
 
+    /// Waits for the pane's first shell prompt. If none comes, panics with
+    /// what explains it: the client's screen and output, and in the
+    /// container this scenario's socket, the grofe logs, the processes and
+    /// sshd's log.
+    pub fn wait_prompt(&self, e: &E2e, h: &mut Harness) {
+        let deadline = std::time::Instant::now() + REMOTE_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            if h.text().contains("$ ") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let screen = h.text();
+        let raw = h.output();
+        let raw = String::from_utf8_lossy(&raw[raw.len().saturating_sub(2000)..]).into_owned();
+        let there = e.ssh(&self.on("echo \"== GROFE=$GROFE\"; ls -la /tmp; \
+             for f in ~/.local/state/grofe/*.log; do echo \"== $f\"; tail -n 40 \"$f\"; done; \
+             echo '== ps'; ps -eo pid,ppid,etime,stat,args"));
+        let logs = e.helper("e2e_logs", &["80"]);
+        panic!(
+            "no shell prompt within {REMOTE_TIMEOUT:?}\n== screen\n{screen}\n== client output (tail)\n{raw:?}\n\
+             {}\n{}\n== container log\n{}",
+            text(&there),
+            String::from_utf8_lossy(&there.stderr),
+            text(&logs),
+        );
+    }
+
     /// While down, the wrapper ssh refuses every connection.
     pub fn set_down(&self, down: bool) {
         let f: PathBuf = self.root().join("down");

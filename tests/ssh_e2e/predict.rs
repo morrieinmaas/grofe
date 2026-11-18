@@ -79,7 +79,7 @@ fn with_200ms_latency_typed_keys_show_underlined_then_the_echo_confirms() {
     // Pings every second, so the RTT is measured soon.
     cmd.env("GROFE_TEST_PING_MS", "1000");
     let mut h = Harness::spawn(cmd, 80, 24);
-    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    local.wait_prompt(&e, &mut h);
     let out = e.helper("e2e_netem", &["delay", "200ms"]);
     assert!(out.status.success(), "{out:?}");
     // auto predicts from 50 ms.
