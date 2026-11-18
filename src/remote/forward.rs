@@ -27,7 +27,7 @@ pub use exec::{Executor, LinkCell, Opener, is_slow, opener, run_slow, upload_dir
 pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
 use text::count_files;
-pub use text::{forward_prompt, human_size, parse_paths, shell_quote, upload_prompt};
+pub use text::{forward_prompt, human_size, parse_paths, upload_prompt};
 
 /// The bracketed paste start marker.
 pub const PASTE_START: &[u8] = b"\x1b[200~";
@@ -362,7 +362,7 @@ impl Forwarding {
     ) {
         match result {
             Ok(paths) => {
-                let quoted: Vec<String> = paths.iter().map(|p| shell_quote(p)).collect();
+                let quoted: Vec<String> = paths.iter().map(|p| crate::util::quote::sh(p)).collect();
                 send(out, &bracketed(quoted.join(" ").as_bytes()));
             }
             Err(e) => {

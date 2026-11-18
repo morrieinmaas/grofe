@@ -4,6 +4,8 @@
 
 use std::process::{Command, Stdio};
 
+use crate::util::quote::sh;
+
 /// The environment variable naming the ssh program (default `ssh`). Tests
 /// point it at a fake ssh that runs the remote command locally.
 pub const SSH_ENV: &str = "GROFE_SSH";
@@ -261,11 +263,6 @@ pub fn wants_keepalive(target: &Target) -> bool {
     }
 }
 
-/// `s` as one single-quoted shell word.
-pub fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
-
 /// The directory, relative to the remote `$HOME`, a bootstrap installs
 /// grofe `version` into.
 pub fn install_dir(version: &str) -> String {
@@ -292,9 +289,9 @@ pub fn remote_grofe(version: &str, args: &str) -> String {
          if command -v grofe >/dev/null 2>&1; then exec grofe {args}; fi; \
          echo {marker} >&2; exit {MISSING_STATUS}",
         dir = install_dir(version),
-        marker = shell_quote(MISSING_MARKER),
+        marker = sh(MISSING_MARKER),
     );
-    format!("sh -c {}", shell_quote(&script))
+    format!("sh -c {}", sh(&script))
 }
 
 /// The remote command that stores its stdin as the versioned grofe: into a
@@ -313,7 +310,7 @@ pub fn install_command(version: &str, len: usize, sha256: &str) -> String {
          {{ rm -f \"$t\"; echo 'grofe: the copy arrived damaged; nothing was installed' >&2; exit 1; }}",
         dir = install_dir(version),
     );
-    format!("sh -c {}", shell_quote(&script))
+    format!("sh -c {}", sh(&script))
 }
 
 #[cfg(test)]
@@ -527,6 +524,6 @@ mod tests {
 
     #[test]
     fn shell_quote_survives_quotes() {
-        assert_eq!(shell_quote("a'b"), r"'a'\''b'");
+        assert_eq!(sh("a'b"), r"'a'\''b'");
     }
 }

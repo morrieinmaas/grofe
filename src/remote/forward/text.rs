@@ -46,11 +46,6 @@ pub fn parse_paths(text: &str) -> Option<Vec<PathBuf>> {
     (!paths.is_empty()).then_some(paths)
 }
 
-/// `s` in single quotes for a POSIX shell, an embedded quote as `'\''`.
-pub fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
-
 /// A size for a prompt: bytes, or decimal kB, MB, GB with one decimal.
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["kB", "MB", "GB", "TB"];
@@ -232,8 +227,8 @@ mod tests {
 
     #[test]
     fn shell_quoting() {
-        assert_eq!(shell_quote("/a/b"), "'/a/b'");
-        assert_eq!(shell_quote("/a/it's x"), r"'/a/it'\''s x'");
+        assert_eq!(crate::util::quote::sh("/a/b"), "'/a/b'");
+        assert_eq!(crate::util::quote::sh("/a/it's x"), r"'/a/it'\''s x'");
     }
 
     #[test]

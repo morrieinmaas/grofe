@@ -333,10 +333,8 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     super::quic::sha256(data)
 }
 
-/// Lower-case hex.
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+/// Lower-case hex, the one `quic.rs` has.
+pub use super::quic::hex;
 
 /// Where a test or mirror points the release download, else `option`.
 pub fn release_url(option: Option<String>) -> String {

@@ -147,7 +147,8 @@ pub fn parse_port_range(s: &str) -> Result<RangeInclusive<u16>, String> {
     Ok(low..=high)
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// Lower-case hex (also [`crate::remote::bootstrap::hex`]).
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

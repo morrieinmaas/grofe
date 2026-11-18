@@ -176,10 +176,10 @@ pub const OPEN_SHIM_NAME: &str = "grofe-open";
 /// bootstrap install is not).
 pub fn install_open_shim(dir: &Path, exe: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let exe = exe.display().to_string().replace('\'', "'\\''");
+    let exe = crate::util::quote::sh(&exe.display().to_string());
     let shim = dir.join(OPEN_SHIM_NAME);
     let temp = dir.join(format!(".{OPEN_SHIM_NAME}.{}", std::process::id()));
-    std::fs::write(&temp, format!("#!/bin/sh\nexec '{exe}' open \"$@\"\n"))?;
+    std::fs::write(&temp, format!("#!/bin/sh\nexec {exe} open \"$@\"\n"))?;
     std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))?;
     std::fs::rename(&temp, &shim)?;
     let _ = OPEN_SHIM.set(shim);
