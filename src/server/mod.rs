@@ -721,6 +721,10 @@ async fn serve(
     // As tmux 3.7b's `job_kill_all` once its loop ends: whatever way
     // `serve` leaves, a panic included, the jobs still running get SIGTERM.
     let _jobs = shell_jobs::KillOnExit(state.shell_jobs.clone());
+    // Agent links a server that died without cleaning up left behind: their
+    // session ids come round again from $0, and a stale target (a dead
+    // forwarded agent, another login's) must not carry over to them.
+    remote::remove_links(&state);
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
