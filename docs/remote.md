@@ -143,8 +143,7 @@ machine: name, target, session, transport and `on` or `off`, with `-` for an uns
   every enabled machine. Only the machine on screen streams its screen; the others keep a light
   control connection for agent and notification events, so a slow machine never stalls the
   one you are using.
-- The multi-machine client does not forward URLs, files or ports yet; use `grofe -r <name>` for
-  those.
+- URLs, dropped files and ports are forwarded for the machine on screen, as with `grofe -r`.
 - `M-m` (`machine-key`) opens the machine picker: one row per machine with its state
   (connected, reconnecting, offline), its sessions and its agents. Enter switches; `M-1` to
   `M-9` jump straight to a row. The session you leave keeps running.
