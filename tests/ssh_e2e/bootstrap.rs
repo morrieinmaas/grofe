@@ -27,7 +27,7 @@ fn install_from_the_release_dir_then_attach_and_no_second_install() {
     let mut cmd = local.grofe(&["-r", &e.bare_host, "--install"]);
     cmd.env("GROFE_REMOTE_RELEASE_URL", &e.release_url);
     let mut h = local.attach(cmd);
-    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    local.wait_prompt(&e, &mut h);
     h.send("echo e2e-$((6*7))-installed\r");
     h.wait_for_timeout("e2e-42-installed", REMOTE_TIMEOUT);
     h.send("\x02d");

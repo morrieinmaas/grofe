@@ -23,7 +23,7 @@ fn attach_with(e: &E2e, local: &Local, option: &str, value: &str) -> Harness {
     let out = e.ssh(&local.on("grofe new-session -d -s main"));
     assert!(out.status.success(), "{out:?}");
     let mut h = Harness::spawn(local.grofe(&["-r", &e.host]), 120, 24);
-    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    local.wait_prompt(e, &mut h);
     h
 }
 

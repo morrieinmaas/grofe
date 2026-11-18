@@ -77,7 +77,7 @@ fn quic_attaches_and_a_silent_path_reconnects_to_the_same_proxy() {
     // well inside the 10 s a QUIC reconnect waits for its handshake.
     cmd.env("GROFE_TEST_PING_MS", "1000");
     let mut h = Harness::spawn(cmd, 80, 24);
-    h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
+    local.wait_prompt(&e, &mut h);
     h.send("echo e2e-$((6*7))-before\r");
     h.wait_for_timeout("e2e-42-before", REMOTE_TIMEOUT);
     let before = proxies(&e);

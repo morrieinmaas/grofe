@@ -8,6 +8,7 @@
 #                                               `e2e_netem clear` removes it
 #   scripts/ssh-e2e.sh e2e_kill_sshd_children   kill every ssh session's sshd
 #                                               process (the listener stays)
+#   scripts/ssh-e2e.sh e2e_logs [lines]        the container's log (sshd -e)
 #
 # The helpers read GROFE_E2E_RUNTIME and GROFE_E2E_CONTAINER, which a run
 # exports to the tests, so a scenario calls them as
@@ -78,8 +79,10 @@ e2e_kill_sshd_children() {
   e2e_exec sh -c "ps -eo pid=,args= | awk '/sshd(-session)?: tester/ { print \$1 }' | xargs -r kill -9"
 }
 
+e2e_logs() { "$(runtime)" logs --tail "${1:-80}" "$(target_container)" 2>&1; }
+
 case "${1:-}" in
-  e2e_exec | e2e_netem | e2e_kill_sshd_children)
+  e2e_exec | e2e_netem | e2e_kill_sshd_children | e2e_logs)
     fn="$1"; shift; "$fn" "$@"; exit ;;
 esac
 
