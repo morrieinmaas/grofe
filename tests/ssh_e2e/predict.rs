@@ -13,7 +13,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::Processor;
 
-use crate::harness::{E2e, REMOTE_TIMEOUT};
+use crate::harness::{E2e, Local, REMOTE_TIMEOUT};
 use crate::pty::Harness;
 
 const DELAY: Duration = Duration::from_millis(200);
@@ -53,10 +53,10 @@ fn wait_underlined(h: &mut Harness, want: &str) {
 }
 
 /// `#{client_rtt}` in ms once it is at least `min`.
-fn wait_rtt(e: &E2e, min: u64) -> u64 {
+fn wait_rtt(e: &E2e, local: &Local, min: u64) -> u64 {
     let deadline = Instant::now() + REMOTE_TIMEOUT;
     loop {
-        let out = e.ssh("grofe list-clients -F '#{client_rtt}'");
+        let out = e.ssh(&local.on("grofe list-clients -F '#{client_rtt}'"));
         let said = String::from_utf8_lossy(&out.stdout).into_owned();
         if let Some(ms) = said
             .lines()
@@ -73,8 +73,8 @@ fn wait_rtt(e: &E2e, min: u64) -> u64 {
 #[test]
 fn with_200ms_latency_typed_keys_show_underlined_then_the_echo_confirms() {
     let e = e2e_or_skip!();
-    let _cleanup = e.server_cleanup(true);
     let local = e.local();
+    let _cleanup = local.server_cleanup(&e, true);
     let mut cmd = local.grofe(&["-r", &e.host]);
     // Pings every second, so the RTT is measured soon.
     cmd.env("GROFE_TEST_PING_MS", "1000");
@@ -83,7 +83,7 @@ fn with_200ms_latency_typed_keys_show_underlined_then_the_echo_confirms() {
     let out = e.helper("e2e_netem", &["delay", "200ms"]);
     assert!(out.status.success(), "{out:?}");
     // auto predicts from 50 ms.
-    wait_rtt(&e, 50);
+    wait_rtt(&e, &local, 50);
     // Three echoes confirmed in a row make the predictor confident.
     for (i, key) in ["e", "c", "h"].into_iter().enumerate() {
         h.send(key);

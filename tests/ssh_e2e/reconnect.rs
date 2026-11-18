@@ -13,9 +13,9 @@ fn bar(e: &E2e) -> String {
 #[test]
 fn a_killed_sshd_reconnects_with_the_output_made_meanwhile() {
     let e = e2e_or_skip!();
-    let _cleanup = e.server_cleanup(false);
     let bar = bar(&e);
     let local = e.local();
+    let _cleanup = local.server_cleanup(&e, false);
     let mut h = local.attach(local.grofe(&["-r", &e.host]));
     h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
     h.send("echo e2e-$((6*7))-before\r");
@@ -29,7 +29,7 @@ fn a_killed_sshd_reconnects_with_the_output_made_meanwhile() {
     assert!(h.text().contains("e2e-42-before"), "the last frame stays");
     // Typed while offline: dropped.
     h.send("lost-keys");
-    let out = e.ssh("grofe send-keys -t main 'echo e2e-$((6*7))-away' Enter");
+    let out = e.ssh(&local.on("grofe send-keys -t main 'echo e2e-$((6*7))-away' Enter"));
     assert!(out.status.success(), "{out:?}");
     local.set_down(false);
     h.wait_until("the redraw after the reconnect", REMOTE_TIMEOUT, |t| {
@@ -45,9 +45,9 @@ fn a_killed_sshd_reconnects_with_the_output_made_meanwhile() {
 #[test]
 fn netem_total_loss_is_a_drop_and_clearing_it_reconnects() {
     let e = e2e_or_skip!();
-    let _cleanup = e.server_cleanup(true);
     let bar = bar(&e);
     let local = e.local();
+    let _cleanup = local.server_cleanup(&e, true);
     let mut h = local.attach(local.grofe(&["-r", &e.host]));
     h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
     h.send("echo e2e-$((6*7))-before\r");

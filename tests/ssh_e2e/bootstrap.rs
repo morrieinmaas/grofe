@@ -9,10 +9,11 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[test]
 fn install_from_the_release_dir_then_attach_and_no_second_install() {
     let e = e2e_or_skip!();
+    let local = e.local();
     let installed = format!("$HOME/.local/share/grofe/bin/{VERSION}/grofe");
-    let wipe = format!(
+    let wipe = local.on(&format!(
         "{installed} kill-server 2>/dev/null; rm -rf $HOME/.local/share/grofe $HOME/.local/state/grofe"
-    );
+    ));
     // A clean slate, and the same again afterwards, pass or fail.
     let out = e.ssh_to(&e.bare_host, &wipe);
     assert!(out.status.success(), "{out:?}");
@@ -22,7 +23,6 @@ fn install_from_the_release_dir_then_attach_and_no_second_install() {
         command: wipe.clone(),
         netem: false,
     };
-    let local = e.local();
 
     let mut cmd = local.grofe(&["-r", &e.bare_host, "--install"]);
     cmd.env("GROFE_REMOTE_RELEASE_URL", &e.release_url);

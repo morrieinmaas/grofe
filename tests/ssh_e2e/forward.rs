@@ -20,7 +20,7 @@ fn attach_with(e: &E2e, local: &Local, option: &str, value: &str) -> Harness {
     let dir = local.root().join("config/grofe");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("config.toml"), format!("{option} = \"{value}\"\n")).unwrap();
-    let out = e.ssh("grofe new-session -d -s main");
+    let out = e.ssh(&local.on("grofe new-session -d -s main"));
     assert!(out.status.success(), "{out:?}");
     let mut h = Harness::spawn(local.grofe(&["-r", &e.host]), 120, 24);
     h.wait_for_timeout("$ ", REMOTE_TIMEOUT);
@@ -41,8 +41,8 @@ fn http_get(port: u16) -> String {
 #[test]
 fn a_web_server_in_a_remote_pane_is_forwarded_to_localhost() {
     let e = e2e_or_skip!();
-    let _cleanup = e.server_cleanup(false);
     let local = e.local();
+    let _cleanup = local.server_cleanup(&e, false);
     let mut h = attach_with(&e, &local, "remote-forward-ports", "auto");
     h.send(format!(
         "python3 -m http.server {WEB_PORT} --bind 127.0.0.1 --directory ~/www\r"
@@ -85,8 +85,8 @@ fn a_pasted_local_file_uploads_to_the_pane_s_directory() {
         command: format!("rm -f ~/{name}"),
         netem: false,
     };
-    let _cleanup = e.server_cleanup(false);
     let local = e.local();
+    let _cleanup = local.server_cleanup(&e, false);
     let body = format!("from the local side {}\n", std::process::id());
     let path = local.root().join(&name);
     std::fs::write(&path, &body).unwrap();
