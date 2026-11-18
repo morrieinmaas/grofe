@@ -103,6 +103,10 @@ impl Held {
     pub fn into_bytes(mut self) -> (Vec<u8>, bool) {
         let mut out = std::mem::take(&mut self.bytes);
         let waiting = self.decoder.take_waiting();
+        if self.overflowed {
+            // Everything after the first drop goes too.
+            return (out, false);
+        }
         let unit = match std::mem::take(&mut self.paste) {
             // The dropped paste's rest goes with it.
             Paste::Dropping => return (out, false),
@@ -166,7 +170,11 @@ impl Held {
     /// or dropped whole if it would pass the cap.
     fn paste_piece(&mut self, start: bool, end: bool, raw: Vec<u8>, out: &mut Vec<Typed>) {
         if start {
-            self.paste = Paste::Open(Vec::new());
+            self.paste = if self.overflowed {
+                Paste::Dropping
+            } else {
+                Paste::Open(Vec::new())
+            };
         }
         if let Paste::Open(pieces) = &mut self.paste {
             pieces.extend(raw);
@@ -182,8 +190,10 @@ impl Held {
     }
 
     /// Holds `part` for after the paste, unless that passes [`MAX_QUEUED`].
+    /// Once anything was dropped, everything after it goes too, so what is
+    /// replayed never has a hole in the middle of a command.
     fn keep(&mut self, part: &[u8], out: &mut Vec<Typed>) {
-        if self.bytes.len() + part.len() > MAX_QUEUED {
+        if self.overflowed || self.bytes.len() + part.len() > MAX_QUEUED {
             self.drop_typing(out);
         } else {
             self.bytes.extend_from_slice(part);

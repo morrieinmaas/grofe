@@ -97,7 +97,8 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
   gets ` (2)`; nothing is ever overwritten. Directories are pasted as text. Each file is sent at
   its size when pasted. While a paste is checked or uploaded, Esc or C-c gives it up (pasted as
   text before the upload starts, cancelled during it) and the prefix still works; other typing
-  waits and follows the pasted paths.
+  waits and follows the pasted paths. Past 64 KiB of it (a bracketed paste counts whole), that
+  and everything typed after it until the paste is done is dropped, with a message.
 - **ssh agent.** Each session's `SSH_AUTH_SOCK` points at a stable link that every attach
   repoints, so panes that started before a reconnect keep a working agent. For `grofe -r`, the
   agent is the one ssh forwards to the remote (`ssh -A`, or `ForwardAgent yes` in your ssh

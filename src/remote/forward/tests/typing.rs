@@ -625,16 +625,20 @@ fn a_huge_paste_dropped_for_the_cap_leaks_nothing_later() {
 }
 
 #[test]
-fn after_a_dropped_paste_ends_typing_is_kept_again() {
+fn after_a_dropped_paste_later_typing_is_dropped_too() {
     let (_d, a, _) = files();
     let now = Instant::now();
     let mut f = fw(UploadMode::On, ForwardMode::Ask);
     let paste = uploading(&mut f, &a, now);
     f.handle(Input::Keys(open_paste((1 << 20) + 10, b'p')), now);
     assert_eq!(f.handle(keys(b"tail\r\x1b[201~"), now), []);
+    // Typed after the drop: dropped as well, so nothing replays with a
+    // hole in it (a heredoc's `EOF` without its body).
     assert_eq!(f.handle(keys(b"ok"), now), []);
     let sent = finish_upload(&mut f, paste, now);
-    assert_eq!(sent, [Action::Send(b"\x1b[200~'/r/a'\x1b[201~ok".to_vec())]);
+    assert_eq!(sent, [Action::Send(b"\x1b[200~'/r/a'\x1b[201~".to_vec())]);
+    // After the release, typing is typing again.
+    assert_eq!(f.handle(keys(b"ok"), now), [Action::Send(b"ok".to_vec())]);
 }
 
 #[test]
