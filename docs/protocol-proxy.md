@@ -3,7 +3,8 @@
 `grofe proxy` runs on the remote machine and speaks this protocol on its stdin and stdout, so
 one byte stream (usually `ssh host grofe proxy`) carries many channels: the server's attach and
 control connections, TCP forwards and file uploads. It sits beside, not inside, protocol v1
-(`protocol-v1.md`): the bytes of an attach or control channel are exactly a v1 connection.
+(`protocol-v1.md`): the bytes of an attach or control channel are a v1 connection (the proxy may add
+`SSH_AUTH_SOCK` to an attach hello, see below).
 
 Fixtures for every message below are in `tests/fixtures/proxy/`, checked byte for byte by
 `tests/protocol_proxy.rs`. Changing a fixture is a breaking change.
@@ -49,7 +50,7 @@ A `close` ends a channel in both directions; frames for a channel no longer know
 
 | payload | what the proxy does |
 |---------|---------------------|
-| `{"type":"attach"}` | connects to the server socket (starting the server as any CLI call does) and bridges bytes both ways. The client's first data is the v1 attach hello line. |
+| `{"type":"attach"}` | connects to the server socket (starting the server as any CLI call does) and bridges bytes both ways. The client's first data is the v1 attach hello line. When the hello's `env` has no `SSH_AUTH_SOCK` and the proxy's own is a live agent socket (ssh agent forwarding), the proxy adds it to the hello before passing it on. |
 | `{"type":"control"}` | the same, for a v1 control connection (control hello, then requests). |
 | `{"type":"tcp","port":N}` | connects to `127.0.0.1:N`, or to `[::1]:N` when that is refused (a server listening on IPv6 localhost only), and bridges bytes. Nothing but the loopback addresses is ever connected to. |
 | `{"type":"upload","dir":"...","name":"..."}` | creates `dir` if needed (a leading `~/` is the proxy user's home), writes the data to `dir/name` until `eof`, never overwriting: a taken name gets ` (2)`, ` (3)`, ... appended. It then sends the final absolute path as `data`, `eof`, and `close`. `name` must not contain `/` and must not be `.` or `..`. |
@@ -72,4 +73,6 @@ with the reason `flow control: data past the window`.
 ## Liveness
 
 Either side may send `ping`; the other answers `pong` with the same nonce. The client pings
-every 5 s and treats two missed pongs, EOF, or the ssh process exiting as a drop.
+every 5 s and treats two missed pongs, EOF, or the ssh process exiting as a drop. The proxy
+ends the connection (every channel closed) after 20 s with no frame from the client, so a
+client must keep pinging while it is connected.

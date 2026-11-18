@@ -41,7 +41,7 @@ grofe is not installed on devbox (linux x86_64). Install v0.3.1 to ~/.local/shar
 `--install` answers yes and `--no-install` no; without a terminal the answer is no. The install
 downloads the release archive for the remote's system on your machine, checks it against the
 release's `SHA256SUMS`, and copies the binary over ssh (separate short `ssh` runs, so your ssh config and keys apply) into
-`~/.local/share/grofe/bin/<version>/`. The copy is checked for its length and hash on the remote
+`~/.local/share/grofe/bin/<version>/`. The copy is checked for its length and, where the remote has `sha256sum` or `shasum`, its hash
 before it is moved into place. It never uses sudo and never touches the remote's config.
 
 - `--install-from <path>` installs a local binary instead, for hosts with no way out to the
