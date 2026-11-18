@@ -313,3 +313,25 @@ fn a_failing_proxy_quic_falls_back_to_ssh_and_says_why() {
     h.send("\x02d");
     h.wait_exit();
 }
+
+#[test]
+fn a_zero_remote_quic_idle_is_refused_and_the_attach_uses_ssh() {
+    let r = Remote::new();
+    let cfg = r.srv.config_home.join("grofe");
+    fs::create_dir_all(&cfg).unwrap();
+    fs::write(cfg.join("config.toml"), "remote-quic-idle = 0\n").unwrap();
+    let mut h = quic_attach(&r, &[]);
+    h.wait_for(common::PROMPT.trim());
+    let said = String::from_utf8_lossy(h.output()).into_owned();
+    assert!(
+        said.contains("grofe proxy --quic failed there: remote-quic-idle is 0")
+            && said.contains("using ssh instead"),
+        "{said}"
+    );
+    assert!(!said.contains("blocked?"), "{said}");
+    assert!(r.proxies().is_empty());
+    h.send("echo over-ssh\r");
+    h.wait_for("over-ssh");
+    h.send("\x02d");
+    h.wait_exit();
+}

@@ -64,16 +64,24 @@ fn serve_options() -> Result<ServeOptions, String> {
         .ok()
         .or_else(|| get("remote-udp-ports"))
         .unwrap_or_else(|| DEFAULT_PORTS.into());
-    let idle = match get("remote-quic-idle") {
-        Some(s) => s
-            .parse::<u64>()
-            .map_err(|_| format!("bad remote-quic-idle {s:?}"))?,
-        None => DEFAULT_IDLE_SECS,
-    };
     Ok(ServeOptions {
         ports: parse_port_range(&ports)?,
-        idle: Duration::from_secs(idle),
+        idle: parse_idle(get("remote-quic-idle").as_deref())?,
     })
+}
+
+/// `remote-quic-idle` in seconds, the default when unset. 0 is refused: the
+/// proxy would exit as soon as its line is out, before any client could
+/// connect, and the client would take that for blocked UDP.
+fn parse_idle(value: Option<&str>) -> Result<Duration, String> {
+    match value.map(|s| (s, s.parse::<u64>())) {
+        None => Ok(Duration::from_secs(DEFAULT_IDLE_SECS)),
+        Some((_, Ok(0))) => Err(
+            "remote-quic-idle is 0: the proxy would exit before a client could connect".to_string(),
+        ),
+        Some((_, Ok(n))) => Ok(Duration::from_secs(n)),
+        Some((s, Err(_))) => Err(format!("bad remote-quic-idle {s:?}")),
+    }
 }
 
 /// Binds a UDP socket on all interfaces (the client must reach it) at a
@@ -656,6 +664,15 @@ mod tests {
         assert!((40000..=40999).contains(&port), "{port}");
         let b = bind_udp(&(port..=port), 0);
         assert!(b.is_err(), "the only port is taken");
+    }
+
+    #[test]
+    fn remote_quic_idle_must_be_at_least_a_second() {
+        assert_eq!(parse_idle(None), Ok(Duration::from_secs(DEFAULT_IDLE_SECS)));
+        assert_eq!(parse_idle(Some("2")), Ok(Duration::from_secs(2)));
+        let zero = parse_idle(Some("0")).unwrap_err();
+        assert!(zero.contains("remote-quic-idle is 0"), "{zero}");
+        assert!(parse_idle(Some("x")).is_err());
     }
 
     #[test]
