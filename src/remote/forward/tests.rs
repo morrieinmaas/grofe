@@ -528,3 +528,51 @@ fn keys_wait_for_a_declined_upload_too() {
         [Action::Send(want)]
     );
 }
+
+#[test]
+fn a_prompt_that_went_unanswered_is_shown_again() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::Ask, ForwardMode::Ask);
+    let got = f.handle(Input::Keys(bracketed(escaped(&a).as_bytes())), now);
+    let [Action::ResolveDir(paste)] = got.as_slice() else {
+        panic!("{got:?}");
+    };
+    let dir = UploadDir {
+        path: "/r".into(),
+        shown: "/r".into(),
+    };
+    let shown = f.handle(Input::DirResolved(paste.clone(), dir), now);
+    let [Action::Prompt(text)] = shown.as_slice() else {
+        panic!("{shown:?}");
+    };
+    // The link drops with the prompt up: nothing shows until asked again.
+    f.dropped();
+    assert_eq!(f.handle(keys(b"ls"), now), [], "held for the paste");
+    assert_eq!(f.reshow(), [Action::Prompt(text.clone())]);
+    assert_eq!(f.reshow(), [], "once");
+    let mut want = bracketed(escaped(&a).as_bytes());
+    want.extend(b"ls");
+    assert_eq!(
+        f.handle(Input::Answer("n".into()), now),
+        [Action::Send(want)]
+    );
+    assert_eq!(f.handle(keys(b"x"), now), [Action::Send(b"x".to_vec())]);
+}
+
+#[test]
+fn a_new_question_after_a_dropped_one_shows_the_first_again() {
+    let mut f = fw(UploadMode::Ask, ForwardMode::Ask);
+    let now = Instant::now();
+    f.handle(ports(1, &[3000]), now);
+    f.dropped();
+    // Not stuck behind a prompt nobody sees: the first comes back up.
+    assert_eq!(
+        f.handle(ports(1, &[3000, 4000]), now),
+        [Action::Offer(forward_prompt("host", 3000))]
+    );
+    assert_eq!(
+        f.handle(Input::Answer("n".into()), now),
+        [Action::Offer(forward_prompt("host", 4000))]
+    );
+}

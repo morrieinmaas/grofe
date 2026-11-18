@@ -6,8 +6,8 @@
 //! server, control events, prompt answers, I/O results, time) and returns
 //! [`Action`]s. The client does the screen actions ([`Action::Send`],
 //! [`Action::Prompt`], [`Action::Offer`], [`Action::ClearPrompt`], [`Action::Message`]);
-//! [`Executor`] does the I/O ones over the proxy connection and answers
-//! with the [`Input`] to feed back.
+//! [`ForwardHook`] does the I/O ones over the proxy connection ([`run_slow`],
+//! [`Forwarder`]) and answers with the [`Input`] to feed back.
 
 mod exec;
 mod hook;
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use crate::event::Event;
 use crate::types::PaneId;
 
-pub use exec::{Executor, LinkCell, Opener, is_slow, opener, run_slow, upload_dir, upload_files};
+pub use exec::{LinkCell, Opener, is_slow, opener, run_slow, upload_dir, upload_files};
 pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
 use text::count_files;
@@ -235,6 +235,9 @@ pub struct Forwarding {
     // ponytail: a paste whose answer never comes (another hook's prompt
     // took its place) holds the keys after it until the client ends.
     queued: Option<Vec<u8>>,
+    /// Whether the front ask is on screen. A prompt can go unanswered (a
+    /// link drop, another prompt in its place): then it is shown again.
+    showing: bool,
 }
 
 impl Forwarding {
@@ -251,11 +254,27 @@ impl Forwarding {
             forwarded: BTreeSet::new(),
             declined: BTreeSet::new(),
             queued: None,
+            showing: false,
         }
     }
 
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    /// The prompt on screen went unanswered (see [`Forwarding::reshow`]).
+    pub fn dropped(&mut self) {
+        self.showing = false;
+    }
+
+    /// The question waiting, shown again after [`Forwarding::dropped`]; call
+    /// it when no prompt is up, so it never takes another one's place.
+    pub fn reshow(&mut self) -> Vec<Action> {
+        let mut out = Vec::new();
+        if !self.showing {
+            self.show_next(&mut out);
+        }
+        out
     }
 
     /// The remote ports being forwarded.
@@ -478,6 +497,7 @@ impl Forwarding {
                 self.asks.remove(pos);
                 if pos == 0 {
                     out.push(Action::ClearPrompt);
+                    self.showing = false;
                     self.show_next(out);
                 }
             }
@@ -506,13 +526,14 @@ impl Forwarding {
 
     fn ask(&mut self, ask: Ask, out: &mut Vec<Action>) {
         self.asks.push_back(ask);
-        if self.asks.len() == 1 {
+        if !self.showing {
             self.show_next(out);
         }
     }
 
-    fn show_next(&self, out: &mut Vec<Action>) {
+    fn show_next(&mut self, out: &mut Vec<Action>) {
         if let Some(ask) = self.asks.front() {
+            self.showing = true;
             let text = self.prompt(ask);
             out.push(match ask {
                 Ask::Upload(..) => Action::Prompt(text),
@@ -538,6 +559,7 @@ impl Forwarding {
     }
 
     fn answer(&mut self, answer: &str, now: Instant, out: &mut Vec<Action>) {
+        self.showing = false;
         let Some(ask) = self.asks.pop_front() else {
             return;
         };

@@ -429,7 +429,10 @@ impl Loop {
                 Some(input) => (input, true),
                 None => {
                     // Kept up, unless answering raised another.
-                    self.overlay.get_or_insert(prompt);
+                    match &self.overlay {
+                        Some(_) => prompt.dropped(),
+                        None => self.overlay = Some(prompt),
+                    }
                     (Input::default(), false)
                 }
             },

@@ -47,7 +47,7 @@ impl Loop {
             c.attach.close("");
         }
         // The old connection's event channel closes with it (Conn's drop).
-        self.overlay = None;
+        super::hooks::drop_overlay(&mut self.overlay);
         self.generation += 1;
         let generation = self.generation;
         a.host = to.host;
@@ -98,7 +98,7 @@ impl Loop {
         }
         let now = Instant::now();
         self.backoff.dropped(now);
-        self.overlay = None;
+        super::hooks::drop_overlay(&mut self.overlay);
         self.detach = DetachKey::new(c.prefix);
         let session = c.session.clone();
         self.params.opts.target = session.or(self.params.opts.target.take());

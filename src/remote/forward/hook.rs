@@ -51,6 +51,9 @@ struct Core {
     done: Receiver<Input>,
     /// The proxy connection last seen (its address), to tell a reconnect.
     conn: Option<usize>,
+    /// The id of the forwarding prompt up, if one is; ids count up.
+    current: Option<u64>,
+    next_id: u64,
 }
 
 /// Work for the worker thread.
@@ -87,6 +90,8 @@ impl ForwardHook {
             jobs,
             done,
             conn: None,
+            current: None,
+            next_id: 0,
         };
         ForwardHook {
             core: Arc::new(Mutex::new(core)),
@@ -123,6 +128,31 @@ impl Core {
         }
     }
 
+    /// Puts a question on the client's prompt, unless another prompt is up
+    /// (the machine picker): then it waits, and [`Hook::tick`] shows it once
+    /// the screen is free.
+    fn raise(
+        &mut self,
+        me: &Arc<Mutex<Core>>,
+        cx: &mut HookCtx<'_>,
+        text: String,
+        grace: Option<Grace>,
+    ) {
+        if cx.prompting() {
+            return self.fw.dropped();
+        }
+        self.next_id += 1;
+        self.current = Some(self.next_id);
+        cx.prompt(Box::new(Answer {
+            id: self.next_id,
+            text,
+            line: String::new(),
+            core: Arc::clone(me),
+            grace,
+            decoder: Decoder::new(),
+        }));
+    }
+
     /// Runs `actions` (and what their answers lead to); the bytes for the
     /// server.
     fn apply(
@@ -136,23 +166,12 @@ impl Core {
         while let Some(action) = queue.pop_front() {
             match action {
                 Action::Send(bytes) => send.extend(bytes),
-                // ponytail: another hook's prompt replacing this one leaves
-                // its question unanswered, and later ones queued behind it.
-                Action::Prompt(text) => cx.prompt(Box::new(Answer {
-                    text,
-                    line: String::new(),
-                    core: Arc::clone(me),
-                    grace: None,
-                    decoder: Decoder::new(),
-                })),
-                Action::Offer(text) => cx.prompt(Box::new(Answer {
-                    text,
-                    line: String::new(),
-                    core: Arc::clone(me),
-                    grace: Some(Grace::new(Instant::now())),
-                    decoder: Decoder::new(),
-                })),
-                Action::ClearPrompt => cx.close_prompt(),
+                Action::Prompt(text) => self.raise(me, cx, text, None),
+                Action::Offer(text) => self.raise(me, cx, text, Some(Grace::new(Instant::now()))),
+                Action::ClearPrompt => {
+                    self.current = None;
+                    cx.close_prompt_tagged(TAG);
+                }
                 Action::Message(text) => {
                     let _ = self.jobs.send(Job::Message(text));
                 }
@@ -210,12 +229,23 @@ impl Hook for ForwardHook {
             let actions = core.fw.handle(input, now);
             send.extend(core.apply(&self.core, cx, actions));
         }
+        // A question whose prompt went unanswered comes back once the
+        // screen is free (after a reconnect, or the machine picker).
+        if !cx.prompting() {
+            let actions = core.fw.reshow();
+            send.extend(core.apply(&self.core, cx, actions));
+        }
         cx.send(send);
     }
 }
 
+/// The tag of forwarding's prompts ([`HookCtx::close_prompt_tagged`]).
+const TAG: &str = "forward";
+
 /// A forwarding question on the client's prompt: collects an answer line.
 struct Answer {
+    /// Which question this is ([`Core::current`] while it is up).
+    id: u64,
     text: String,
     line: String,
     core: Arc<Mutex<Core>>,
@@ -256,6 +286,22 @@ impl Grace {
 }
 
 impl Prompt for Answer {
+    fn tag(&self) -> Option<&'static str> {
+        Some(TAG)
+    }
+
+    fn dropped(&mut self) {
+        // Locked: this prompt is being replaced by forwarding itself, which
+        // already knows.
+        let Ok(mut core) = self.core.try_lock() else {
+            return;
+        };
+        if core.current == Some(self.id) {
+            core.current = None;
+            core.fw.dropped();
+        }
+    }
+
     fn text(&self) -> String {
         // The upload directory and a URL come from the remote: nothing in
         // them may reach the terminal as a control.
@@ -267,11 +313,21 @@ impl Prompt for Answer {
         if let Some(grace) = &mut self.grace
             && grace.passes(Instant::now())
         {
-            cx.send(bytes.to_vec());
+            // Typing meant for the pane, through forwarding as any key is: a
+            // file dropped now still asks before it uploads.
+            let mut core = lock(&self.core);
+            let actions = core.fw.handle(Input::Keys(bytes.to_vec()), Instant::now());
+            let send = core.apply(&self.core, cx, actions);
+            cx.send(send);
             return None;
         }
         let answer = answer_keys(&mut self.decoder, &mut self.line, bytes)?;
         let mut core = lock(&self.core);
+        if core.current != Some(self.id) {
+            // A question already settled (its port went): just close.
+            return Some(session::Input::default());
+        }
+        core.current = None;
         let actions = core.fw.handle(Input::Answer(answer), Instant::now());
         let send = core.apply(&self.core, cx, actions);
         Some(session::Input::send(send))
