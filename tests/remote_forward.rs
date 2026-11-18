@@ -384,3 +384,22 @@ fn an_upload_closed_before_its_eof_leaves_no_file() {
     assert_eq!(std::fs::read(path).unwrap(), b"all of it");
     finish(child);
 }
+
+#[test]
+fn a_multi_file_upload_stops_at_the_first_failure_and_says_what_arrived() {
+    let srv = TestServer::start();
+    let (child, conn) = spawn_proxy(&srv);
+    let local = tempfile::tempdir().unwrap();
+    let a = local.path().join("first.txt");
+    std::fs::write(&a, "one").unwrap();
+    let gone = local.path().join("gone.txt");
+    let c = local.path().join("third.txt");
+    std::fs::write(&c, "three").unwrap();
+    let dest = srv.home.join("part");
+    let (arrived, error) =
+        grofe::remote::forward::upload_files(conn.conn(), dest.to_str().unwrap(), &[a, gone, c]);
+    assert_eq!(arrived, [dest.join("first.txt").display().to_string()]);
+    assert!(error.unwrap().contains("gone.txt"));
+    assert_eq!(names(&dest), ["first.txt"], "the rest were not tried");
+    finish(child);
+}

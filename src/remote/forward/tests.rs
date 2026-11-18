@@ -118,7 +118,8 @@ fn a_file_paste_split_across_reads_asks_and_uploads() {
         f.handle(
             Input::Uploaded {
                 paste,
-                result: Ok(vec!["/r/a b.txt".into(), "/r/it's.png".into()])
+                arrived: vec!["/r/a b.txt".into(), "/r/it's.png".into()],
+                error: None
             },
             now
         ),
@@ -230,7 +231,8 @@ fn a_failed_upload_says_so_and_pastes_the_text() {
     };
     let failed = Input::Uploaded {
         paste,
-        result: Err("upload of a failed: broken pipe".into()),
+        arrived: Vec::new(),
+        error: Some("upload of a failed: broken pipe".into()),
     };
     assert_eq!(
         f.handle(failed, Instant::now()),
@@ -492,7 +494,8 @@ fn keys_typed_during_a_file_paste_go_after_its_text() {
         f.handle(
             Input::Uploaded {
                 paste,
-                result: Ok(vec!["/r/a b.txt".into()])
+                arrived: vec!["/r/a b.txt".into()],
+                error: None
             },
             now
         ),
@@ -574,5 +577,30 @@ fn a_new_question_after_a_dropped_one_shows_the_first_again() {
     assert_eq!(
         f.handle(Input::Answer("n".into()), now),
         [Action::Offer(forward_prompt("host", 4000))]
+    );
+}
+
+#[test]
+fn an_upload_that_fails_part_way_pastes_what_arrived() {
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = FilePaste {
+        files: vec!["/a".into(), "/b".into(), "/c".into()],
+        total: 3,
+        original: b"/a /b /c".to_vec(),
+    };
+    let part = Input::Uploaded {
+        paste,
+        arrived: vec!["/r/a".into()],
+        error: Some("upload of b failed: broken pipe".into()),
+    };
+    assert_eq!(
+        f.handle(part, Instant::now()),
+        [
+            Action::Message(
+                "grofe: upload of b failed: broken pipe (1 of 3 uploaded, their paths pasted)"
+                    .into()
+            ),
+            Action::Send(b"\x1b[200~'/r/a'\x1b[201~".to_vec())
+        ]
     );
 }
