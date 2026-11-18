@@ -177,6 +177,18 @@ fn a_link_nothing_made_starts_at_the_global_agent() {
 }
 
 #[test]
+fn subscribe_refuses_a_client_and_a_target_together() {
+    let srv = server();
+    srv.cmd(&["new-session", "-d", "-s", "main"])
+        .expect("session");
+    let err = srv
+        .subscribe(&["-c", "/dev/x", "-t", "main", "open-url"])
+        .err()
+        .expect("refused");
+    assert!(err.contains("-c and -t"), "{err}");
+}
+
+#[test]
 fn a_link_a_dead_server_left_does_not_carry_over() {
     let srv = TestServer::unstarted();
     // The socket's directory first: the link's name hashes its real path.

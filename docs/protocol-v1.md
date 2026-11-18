@@ -166,7 +166,7 @@ v1.0, reach only a subscription naming them literally. `-t` limits events to
 a pane, window or session. `-c client` (added after v1.0) limits them to the
 session that attached client is in, following it when it switches; an event
 of no pane, window or session (a global option) still passes, except `open-url`, which
-must come from a pane of that session. A later
+must come from a pane of that session. It cannot go with `-t`. A later
 `subscribe` on the same connection replaces the earlier one.
 
 **Delivery.** In the order things happened. Each subscriber has a queue of

@@ -982,6 +982,9 @@ fn handle(state: &mut State, msg: ServerMsg) {
         } => {
             let mut polled = false;
             let result = match cmd::parse(&req.argv) {
+                Ok(Command::Subscribe(c)) if c.client.is_some() && c.target.is_some() => {
+                    Err("subscribe: -c and -t cannot go together".to_string())
+                }
                 Ok(Command::Subscribe(c)) => {
                     polled = remote::wants_poll(&c.events);
                     let follow = c.client.as_deref().map(|name| {
