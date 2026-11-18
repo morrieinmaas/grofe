@@ -95,7 +95,8 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
 - **ssh agent.** Each session's `SSH_AUTH_SOCK` points at a stable link that every attach
   repoints, so panes that started before a reconnect keep a working agent. For `grofe -r`, the
   agent is the one ssh forwards to the remote (`ssh -A`, or `ForwardAgent yes` in your ssh
-  config); without agent forwarding nothing changes. This also works for plain `ssh host` then
+  config); without agent forwarding nothing changes. Over `--transport quic` no agent is
+  forwarded: the ssh session that set QUIC up ends at once, and its agent with it. This also works for plain `ssh host` then
   `grofe attach`. `stable-ssh-agent` turns it off.
 - **Ports.** When a pane starts listening on a TCP port, the client offers
   `forward devbox:5173 to localhost:5173? [y/N/always]`. The local end binds `127.0.0.1` only,
@@ -123,7 +124,8 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
   phone's tether, sleep and wake. ssh still does the login and the install. If UDP is blocked
   the client says so and stays on ssh. The remote proxy listens on a port from
   `remote-udp-ports` (default `60001-61000`) and exits after `remote-quic-idle` seconds
-  (default 7 days) with no client.
+  (default 7 days) with no client. QUIC carries no ssh agent: use the ssh transport when panes
+  need your forwarded agent.
 
 ## Many machines in one window
 

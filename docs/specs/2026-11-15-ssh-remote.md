@@ -213,3 +213,7 @@ and the landing page and the mdBook guide (both from PR #17, now on main).
   wins over a `grofe` on the remote's PATH - otherwise an incompatible PATH grofe would win every
   time after bootstrap installed the right one - cost: upgrading the PATH grofe does not take
   effect until the versioned one is removed.
+- Ruling (build, 2026-11-18): the QUIC transport carries no ssh agent - the detached QUIC proxy
+  outlives the bootstrap ssh session, whose forwarded agent socket goes with it, and a dead
+  agent must never repoint a session's link - cost: panes reached over QUIC keep whatever agent
+  the link already had; users who need the forwarded agent use the ssh transport.
