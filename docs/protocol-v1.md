@@ -152,8 +152,8 @@ shapes.
 | `option-changed` | `scope` (`global`, `$N`, `@N` or `%N`), `name`, `value` (nullable: null once unset) | an option's value changed |
 | `agent-changed` | `pane`, `uid`, `kind` (nullable), `old` (nullable: null for a new record), `new` (nullable: null once the record is gone) | a pane's agent state changed |
 | `open-url` | `url`, `pane` (nullable: null when the caller was not in a pane) | `open-url <url>` (`grofe open`, `$BROWSER`) was run with an `http`, `https` or `file` URL; only for a subscription naming it |
-| `ports-changed` | `pane`, `ports` (sorted list of TCP port numbers the pane's process tree listens on, now) | that list changed; polled at most every 2 s while a subscription naming it exists; only for a subscription naming it |
-| `pane-echo` | `pane`, `echo` (the pty's ECHO flag, false while a program reads a password) | the flag changed (a new pane counts as echo on); polled with `ports-changed`; only for a subscription naming it |
+| `ports-changed` | `pane`, `ports` (sorted list of TCP port numbers the pane's process tree listens on, now) | that list changed; polled at most every 2 s while a subscription naming it exists; a new subscription naming it gets a snapshot (one event per pane that listens on any port) on the next poll, which existing subscribers receive too; only for a subscription naming it |
+| `pane-echo` | `pane`, `echo` (the pty's ECHO flag, false while a program reads a password) | the flag changed (a new pane counts as echo on); polled with `ports-changed`; a new subscription naming it gets a snapshot (one event per pane) on the next poll, which existing subscribers receive too; only for a subscription naming it |
 | `notify` | `pane`, `session` (nullable), `kind` (nullable), `state`, `msg` (nullable) | an agent notification was raised (the one the tray lists); only for a subscription naming it |
 | `events-dropped` | `count` | a notice, not subscribable: the subscriber's queue overflowed; sent before its next delivered event |
 

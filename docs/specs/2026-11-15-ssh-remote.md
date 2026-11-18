@@ -217,3 +217,9 @@ and the landing page and the mdBook guide (both from PR #17, now on main).
   outlives the bootstrap ssh session, whose forwarded agent socket goes with it, and a dead
   agent must never repoint a session's link - cost: panes reached over QUIC keep whatever agent
   the link already had; users who need the forwarded agent use the ssh transport.
+- Ruling (build, 2026-11-18): QUIC connection migration on a live connection is tested on
+  loopback (`tests/remote_quic.rs`, a client rebinding its UDP socket mid-session keeps its
+  channel); the container end-to-end covers a lost path that comes back over QUIC with the same
+  token and a new client address (a new UDP source port), without a new bootstrap - a client
+  process cannot be made to rebind from outside, and one loopback host cannot change its IP -
+  cost: no container test of migration on a live connection.
