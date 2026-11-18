@@ -369,3 +369,55 @@ fn typing_and_c_c_in_one_read_keep_the_typing() {
     want.extend(b"lspwd");
     assert_eq!(f.handle(keys(b"ls\x03pwd"), now), [Action::Send(want)]);
 }
+
+#[test]
+fn esc_then_a_bracketed_paste_in_one_read_keeps_the_second_paste_whole() {
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let held = b"\x1b[200~/hung/file\x1b[201~";
+    f.handle(keys(held), now);
+    // Esc gives the held paste up; the paste after it stays a bracketed one.
+    let read = b"\x1b\x1b[200~line1\nline2\x1b[201~";
+    let mut want = held.to_vec();
+    want.extend(b"\x1b[200~line1\nline2\x1b[201~");
+    assert_eq!(f.handle(keys(read), now), [Action::Send(want)]);
+}
+
+#[test]
+fn esc_then_a_bracketed_paste_during_an_upload_waits_whole() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = uploading(&mut f, &a, now);
+    let read = b"\x1b\x1b[200~line1\nline2\x1b[201~";
+    assert_eq!(f.handle(keys(read), now), [Action::CancelUpload]);
+    let cancelled = Input::Uploaded {
+        paste,
+        arrived: Vec::new(),
+        error: None,
+        cancelled: true,
+        grew: Vec::new(),
+    };
+    // Once the upload stops, the second paste goes, still bracketed.
+    assert_eq!(
+        f.handle(cancelled, now),
+        [
+            Action::Message("grofe: upload cancelled".into()),
+            Action::Send(b"\x1b[200~line1\nline2\x1b[201~".to_vec())
+        ]
+    );
+}
+
+#[test]
+fn meta_o_then_c_c_in_one_read_are_two_keys() {
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let held = b"\x1b[200~/hung/file\x1b[201~";
+    f.handle(keys(held), now);
+    // M-O is held typing; the C-c after it gives the paste up, and nothing
+    // of it reaches the shell later.
+    let mut want = held.to_vec();
+    want.extend(b"\x1bO");
+    assert_eq!(f.handle(keys(b"\x1bO\x03"), now), [Action::Send(want)]);
+    assert_eq!(f.handle(keys(b"x"), now), [Action::Send(b"x".to_vec())]);
+}

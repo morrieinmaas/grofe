@@ -39,7 +39,6 @@ pub struct Held {
     /// The key before was the prefix: this one is its command.
     armed: bool,
     overflowed: bool,
-    decoder: Decoder,
 }
 
 impl Held {
@@ -51,7 +50,6 @@ impl Held {
             prefix,
             armed: false,
             overflowed: false,
-            decoder: Decoder::new(),
         }
     }
 
@@ -60,27 +58,25 @@ impl Held {
         parse_prefix("C-b").ok().flatten()
     }
 
-    /// Each key of `bytes` and the bytes it came from. Fed a byte at a time
-    /// so the spans are known; an escape still waiting at the end is taken
-    /// as the Escape key, as the read is all there is.
-    fn keys(&mut self, bytes: &[u8]) -> Vec<(Option<Key>, Range<usize>)> {
-        let (t, wait) = (Instant::now(), Duration::from_secs(1));
-        let mut spans = Vec::new();
-        let mut start = 0;
-        for i in 0..bytes.len() {
-            for input in self.decoder.feed(&bytes[i..=i], t, wait) {
-                spans.push((key_of(input), start..i + 1));
-                start = i + 1;
-            }
-        }
-        for input in self.decoder.flush(t + 2 * wait, wait) {
-            spans.push((key_of(input), start..bytes.len()));
-            start = bytes.len();
-        }
-        if start < bytes.len() {
-            spans.push((None, start..bytes.len()));
-        }
-        spans
+    /// Each key of `bytes` and the bytes it came from: the read is cut into
+    /// tokens first ([`tokens`]), so every span is exact, and each token is
+    /// decoded on its own. A bracketed paste is one token and no key.
+    fn keys(&self, bytes: &[u8]) -> Vec<(Option<Key>, Range<usize>)> {
+        tokens(bytes)
+            .into_iter()
+            .map(|span| {
+                let tok = &bytes[span.clone()];
+                if tok.starts_with(super::PASTE_START) {
+                    return (None, span);
+                }
+                let now = Instant::now();
+                let mut d = Decoder::new();
+                let mut inputs = d.feed(tok, now, Duration::ZERO);
+                inputs.extend(d.flush(now, Duration::ZERO));
+                let key = inputs.into_iter().find_map(key_of);
+                (key, span)
+            })
+            .collect()
     }
 
     /// One read typed while the paste is held: what goes through or cancels,
@@ -116,6 +112,59 @@ impl Held {
             }
         }
         out
+    }
+}
+
+/// `bytes` cut into what a terminal sends as one key each: a CSI sequence
+/// (`ESC [` ... a final byte), an SS3 one (`ESC O` and a final byte), a
+/// whole bracketed paste, Meta and a byte (`ESC x`), a lone ESC, or one
+/// character. A sequence broken by a byte that cannot be in it ends there.
+fn tokens(bytes: &[u8]) -> Vec<Range<usize>> {
+    let (start, end) = (super::PASTE_START, super::PASTE_END);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &bytes[i..];
+        let len = if rest.starts_with(start) {
+            rest.windows(end.len())
+                .position(|w| w == end)
+                .map_or(rest.len(), |p| p + end.len())
+        } else if rest[0] == 0x1b {
+            match rest.get(1) {
+                None | Some(0x1b) => 1,
+                Some(b'[') => {
+                    // Parameters and intermediates, then a final byte.
+                    let body = rest[2..]
+                        .iter()
+                        .position(|b| !(0x20..=0x3f).contains(b))
+                        .unwrap_or(rest.len() - 2);
+                    match rest.get(2 + body) {
+                        Some(b) if (0x40..=0x7e).contains(b) => 2 + body + 1,
+                        _ => 2 + body,
+                    }
+                }
+                Some(b'O') => match rest.get(2) {
+                    Some(b) if (0x40..=0x7e).contains(b) => 3,
+                    _ => 2,
+                },
+                Some(_) => 1 + utf8_len(rest[1]).min(rest.len() - 1),
+            }
+        } else {
+            utf8_len(rest[0]).min(rest.len())
+        };
+        out.push(i..i + len.max(1));
+        i += len.max(1);
+    }
+    out
+}
+
+/// The length of the UTF-8 character `lead` starts (1 for a stray byte).
+fn utf8_len(lead: u8) -> usize {
+    match lead {
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf7 => 4,
+        _ => 1,
     }
 }
 
@@ -177,6 +226,24 @@ mod tests {
             }]
         );
         assert_eq!(h.bytes, b"ls");
+    }
+
+    #[test]
+    fn a_read_is_cut_into_the_keys_a_terminal_sends() {
+        let cut =
+            |b: &[u8]| -> Vec<Vec<u8>> { tokens(b).into_iter().map(|r| b[r].to_vec()).collect() };
+        let v = |parts: &[&[u8]]| parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>();
+        assert_eq!(cut(b"a\x1b[A\x1bOP"), v(&[b"a", b"\x1b[A", b"\x1bOP"]));
+        assert_eq!(cut(b"\x1bO\x03"), v(&[b"\x1bO", b"\x03"]));
+        assert_eq!(
+            cut(b"\x1b\x1b[200~x\x1by\x1b[201~z"),
+            v(&[b"\x1b", b"\x1b[200~x\x1by\x1b[201~", b"z"])
+        );
+        assert_eq!(
+            cut(b"\x1b[99;5u\x1bx\x1b"),
+            v(&[b"\x1b[99;5u", b"\x1bx", b"\x1b"])
+        );
+        assert_eq!(cut("é".as_bytes()), v(&["é".as_bytes()]));
     }
 
     #[test]
