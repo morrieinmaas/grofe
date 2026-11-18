@@ -424,20 +424,30 @@ impl Forwarding {
 
     fn keys(&mut self, bytes: &[u8], now: Instant, out: &mut Vec<Action>) {
         if let Some(held) = &mut self.queued {
-            match held.take(bytes) {
-                typing::Typed::Queued => {}
-                typing::Typed::Through => send(out, bytes),
-                typing::Typed::Cancel if self.uploading => out.push(Action::CancelUpload),
-                typing::Typed::Cancel => self.give_up(now, out),
-                typing::Typed::Dropped { first: true } => out.push(Action::Message(
-                    if self.uploading {
-                        "grofe: typing dropped while the upload runs (Esc cancels it)"
-                    } else {
-                        "grofe: typing dropped while the paste is looked at (Esc pastes it as text)"
+            for part in held.take(bytes) {
+                match part {
+                    typing::Typed::Through(b) => send(out, &b),
+                    typing::Typed::Cancel { rest } => {
+                        if self.uploading {
+                            out.push(Action::CancelUpload);
+                        } else {
+                            self.give_up(now, out);
+                        }
+                        // What came after the cancel key, as typed now.
+                        if !rest.is_empty() {
+                            self.keys(&rest, now, out);
+                        }
+                        return;
                     }
-                    .to_string(),
-                )),
-                typing::Typed::Dropped { first: false } => {}
+                    typing::Typed::Dropped { .. } => out.push(Action::Message(
+                        if self.uploading {
+                            "grofe: typing dropped while the upload runs (Esc cancels it)"
+                        } else {
+                            "grofe: typing dropped while the paste is looked at (Esc pastes it as text)"
+                        }
+                        .to_string(),
+                    )),
+                }
             }
             return;
         }

@@ -356,3 +356,16 @@ fn a_late_check_of_a_paste_given_up_never_counts_for_the_same_paste_again() {
     assert_eq!(f.handle(late, now), []);
     assert_eq!(f.handle(keys(b"ls"), now), []);
 }
+
+#[test]
+fn typing_and_c_c_in_one_read_keep_the_typing() {
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = b"\x1b[200~/hung/file\x1b[201~";
+    f.handle(keys(paste), now);
+    // `ls`, C-c and `pwd` in one read (an Esc there would be M-p): the
+    // paste as text, then `ls`, then `pwd` typed as usual.
+    let mut want = paste.to_vec();
+    want.extend(b"lspwd");
+    assert_eq!(f.handle(keys(b"ls\x03pwd"), now), [Action::Send(want)]);
+}
