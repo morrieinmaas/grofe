@@ -12,6 +12,7 @@
 mod exec;
 mod hook;
 mod ports;
+mod settings;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -30,6 +31,7 @@ pub use exec::{
 };
 pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
+pub use settings::{ForwardMode, Settings, UploadMode};
 use text::count_files;
 pub use text::{forward_prompt, human_size, parse_paths, upload_prompt};
 
@@ -47,88 +49,12 @@ const HOLD_TIMEOUT: Duration = Duration::from_millis(30);
 /// Where uploads go when the pane's directory is unknown.
 pub const FALLBACK_UPLOAD_DIR: &str = "~/.cache/grofe/uploads";
 
-/// `remote-upload-paste`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UploadMode {
-    Ask,
-    On,
-    Off,
-}
-
-impl UploadMode {
-    /// The option's value; `None` for another word.
-    pub fn parse(s: &str) -> Option<UploadMode> {
-        match s {
-            "ask" => Some(UploadMode::Ask),
-            "on" => Some(UploadMode::On),
-            "off" => Some(UploadMode::Off),
-            _ => None,
-        }
-    }
-}
-
-/// `remote-forward-ports`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ForwardMode {
-    Ask,
-    Auto,
-    Off,
-}
-
-impl ForwardMode {
-    /// The option's value; `None` for another word.
-    pub fn parse(s: &str) -> Option<ForwardMode> {
-        match s {
-            "ask" => Some(ForwardMode::Ask),
-            "auto" => Some(ForwardMode::Auto),
-            "off" => Some(ForwardMode::Off),
-            _ => None,
-        }
-    }
-}
-
-/// The options forwarding follows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Settings {
-    pub upload_paste: UploadMode,
-    /// `remote-upload-max`, in bytes.
-    pub upload_max: u64,
-    pub forward_ports: ForwardMode,
-}
-
-impl Default for Settings {
-    fn default() -> Settings {
-        Settings {
-            upload_paste: UploadMode::Ask,
-            upload_max: 100 << 20,
-            forward_ports: ForwardMode::Ask,
-        }
-    }
-}
-
-impl Settings {
-    /// The settings `get` gives the options as: this machine's config, so a
-    /// remote cannot grant itself uploads or local ports. A default for one
-    /// it does not give or that does not parse.
-    pub fn from_options(get: impl Fn(&str) -> Option<String>) -> Settings {
-        let default = Settings::default();
-        Settings {
-            upload_paste: get("remote-upload-paste")
-                .and_then(|v| UploadMode::parse(v.trim()))
-                .unwrap_or(default.upload_paste),
-            upload_max: get("remote-upload-max")
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map_or(default.upload_max, |mib| mib << 20),
-            forward_ports: get("remote-forward-ports")
-                .and_then(|v| ForwardMode::parse(v.trim()))
-                .unwrap_or(default.forward_ports),
-        }
-    }
-}
-
 /// A bracketed paste of local files, waiting for its upload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilePaste {
+    /// Which paste this is: each one typing waits for gets its own, so a
+    /// late answer for a paste given up never counts for the next.
+    pub id: u64,
     pub files: Vec<PathBuf>,
     /// Each file's size when pasted: what is sent of it, so a file that
     /// grows meanwhile cannot pass `remote-upload-max`.
@@ -161,6 +87,7 @@ pub enum Input {
     /// [`Action::CheckFiles`]'s result: each path's size when every one is
     /// a local regular file, else `None` (the paste is text).
     FilesChecked {
+        id: u64,
         original: Vec<u8>,
         files: Option<Vec<(PathBuf, u64)>>,
     },
@@ -219,6 +146,7 @@ pub enum Action {
     /// Look at a paste's paths ([`Input::FilesChecked`]): off the input
     /// thread, as a path on a hung mount blocks.
     CheckFiles {
+        id: u64,
         paths: Vec<PathBuf>,
         original: Vec<u8>,
     },
@@ -272,6 +200,8 @@ pub struct Forwarding {
     prefix: Option<crate::server::input::Key>,
     /// An upload runs: Esc or C-c cancels it.
     uploading: bool,
+    /// The last paste id given out.
+    next_paste: u64,
     /// Whether the front ask is on screen. A prompt can go unanswered (a
     /// link drop, another prompt in its place): then it is shown again.
     showing: bool,
@@ -294,6 +224,7 @@ impl Forwarding {
             showing: false,
             prefix: typing::Held::default_prefix(),
             uploading: false,
+            next_paste: 0,
         }
     }
 
@@ -330,9 +261,11 @@ impl Forwarding {
             Input::Event(event) => self.event(event, &mut out),
             Input::Resync(panes) => self.resync(panes, &mut out),
             Input::Answer(answer) => self.answer(&answer, now, &mut out),
-            Input::FilesChecked { original, files } => {
-                self.files_checked(original, files, now, &mut out)
-            }
+            Input::FilesChecked {
+                id,
+                original,
+                files,
+            } => self.files_checked(id, original, files, now, &mut out),
             Input::OpenChecked(Ok(url)) => self.ask(Ask::Open(url), &mut out),
             Input::OpenChecked(Err(e)) => {
                 out.push(Action::Message(format!("grofe: not opening a url: {e}")))
@@ -345,7 +278,7 @@ impl Forwarding {
                 error,
                 cancelled,
                 grew,
-            } => {
+            } if self.pending_is(paste.id) => {
                 self.uploading = false;
                 if cancelled {
                     self.cancelled(paste, arrived, now, &mut out);
@@ -353,6 +286,8 @@ impl Forwarding {
                     self.uploaded(paste, arrived, error, grew, now, &mut out);
                 }
             }
+            // Not the paste typing waits for: nothing to do.
+            Input::Uploaded { .. } => {}
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
                     "forwarding {}:{remote} to localhost:{local}",
@@ -414,7 +349,7 @@ impl Forwarding {
         now: Instant,
         out: &mut Vec<Action>,
     ) {
-        if !self.pending_is(&paste.original) {
+        if !self.pending_is(paste.id) {
             return; // given up meanwhile (Esc)
         }
         match self.settings.upload_paste {
@@ -489,20 +424,30 @@ impl Forwarding {
 
     fn keys(&mut self, bytes: &[u8], now: Instant, out: &mut Vec<Action>) {
         if let Some(held) = &mut self.queued {
-            match held.take(bytes) {
-                typing::Typed::Queued => {}
-                typing::Typed::Through => send(out, bytes),
-                typing::Typed::Cancel if self.uploading => out.push(Action::CancelUpload),
-                typing::Typed::Cancel => self.give_up(now, out),
-                typing::Typed::Dropped { first: true } => out.push(Action::Message(
-                    if self.uploading {
-                        "grofe: typing dropped while the upload runs (Esc cancels it)"
-                    } else {
-                        "grofe: typing dropped while the paste is looked at (Esc pastes it as text)"
+            for part in held.take(bytes) {
+                match part {
+                    typing::Typed::Through(b) => send(out, &b),
+                    typing::Typed::Cancel { rest } => {
+                        if self.uploading {
+                            out.push(Action::CancelUpload);
+                        } else {
+                            self.give_up(now, out);
+                        }
+                        // What came after the cancel key, as typed now.
+                        if !rest.is_empty() {
+                            self.keys(&rest, now, out);
+                        }
+                        return;
                     }
-                    .to_string(),
-                )),
-                typing::Typed::Dropped { first: false } => {}
+                    typing::Typed::Dropped { .. } => out.push(Action::Message(
+                        if self.uploading {
+                            "grofe: typing dropped while the upload runs (Esc cancels it)"
+                        } else {
+                            "grofe: typing dropped while the paste is looked at (Esc pastes it as text)"
+                        }
+                        .to_string(),
+                    )),
+                }
             }
             return;
         }
@@ -576,8 +521,11 @@ impl Forwarding {
             return send(out, &bracketed(&content));
         };
         // Typing waits from here until the paste is done.
-        self.queued = Some(typing::Held::new(content.clone(), self.prefix));
+        self.next_paste += 1;
+        let id = self.next_paste;
+        self.queued = Some(typing::Held::new(id, content.clone(), self.prefix));
         out.push(Action::CheckFiles {
+            id,
             paths,
             original: content,
         });
@@ -586,12 +534,13 @@ impl Forwarding {
     /// The paste's paths as the worker found them.
     fn files_checked(
         &mut self,
+        id: u64,
         content: Vec<u8>,
         files: Option<Vec<(PathBuf, u64)>>,
         now: Instant,
         out: &mut Vec<Action>,
     ) {
-        if !self.pending_is(&content) {
+        if !self.pending_is(id) {
             return; // given up meanwhile (Esc)
         }
         let Some(files) = files else {
@@ -611,6 +560,7 @@ impl Forwarding {
             return self.release(now, out);
         }
         out.push(Action::ResolveDir(FilePaste {
+            id,
             files,
             sizes,
             total,
@@ -685,9 +635,9 @@ impl Forwarding {
         }
     }
 
-    /// Whether the paste typing waits for is the one with this text.
-    fn pending_is(&self, original: &[u8]) -> bool {
-        self.queued.as_ref().is_some_and(|h| h.original == original)
+    /// Whether paste `id` is the one typing waits for.
+    fn pending_is(&self, id: u64) -> bool {
+        self.queued.as_ref().is_some_and(|h| h.id == id)
     }
 
     /// Esc or C-c before the upload: the paste goes as text, and the typing
@@ -695,9 +645,9 @@ impl Forwarding {
     /// to finish unheard.
     fn give_up(&mut self, now: Instant, out: &mut Vec<Action>) {
         let Some(held) = &self.queued else { return };
-        let original = held.original.clone();
+        let (id, original) = (held.id, held.original.clone());
         self.asks
-            .retain(|a| !matches!(a, Ask::Upload(p, _) if p.original == original));
+            .retain(|a| !matches!(a, Ask::Upload(p, _) if p.id == id));
         send(out, &bracketed(&original));
         self.release(now, out);
     }
