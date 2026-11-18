@@ -391,19 +391,41 @@ fn grofe_open_hands_the_url_to_a_subscriber_and_does_not_open_it() {
 }
 
 #[test]
-fn grofe_open_refuses_other_schemes_and_never_runs_the_opener() {
+fn grofe_open_never_forwards_other_schemes_but_opens_them_here() {
     let srv = server();
     let out = srv.home.join("opened");
     let opener = fake_opener(&srv, &out);
+    let mut sub = srv.subscribe(&["open-url"]).expect("subscribe");
     for url in ["javascript:alert(1)", "ftp://x"] {
         let mut cmd = srv.command();
         cmd.env(grofe::open::OPENER_ENV, &opener)
             .args(["open", url]);
         let res = run_bounded(cmd, CMD_TIMEOUT);
-        assert!(!res.status.success(), "{url}");
-        assert!(res.stderr.contains("refused"), "{}", res.stderr);
+        assert!(res.status.success(), "{url}: {}", res.stderr);
+        assert_eq!(fs::read_to_string(&out).expect("opened here"), url);
     }
-    assert!(!out.exists());
+    assert!(
+        sub.next(Duration::from_millis(300)).is_err(),
+        "nothing reached the subscriber"
+    );
+}
+
+#[test]
+fn grofe_open_takes_a_plain_path_as_a_file_url() {
+    let srv = server();
+    let out = srv.home.join("opened");
+    let opener = fake_opener(&srv, &out);
+    fs::create_dir_all(srv.home.join("target/doc")).expect("dir");
+    fs::write(srv.home.join("target/doc/index.html"), "x").expect("file");
+    // As `cargo doc --open` runs `$BROWSER`: a relative path, no subscriber.
+    let mut cmd = srv.command();
+    cmd.env(grofe::open::OPENER_ENV, &opener)
+        .args(["open", "target/doc/index.html"]);
+    let res = run_bounded(cmd, CMD_TIMEOUT);
+    assert!(res.status.success(), "{}", res.stderr);
+    let url = fs::read_to_string(&out).expect("opened");
+    assert!(url.starts_with("file:///"), "{url}");
+    assert!(url.ends_with("/target/doc/index.html"), "{url}");
 }
 
 /// Not a test of its own: the process the ports tests start in a pane. It

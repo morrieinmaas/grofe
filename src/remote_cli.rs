@@ -475,21 +475,23 @@ fn clean(reply: Reply) -> Reply {
 /// (a remote client opens it on its own machine). With no server or no
 /// subscriber it opens the URL here: the pane's own browser from before
 /// `forward-browser`, else `open` or `xdg-open` (`GROFE_OPENER` first). Only
-/// http, https and file URLs are forwarded.
+/// http, https and file URLs are forwarded; a path that exists is a `file:`
+/// URL.
 pub(super) fn open_url(socket: &Path, args: &[String]) -> ExitCode {
     let [url] = args else {
         return fail("grofe open: usage: grofe open <url>");
     };
-    if let Err(e) = grofe::open::check(url) {
-        // The allow-list guards what reaches a remote client's machine; the
-        // user's own browser here may open what it likes.
-        if std::env::var_os(grofe::open::PREV_BROWSER_ENV).is_some() {
-            return match grofe::open::open_here(url) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => fail(&format!("grofe open: {e}")),
-            };
-        }
-        return fail(&format!("grofe open: refused {url:?}: {e}"));
+    // `$BROWSER some/file.html` (as `cargo doc --open` runs it): a path
+    // that exists is a `file:` URL.
+    let url = &grofe::open::path_url(url).unwrap_or_else(|| url.clone());
+    let here = || match grofe::open::open_here(url) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(&format!("grofe open: {e}")),
+    };
+    // The allow-list guards only what reaches a remote client's machine:
+    // anything else opens here, as it would have with no grofe.
+    if grofe::open::check(url).is_err() {
+        return here();
     }
     let argv = ["open-url".to_string(), url.clone()];
     let reply = UnixStream::connect(socket)
@@ -498,10 +500,7 @@ pub(super) fn open_url(socket: &Path, args: &[String]) -> ExitCode {
     match reply {
         Ok(Reply::Ok { .. }) => ExitCode::SUCCESS,
         Ok(Reply::Err { err, .. }) if err != grofe::open::NO_SUBSCRIBER => fail(&err),
-        _ => match grofe::open::open_locally(url) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => fail(&format!("grofe open: {e}")),
-        },
+        _ => here(),
     }
 }
 

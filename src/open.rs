@@ -44,6 +44,28 @@ pub fn check(url: &str) -> Result<(), String> {
     }
 }
 
+/// `arg` as a `file:` URL when it names a path that exists (absolute, or
+/// relative to the current directory), as programs pass `$BROWSER` a plain
+/// path; `None` for anything else. Bytes outside the unreserved set and
+/// `/` are percent-encoded, so [`file_path`] gives the path back.
+pub fn path_url(arg: &str) -> Option<String> {
+    let path = std::path::Path::new(arg);
+    if arg.is_empty() || !path.exists() {
+        return None;
+    }
+    let path = std::path::absolute(path).ok()?;
+    let mut url = "file://".to_string();
+    for b in path.as_os_str().as_encoded_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                url.push(*b as char)
+            }
+            _ => url.push_str(&format!("%{b:02X}")),
+        }
+    }
+    Some(url)
+}
+
 /// The path a `file:` URL names, percent-decoded; `None` for another
 /// scheme or a host other than this one.
 pub fn file_path(url: &str) -> Option<PathBuf> {
@@ -171,6 +193,23 @@ mod tests {
         assert!(check(&long).is_err(), "over-long");
         let ok = format!("https://a/{}", "x".repeat(MAX_URL - 10));
         assert_eq!(check(&ok), Ok(()));
+    }
+
+    #[test]
+    fn an_existing_path_is_a_file_url_that_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a b%c.html");
+        std::fs::write(&file, "x").unwrap();
+        let url = path_url(file.to_str().unwrap()).unwrap();
+        assert!(
+            url.starts_with("file:///") && url.ends_with("/a%20b%25c.html"),
+            "{url}"
+        );
+        assert_eq!(file_path(&url), Some(std::path::absolute(&file).unwrap()));
+        assert_eq!(check(&url), Ok(()));
+        assert_eq!(path_url("/no/such/file"), None);
+        assert_eq!(path_url("https://a/"), None);
+        assert_eq!(path_url(""), None);
     }
 
     #[test]
