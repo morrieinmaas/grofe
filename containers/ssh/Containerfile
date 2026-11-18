@@ -44,6 +44,8 @@ RUN apt-get update \
   && chown -R tester:tester /home/tester \
   && chmod 700 /home/tester/.ssh
 
+# AcceptEnv GROFE: each scenario names its own server socket (ssh SetEnv),
+# so no scenario reaches or kills another's server.
 RUN printf '%s\n' \
     'Port 22' \
     'PasswordAuthentication no' \
@@ -52,6 +54,7 @@ RUN printf '%s\n' \
     'PubkeyAuthentication yes' \
     'AllowUsers tester' \
     'AllowTcpForwarding yes' \
+    'AcceptEnv GROFE' \
     > /etc/ssh/sshd_config.d/e2e.conf
 
 COPY containers/ssh/entrypoint.sh /usr/local/bin/e2e-entrypoint

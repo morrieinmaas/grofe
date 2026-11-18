@@ -67,3 +67,14 @@ fn release_dir_is_served() {
     assert!(out.status.success(), "{out:?}");
     assert!(text(&out).contains("-linux-musl.tar.gz"), "{out:?}");
 }
+
+#[test]
+fn sshd_accepts_the_server_socket_a_scenario_sends() {
+    let e = e2e_or_skip!();
+    let local = e.local();
+    let out = std::process::Command::new(local.root().join("ssh"))
+        .args([&e.host, "printf %s \"$GROFE\""])
+        .output()
+        .expect("run the ssh wrapper");
+    assert_eq!(text(&out), local.sock, "{out:?}");
+}

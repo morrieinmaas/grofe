@@ -51,12 +51,12 @@ fn quic_attaches_and_a_silent_path_reconnects_to_the_same_proxy() {
         ),
         netem: false,
     };
-    let _cleanup = e.server_cleanup(true);
     let out = e.ssh(&format!(
         "mkdir -p ~/.config/grofe && echo 'remote-udp-ports = \"{ports}\"' > ~/.config/grofe/config.toml"
     ));
     assert!(out.status.success(), "{out:?}");
     let local = e.local();
+    let _cleanup = local.server_cleanup(&e, true);
 
     let out = run(local.grofe(&[
         "-r",

@@ -517,3 +517,26 @@ fn remote_errors_are_printed_escaped() {
         assert!(out.stderr.contains("\\u{1b}]52"), "{:?}", out.stderr);
     }
 }
+
+/// The remote-only options without a remote host are an error, never
+/// silently a local call.
+#[test]
+fn remote_options_without_a_host_are_refused() {
+    let r = Remote::new(true);
+    for args in [
+        &["--transport", "quic", "list-sessions"][..],
+        &["--install", "list-sessions"],
+        &["--no-install", "list-sessions"],
+        &["--install-from", "/nonexistent/grofe", "list-sessions"],
+    ] {
+        let out = run_bounded(r.local(args), CMD_TIMEOUT);
+        assert!(!out.status.success(), "{args:?}: {out:?}");
+        assert!(
+            out.stderr.contains(args[0]) && out.stderr.contains("needs -r"),
+            "{args:?}: {out:?}"
+        );
+    }
+    // With -r they are taken.
+    let out = run_bounded(r.client(&["--no-install", "list-sessions"]), CMD_TIMEOUT);
+    assert!(!out.stderr.contains("needs -r"), "{out:?}");
+}

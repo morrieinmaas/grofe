@@ -4,6 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tempfile::TempDir;
@@ -62,24 +63,6 @@ impl E2e {
             .expect("run the e2e script")
     }
 
-    /// Kills the container's grofe server (the one a proxy started) when
-    /// dropped, after `e2e_netem clear` when `netem`, and removes its
-    /// snapshot: `restore-on-start` would bring its sessions back into the
-    /// next scenario. It waits (up to 10 s) for the server to exit: a
-    /// client that connects while it shuts down gets no reply. (`[_]` keeps
-    /// pgrep from matching this command's own shell.)
-    pub fn server_cleanup(&self, netem: bool) -> Cleanup<'_> {
-        Cleanup {
-            e: self,
-            host: self.host.clone(),
-            command: "grofe kill-server 2>/dev/null; \
-                for _ in $(seq 100); do pgrep -u tester -f '[_]_server' >/dev/null || break; sleep 0.1; done; \
-                rm -f ~/.local/state/grofe/*/state.json; true"
-                .to_string(),
-            netem,
-        }
-    }
-
     /// A local client side: private dirs and an ssh that reads the run's
     /// config.
     pub fn local(&self) -> Local {
@@ -95,12 +78,24 @@ pub fn text(out: &Output) -> String {
 /// and `GROFE_SSH` naming a wrapper that runs `ssh -F <config>` (so `ssh -G`
 /// reads the same config). The wrapper fails like ssh (255) while a `down`
 /// file exists, so a scenario can hold a reconnect off.
+///
+/// Each `Local` has its own grofe server in the container: the wrapper
+/// sends `GROFE=<socket>` (sshd accepts it), which the remote proxy and
+/// CLI use as the server socket, so no scenario reaches or kills another's.
 pub struct Local {
     dir: TempDir,
+    /// The container-side server socket.
+    pub sock: String,
 }
 
 impl Local {
     fn new(config: &str) -> Local {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let sock = format!(
+            "/tmp/grofe-e2e-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        );
         let dir = tempfile::Builder::new()
             .prefix("grofe-e2e")
             .tempdir()
@@ -114,13 +109,13 @@ impl Local {
         let script = format!(
             "#!/bin/sh\n\
              [ -e '{root}/down' ] && {{ echo 'ssh: connect to host: Connection refused (e2e down)' >&2; exit 255; }}\n\
-             exec ssh -F '{config}' \"$@\"\n",
+             exec ssh -F '{config}' -o SetEnv=GROFE={sock} \"$@\"\n",
             root = root.display(),
         );
         let ssh = root.join("ssh");
         fs::write(&ssh, script).expect("write the ssh wrapper");
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).expect("chmod the wrapper");
-        Local { dir }
+        Local { dir, sock }
     }
 
     pub fn root(&self) -> &Path {
@@ -152,6 +147,22 @@ impl Local {
     /// `grofe <args>` in an 80x24 pty.
     pub fn attach(&self, cmd: Command) -> Harness {
         Harness::spawn(cmd, 80, 24)
+    }
+
+    /// `command` for a container shell, run against this scenario's server.
+    pub fn on(&self, command: &str) -> String {
+        format!("export GROFE={}; {command}", self.sock)
+    }
+
+    /// Kills this scenario's server in the container when dropped, after
+    /// `e2e_netem clear` when `netem`.
+    pub fn server_cleanup<'a>(&self, e: &'a E2e, netem: bool) -> Cleanup<'a> {
+        Cleanup {
+            e,
+            host: e.host.clone(),
+            command: self.on("grofe kill-server 2>/dev/null; rm -f \"$GROFE\"; true"),
+            netem,
+        }
     }
 
     /// While down, the wrapper ssh refuses every connection.
