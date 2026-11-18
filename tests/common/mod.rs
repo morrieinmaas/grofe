@@ -303,8 +303,8 @@ impl TestServer {
             .env("PS1", PROMPT)
             .env("ENV", self.dir.path().join(SHRC))
             .env(StartOptions::REMAIN_ON_EXIT_ENV, "1")
-            // Never the desktop's own notifier (`env_clear` above drops the
-            // cargo-wide setting).
+            // Never the desktop's own notifier: nothing else turns it off for
+            // a test server, so the harness does.
             .env("GROFE_NOTIFY_DESKTOP", "off");
         if self.restore_on_start {
             cmd.env_remove(StartOptions::RESTORE_ON_START_ENV);
