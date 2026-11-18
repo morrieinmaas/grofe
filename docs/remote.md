@@ -95,8 +95,9 @@ Reconnects never ask for a password (ssh runs with `BatchMode=yes`), so use keys
   `remote-upload-paste` is `ask` (default: `upload 2 files (3.1 MB) to devbox:~/src? [y/N]`),
   `on` or `off`. `remote-upload-max` caps one paste (100 MiB by default). A name that is taken
   gets ` (2)`; nothing is ever overwritten. Directories are pasted as text. Each file is sent at
-  its size when pasted. While an upload runs, Esc or C-c cancels it and the prefix still works;
-  other typing waits and follows the pasted paths.
+  its size when pasted. While a paste is checked or uploaded, Esc or C-c gives it up (pasted as
+  text before the upload starts, cancelled during it) and the prefix still works; other typing
+  waits and follows the pasted paths.
 - **ssh agent.** Each session's `SSH_AUTH_SOCK` points at a stable link that every attach
   repoints, so panes that started before a reconnect keep a working agent. For `grofe -r`, the
   agent is the one ssh forwards to the remote (`ssh -A`, or `ForwardAgent yes` in your ssh
