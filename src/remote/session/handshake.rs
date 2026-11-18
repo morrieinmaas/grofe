@@ -78,7 +78,7 @@ fn send_hello(link: &Link, chan: &mut Channel, p: &Params, tty: &str) -> Result<
         Ok(Reply::Ok {
             id: HELLO_REPLY_ID, ..
         }) => Ok(()),
-        Ok(Reply::Err { err, .. }) => Err(Failure::Fatal(err)),
+        Ok(Reply::Err { err, .. }) => Err(Failure::Fatal(crate::remote::ssh::sanitize(&err))),
         Ok(other) => Err(Failure::Fatal(format!(
             "unexpected reply to attach: {other:?}"
         ))),
@@ -87,8 +87,9 @@ fn send_hello(link: &Link, chan: &mut Channel, p: &Params, tty: &str) -> Result<
     }
 }
 
-/// The id of the session the client with `tty` attached to.
-pub(super) fn attached_session(link: &Link, hello: &str, tty: &str) -> Option<String> {
+/// The id of the session the client with `tty` is attached to, from the
+/// remote's client list.
+pub(crate) fn attached_session(link: &Link, hello: &str, tty: &str) -> Option<String> {
     link.request(
         hello,
         &[

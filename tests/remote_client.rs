@@ -498,3 +498,22 @@ fn a_reattach_to_a_killed_session_falls_back_to_the_servers_choice() {
     h.send("\x02d");
     h.wait_exit();
 }
+
+/// A remote error is the remote's text: it reaches the local terminal with
+/// its control characters made visible, never as a live OSC 52 or ESC.
+#[test]
+fn remote_errors_are_printed_escaped() {
+    let r = Remote::new(true);
+    r.srv.cmd(&["new-session", "-d", "-s", "here"]).unwrap();
+    let hostile = "x\x1b]52;c;QUJD\x07";
+    for args in [
+        &["has-session", "-t", hostile][..],
+        &["attach-session", "-t", hostile],
+    ] {
+        let out = run_bounded(r.client(args), CMD_TIMEOUT);
+        assert!(!out.status.success(), "{out:?}");
+        assert!(!out.stderr.contains('\x1b'), "{:?}", out.stderr);
+        assert!(!out.stderr.contains('\x07'), "{:?}", out.stderr);
+        assert!(out.stderr.contains("\\u{1b}]52"), "{:?}", out.stderr);
+    }
+}

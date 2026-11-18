@@ -397,22 +397,10 @@ fn read_loop<R: Read>(
     let mut reader = BufReader::new(reader);
     let peer_parity = if role == Role::Client { 0 } else { 1 };
     let why = loop {
-        let frame = match read_frame(&mut reader) {
-            Ok(Some(f)) => {
-                *lock(&inner.last_rx) = Instant::now();
-                f
-            }
-            Ok(None) => break "proxy connection closed".to_string(),
-            Err(
-                e
-                @ (FrameError::UnknownKind(_) | FrameError::TooLong(_) | FrameError::Malformed(_)),
-            ) => {
-                let _ = inner.send(&Frame::Close(0, e.to_string()));
-                break format!("proxy protocol error: {e}");
-            }
-            Err(e) => break format!("proxy connection lost: {e}"),
+        let frame = match next_frame(&inner, &mut reader) {
+            Ok(f) => f,
+            Err(why) => break why,
         };
-        let chan = |id: u32| lock(&inner.chans).get(&id).cloned();
         match frame {
             Frame::Open(id, payload) => {
                 if id == 0 || id % 2 != peer_parity || lock(&inner.chans).contains_key(&id) {
@@ -421,46 +409,15 @@ fn read_loop<R: Read>(
                     on_open(mux.register(id), payload);
                 }
             }
-            Frame::Data(id, bytes) => {
-                if let Some(c) = chan(id) {
-                    let mut st = lock(&c.st);
-                    match st.left.checked_sub(bytes.len() as u32) {
-                        Some(left) => {
-                            st.left = left;
-                            st.buf.extend(bytes);
-                        }
-                        // Past the credit it was given: the buffer stays bounded.
-                        None => {
-                            let reason = OVERRUN.to_string();
-                            st.buf.clear();
-                            st.closed.get_or_insert(Closed {
-                                reason: reason.clone(),
-                                local: false,
-                            });
-                            drop(st);
-                            lock(&inner.chans).remove(&id);
-                            let _ = inner.send(&Frame::Close(id, reason));
-                        }
-                    }
-                    c.cv.notify_all();
-                }
-            }
+            Frame::Data(id, bytes) => on_data(&inner, id, bytes),
             Frame::Eof(id) => {
-                if let Some(c) = chan(id) {
+                if let Some(c) = channel(&inner, id) {
                     lock(&c.st).eof_in = true;
                     c.cv.notify_all();
                 }
             }
             Frame::Close(0, reason) => break format!("proxy closed the connection: {reason}"),
-            Frame::Close(id, reason) => {
-                if let Some(c) = lock(&inner.chans).remove(&id) {
-                    lock(&c.st).closed.get_or_insert(Closed {
-                        reason,
-                        local: false,
-                    });
-                    c.cv.notify_all();
-                }
-            }
+            Frame::Close(id, reason) => on_close(&inner, id, reason),
             Frame::Ping(n) => {
                 let _ = inner.send(&Frame::Pong(n));
             }
@@ -469,7 +426,7 @@ fn read_loop<R: Read>(
                 inner.pong_cv.notify_all();
             }
             Frame::Window(id, credit) => {
-                if let Some(c) = chan(id) {
+                if let Some(c) = channel(&inner, id) {
                     lock(&c.st).send.add(credit);
                     c.cv.notify_all();
                 }
@@ -477,4 +434,65 @@ fn read_loop<R: Read>(
         }
     };
     inner.fail_all(&why);
+}
+
+/// The next frame, noting when it came; why the connection ends when there
+/// is none (a protocol error is answered with `close` on channel 0 first).
+fn next_frame<R: Read>(inner: &MuxInner, reader: &mut BufReader<R>) -> Result<Frame, String> {
+    match read_frame(reader) {
+        Ok(Some(f)) => {
+            *lock(&inner.last_rx) = Instant::now();
+            Ok(f)
+        }
+        Ok(None) => Err("proxy connection closed".to_string()),
+        Err(
+            e @ (FrameError::UnknownKind(_) | FrameError::TooLong(_) | FrameError::Malformed(_)),
+        ) => {
+            let _ = inner.send(&Frame::Close(0, e.to_string()));
+            Err(format!("proxy protocol error: {e}"))
+        }
+        Err(e) => Err(format!("proxy connection lost: {e}")),
+    }
+}
+
+fn channel(inner: &MuxInner, id: u32) -> Option<Arc<ChanShared>> {
+    lock(&inner.chans).get(&id).cloned()
+}
+
+/// `data` for channel `id`: buffered within the credit it was given; past
+/// it the channel is closed, so the buffer stays bounded.
+fn on_data(inner: &MuxInner, id: u32, bytes: Vec<u8>) {
+    let Some(c) = channel(inner, id) else {
+        return;
+    };
+    let mut st = lock(&c.st);
+    match st.left.checked_sub(bytes.len() as u32) {
+        Some(left) => {
+            st.left = left;
+            st.buf.extend(bytes);
+        }
+        None => {
+            let reason = OVERRUN.to_string();
+            st.buf.clear();
+            st.closed.get_or_insert(Closed {
+                reason: reason.clone(),
+                local: false,
+            });
+            drop(st);
+            lock(&inner.chans).remove(&id);
+            let _ = inner.send(&Frame::Close(id, reason));
+        }
+    }
+    c.cv.notify_all();
+}
+
+/// The peer closed channel `id`.
+fn on_close(inner: &MuxInner, id: u32, reason: String) {
+    if let Some(c) = lock(&inner.chans).remove(&id) {
+        lock(&c.st).closed.get_or_insert(Closed {
+            reason,
+            local: false,
+        });
+        c.cv.notify_all();
+    }
 }

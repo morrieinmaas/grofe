@@ -200,8 +200,8 @@ fn remote_main(
             .map_err(|e| e.to_string())
             .and_then(|chan| request_with(chan, &remote.hello, argv))
         {
-            Ok(reply) => print_reply(reply),
-            Err(e) => fail(&e),
+            Ok(reply) => print_reply(clean(reply)),
+            Err(e) => fail_remote(&e),
         },
     }
 }
@@ -268,8 +268,8 @@ impl Remote {
         }
         if !attaches(argv) {
             return match self.request(argv) {
-                Ok(reply) => print_reply(reply),
-                Err(e) => fail(&e),
+                Ok(reply) => print_reply(clean(reply)),
+                Err(e) => fail_remote(&e),
             };
         }
         if !io::stdin().is_terminal() {
@@ -284,9 +284,9 @@ impl Remote {
         create.extend([";", "display-message", "-p", "#{session_id}"].map(String::from));
         let id = match self.request(&create) {
             Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
-            Ok(Reply::Err { err, .. }) => return fail(&err),
+            Ok(Reply::Err { err, .. }) => return fail_remote(&err),
             Ok(Reply::Event(_)) => return fail("unexpected event reply"),
-            Err(e) => return fail(&e),
+            Err(e) => return fail_remote(&e),
         };
         let mut attach = vec!["attach-session".to_string(), "-t".to_string(), id];
         attach.extend(flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
@@ -307,32 +307,43 @@ impl Remote {
             Ok(_) => return Err("attach-session: unexpected command".to_string()),
             Err(e) => return Err(e.to_string()),
         };
-        let check: Vec<String> = [ATTACH_CHECK.to_string(), session::client_tty().to_string()]
+        self.check_attach(argv)?;
+        let attach = session::RemoteAttach {
+            host: self.target.host_name().to_string(),
+            control_hello: self.hello.clone(),
+            ctx: remote_ctx(),
+            opts: attach_options(argv, &parsed, created),
+            term: std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
+            reconnect: local_option("remote-reconnect").is_none_or(|v| v == "on"),
+            relink: self.relinker(),
+            hooks: self.hooks(),
+        };
+        session::attach(self.link, attach)
+    }
+
+    /// The attach check ([`ATTACH_CHECK`]): a refusal comes before the
+    /// terminal is touched.
+    fn check_attach(&self, argv: &[String]) -> Result<(), String> {
+        let check: Vec<String> = [ATTACH_CHECK.to_string(), session::client_tty()]
             .into_iter()
             .chain(argv[1..].iter().cloned())
             .collect();
         match self.request(&check)? {
-            Reply::Ok { .. } => {}
-            Reply::Err { err, .. } => return Err(err),
-            Reply::Event(_) => return Err("unexpected event reply".to_string()),
+            Reply::Ok { .. } => Ok(()),
+            Reply::Err { err, .. } => Err(err),
+            Reply::Event(_) => Err("unexpected event reply".to_string()),
         }
-        let opts = client::AttachOptions {
-            target: client::raw_target(&argv[1..]),
-            detach_others: parsed.detach_others,
-            nest: parsed.nest,
-            created,
-            features: FEATURES.get().cloned().unwrap_or_default(),
-            extras: grofe::protocol::AttachExtras {
-                cwd: parsed.cwd.clone(),
-                read_only: parsed.read_only,
-                flags: parsed.flags.clone(),
-                no_env: parsed.no_env,
-                kill_parent: parsed.kill_parent,
-            },
-        };
+    }
+
+    /// Makes a new link to this host for a reconnect, never prompting: over
+    /// the roaming transport when there is one, else ssh in batch mode.
+    fn relinker(
+        &self,
+    ) -> std::sync::Arc<dyn Fn() -> Result<grofe::remote::connect::Link, String> + Send + Sync>
+    {
         let target = self.target.clone();
         let roaming = self.roaming.clone();
-        let relink = std::sync::Arc::new(move || {
+        std::sync::Arc::new(move || {
             if let Some(r) = &roaming {
                 return r.relink();
             }
@@ -341,29 +352,45 @@ impl Remote {
                 grofe::remote::connect::ConnectOpts { batch: true },
             )
             .map_err(|e| e.to_string())
-        });
-        let attach = session::RemoteAttach {
-            host: self.target.host_name().to_string(),
-            control_hello: self.hello.clone(),
-            ctx: remote_ctx(),
-            opts,
-            term: std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string()),
-            reconnect: local_option("remote-reconnect").is_none_or(|v| v == "on"),
-            relink,
-            // Predictive echo last: it predicts only what the others send on.
-            hooks: vec![
-                Box::new(forward::ForwardHook::new(
-                    self.target.host_name(),
-                    &self.hello,
-                    Some(forward::forwards_dir(&Env::from_process())),
-                    forward::Settings::from_options(local_option),
-                )),
-                Box::new(grofe::remote::predict_hook::PredictHook::new(
-                    grofe::remote::predict_hook::Mode::from_config(),
-                )),
-            ],
-        };
-        session::attach(self.link, attach)
+        })
+    }
+
+    /// The remote attach's hooks: forwarding, then predictive echo last,
+    /// since it predicts only what the others send on.
+    fn hooks(&self) -> Vec<Box<dyn session::Hook>> {
+        vec![
+            Box::new(forward::ForwardHook::new(
+                self.target.host_name(),
+                &self.hello,
+                Some(forward::forwards_dir(&Env::from_process())),
+                forward::Settings::from_options(local_option),
+            )),
+            Box::new(grofe::remote::predict_hook::PredictHook::new(
+                grofe::remote::predict_hook::Mode::from_config(),
+            )),
+        ]
+    }
+}
+
+/// The attach options of the parsed `attach-session` `argv`.
+fn attach_options(
+    argv: &[String],
+    parsed: &grofe::cmd::AttachSession,
+    created: bool,
+) -> client::AttachOptions {
+    client::AttachOptions {
+        target: client::raw_target(&argv[1..]),
+        detach_others: parsed.detach_others,
+        nest: parsed.nest,
+        created,
+        features: FEATURES.get().cloned().unwrap_or_default(),
+        extras: grofe::protocol::AttachExtras {
+            cwd: parsed.cwd.clone(),
+            read_only: parsed.read_only,
+            flags: parsed.flags.clone(),
+            no_env: parsed.no_env,
+            kill_parent: parsed.kill_parent,
+        },
     }
 }
 
@@ -387,7 +414,32 @@ fn print_attach(result: Result<String, String>) -> ExitCode {
             println!("[{reason}]");
             ExitCode::SUCCESS
         }
-        Err(e) => fail(&e),
+        Err(e) => fail_remote(&e),
+    }
+}
+
+/// Fails with `e`, an error that may carry the remote's text, made safe
+/// for the terminal first.
+fn fail_remote(e: &str) -> ExitCode {
+    fail(&grofe::remote::ssh::sanitize(e))
+}
+
+/// `reply` with its error text made safe for the terminal. The output of a
+/// command stays as it came (`capture-pane -e` needs its escapes).
+fn clean(reply: Reply) -> Reply {
+    match reply {
+        Reply::Err {
+            id,
+            err,
+            out,
+            status,
+        } => Reply::Err {
+            id,
+            err: grofe::remote::ssh::sanitize(&err),
+            out,
+            status,
+        },
+        other => other,
     }
 }
 

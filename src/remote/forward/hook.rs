@@ -391,15 +391,10 @@ fn session_ports(link: &Link, hello: &str, session: &str) -> Vec<(PaneId, Vec<u1
     ports
 }
 
-/// The id of the session this client is attached to, from the remote's
-/// client list.
+/// The id of the session this client (its current connection) is attached
+/// to.
 fn attached_session(link: &Link, hello: &str) -> Option<String> {
-    let argv = ["list-clients", "-F", "#{client_tty} #{session_id}"].map(String::from);
-    let out = link.request(hello, &argv).ok()?;
-    out.lines()
-        .filter_map(|l| l.rsplit_once(' '))
-        .find(|(tty, _)| *tty == session::client_tty())
-        .map(|(_, id)| id.to_string())
+    session::attached_session(link, hello, &session::client_tty())
 }
 
 #[cfg(test)]
