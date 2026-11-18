@@ -540,3 +540,35 @@ fn remote_options_without_a_host_are_refused() {
     let out = run_bounded(r.client(&["--no-install", "list-sessions"]), CMD_TIMEOUT);
     assert!(!out.stderr.contains("needs -r"), "{out:?}");
 }
+
+/// `-r host` against a remote with no server running: the proxy starts one
+/// that exits when empty, so every request before the session exists could
+/// meet it on its way out. The session is made in the first request, and
+/// a request the exiting server never read is sent once more, so each of
+/// these attaches lands.
+#[test]
+fn attaching_to_a_fresh_remote_server_never_meets_it_leaving() {
+    let r = Remote::new(true);
+    for round in 0..5 {
+        r.srv.cmd(&["kill-server"]).unwrap();
+        common::wait_until("the server gone", CMD_TIMEOUT, || {
+            r.srv.cmd(&["list-sessions"]).is_err()
+        });
+        let mut h = r.attach(&[], &[]);
+        common::wait_until("attached", CMD_TIMEOUT, || client_session(&r) == "main");
+        h.send("\x02d");
+        h.wait_exit();
+        let out = String::from_utf8_lossy(h.output()).into_owned();
+        assert!(out.contains("[detached"), "round {round}: {out}");
+    }
+    // With `main` there, `-r box` attaches to it rather than making another.
+    let mut h = r.attach(&[], &[]);
+    common::wait_until("attached", CMD_TIMEOUT, || client_session(&r) == "main");
+    let sessions = r
+        .srv
+        .cmd(&["list-sessions", "-F", "#{session_name}"])
+        .unwrap();
+    assert_eq!(sessions.trim(), "main");
+    h.send("\x02d");
+    h.wait_exit();
+}

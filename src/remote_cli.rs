@@ -18,7 +18,7 @@ use grofe::remote::{forward, session};
 
 use super::{
     FEATURES, Globals, attach_argv_for_existing, attaches, connect_or_start, dialect, fail,
-    print_reply, request, request_with, session_gone,
+    print_reply, request, request_with, server_left, session_gone,
 };
 
 /// A call for a remote host: `-r <host> [command...]`, or `attach
@@ -216,12 +216,7 @@ fn remote_main(
     match grofe::cmd::parse::canonical_name(&argv[0]) {
         "attach-session" => print_attach(remote.attach(argv, false)),
         "new-session" => remote.new_session(argv),
-        _ => match remote
-            .link
-            .open_control()
-            .map_err(|e| e.to_string())
-            .and_then(|chan| request_with(chan, &remote.hello, argv))
-        {
+        _ => match remote.request(argv) {
             Ok(reply) => print_reply(clean(reply)),
             Err(e) => fail_remote(&e),
         },
@@ -272,32 +267,25 @@ struct Remote {
 }
 
 impl Remote {
+    /// One request on a fresh control channel. A server that closes the
+    /// channel without replying was exiting as it connected (an empty one
+    /// started on demand) and never read the request, so it is sent once
+    /// more, on another channel, as nothing can have run twice.
     fn request(&self, argv: &[String]) -> Result<Reply, String> {
-        let chan = self.link.open_control().map_err(|e| e.to_string())?;
-        request_with(chan, &self.hello, argv)
+        let once = || {
+            let chan = self.link.open_control().map_err(|e| e.to_string())?;
+            request_with(chan, &self.hello, argv)
+        };
+        match once() {
+            Err(e) if server_left(&e) => once(),
+            reply => reply,
+        }
     }
 
     /// `new-session` there: `-A` for an existing session attaches, one
     /// that attaches creates the session detached and attaches to it, and
     /// `-d` is one request.
     fn new_session(self, argv: &[String]) -> ExitCode {
-        if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv)
-            && let Some(name) = c.name.filter(|_| c.attach)
-        {
-            let list = ["list-sessions", "-F", "#{session_id} #{session_name}"].map(String::from);
-            if let Ok(Reply::Ok { out, .. }) = self.request(&list)
-                && let Some((id, _)) = out
-                    .lines()
-                    .filter_map(|l| l.split_once(' '))
-                    .find(|(_, n)| *n == name)
-            {
-                if !io::stdin().is_terminal() {
-                    return fail("open terminal failed: not a terminal");
-                }
-                let argv = attach_argv_for_existing(argv, id.to_string());
-                return print_attach(self.attach(&argv, false));
-            }
-        }
         if !attaches(argv) {
             return match self.request(argv) {
                 Ok(reply) => print_reply(clean(reply)),
@@ -307,19 +295,43 @@ impl Remote {
         if !io::stdin().is_terminal() {
             return fail("open terminal failed: not a terminal");
         }
-        let mut create = vec![argv[0].clone(), "-d".to_string()];
+        // One request makes (or, with `-A`, finds) the session and names
+        // it, as the local `new_and_attach`: a server started on demand for
+        // an earlier, separate request would have no session and exit as
+        // that connection closed, refusing the next one in that window.
+        let reuse = match grofe::cmd::parse(argv) {
+            Ok(grofe::cmd::Command::NewSession(c)) => c.name.filter(|_| c.attach),
+            _ => None,
+        };
+        let mut create = Vec::new();
+        if reuse.is_some() {
+            create.extend(["list-sessions", "-F", "#{session_name}", ";"].map(String::from));
+        }
+        create.extend([argv[0].clone(), "-d".to_string()]);
         create.extend(argv[1..].iter().cloned());
-        let flags = match grofe::cmd::parse(&create) {
+        let flags = match grofe::cmd::parse(&create[create.len() - argv.len() - 1..]) {
             Ok(grofe::cmd::Command::NewSession(c)) => c.flags,
             _ => None,
         };
+        // `-A` on an existing session bumps its activity: the latest either way.
         create.extend([";", "display-message", "-p", "#{session_id}"].map(String::from));
-        let id = match self.request(&create) {
-            Ok(Reply::Ok { out, .. }) => out.lines().last().unwrap_or_default().trim().to_string(),
+        let out = match self.request(&create) {
+            Ok(Reply::Ok { out, .. }) => out,
             Ok(Reply::Err { err, .. }) => return fail_remote(&err),
             Ok(Reply::Event(_)) => return fail("unexpected event reply"),
             Err(e) => return fail_remote(&e),
         };
+        let lines: Vec<&str> = out.lines().collect();
+        let id = lines
+            .last()
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default();
+        let existed = reuse
+            .is_some_and(|name| lines[..lines.len().saturating_sub(1)].contains(&name.as_str()));
+        if existed {
+            let argv = attach_argv_for_existing(argv, id);
+            return print_attach(self.attach(&argv, false));
+        }
         let mut attach = vec!["attach-session".to_string(), "-t".to_string(), id];
         attach.extend(flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
         match self.attach(&attach, true) {
