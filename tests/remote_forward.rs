@@ -403,3 +403,73 @@ fn a_multi_file_upload_stops_at_the_first_failure_and_says_what_arrived() {
     assert_eq!(names(&dest), ["first.txt"], "the rest were not tried");
     finish(child);
 }
+
+/// An attach client on `srv`'s session `session`; the stream keeps it
+/// attached until dropped.
+fn attach_raw(srv: &TestServer, session: &str) -> std::os::unix::net::UnixStream {
+    use grofe::protocol::Caps;
+    let mut stream = std::os::unix::net::UnixStream::connect(&srv.socket).unwrap();
+    let hello = Hello::Attach {
+        ctx: srv.ctx(),
+        cols: 80,
+        rows: 24,
+        term: "xterm-256color".to_string(),
+        caps: Caps::default(),
+        target: Some(session.to_string()),
+        detach_others: false,
+        nest: false,
+        tty: None,
+        created: false,
+        extras: Default::default(),
+    };
+    writeln!(stream, "{}", encode_hello(&hello).unwrap()).unwrap();
+    let mut reply = String::new();
+    BufReader::new(stream.try_clone().unwrap())
+        .read_line(&mut reply)
+        .unwrap();
+    stream
+}
+
+#[test]
+fn open_url_falls_back_once_the_client_a_subscription_follows_has_gone() {
+    let srv = TestServer::start();
+    srv.cmd(&["new-session", "-d", "-s", "main"]).unwrap();
+    let client = attach_raw(&srv, "main");
+    let name = srv.cmd(&["list-clients", "-F", "#{client_name}"]).unwrap();
+    // The remote client's event channel: it stays open after its attach
+    // ends, as it does until the proxy gives up on a dropped link.
+    let _events = srv
+        .subscribe(&["-c", name.trim(), "open-url"])
+        .expect("subscribe -c");
+    let out = srv.home.join("opened-here");
+    let opener = srv.home.join("opener");
+    std::fs::write(
+        &opener,
+        format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", out.display()),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let open = |url: &str| {
+        let command = format!(
+            "GROFE_OPENER={} {} open '{url}'",
+            opener.display(),
+            env!("CARGO_BIN_EXE_grofe")
+        );
+        srv.cmd(&["send-keys", "-t", "main", &command, "Enter"])
+            .unwrap();
+    };
+    // Attached: the client gets it, nothing opens here.
+    open("https://example.com/attached");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!out.exists());
+    drop(client);
+    wait_until("the client to go", WAIT, || {
+        srv.cmd(&["list-clients"])
+            .is_ok_and(|l| l.trim().is_empty())
+    });
+    open("https://example.com/after");
+    wait_until("the fallback opener", WAIT, || {
+        std::fs::read_to_string(&out).is_ok_and(|u| u == "https://example.com/after")
+    });
+}

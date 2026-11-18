@@ -293,10 +293,24 @@ impl Events {
     }
 
     /// Whether `event` would reach a subscriber: one that names it, whose
-    /// scope it lies in.
-    pub fn reaches(&self, event: &Event, model: &Model) -> bool {
+    /// scope it lies in. A `subscribe -c` reaches only while its client is
+    /// `attached`: a client whose link dropped keeps its event channel open
+    /// until the proxy gives up on it, and nothing would open what it gets.
+    pub fn reaches(
+        &self,
+        event: &Event,
+        model: &Model,
+        attached: impl Fn(ClientId) -> bool,
+    ) -> bool {
         self.subscribers.iter().any(|s| {
-            !s.tx.is_closed() && s.wants(event.name()) && s.passes(event, Place::default(), model)
+            let present = match s.scope {
+                Some(Scope::Client { client, .. }) => attached(client),
+                _ => true,
+            };
+            present
+                && !s.tx.is_closed()
+                && s.wants(event.name())
+                && s.passes(event, Place::default(), model)
         })
     }
 
@@ -704,6 +718,27 @@ mod tests {
         events.flush(&model);
         assert_eq!(rx.try_recv().ok(), Some(exited(2)));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_client_scope_reaches_only_while_its_client_is_attached() {
+        let model = Model::default();
+        let mut events = Events::default();
+        let (tx, _rx) = mpsc::channel(8);
+        let scope = Scope::Client {
+            client: ClientId(7),
+            session: SessionId(1),
+        };
+        events
+            .subscribe(names(&["option-changed"]), Some(scope), tx)
+            .unwrap();
+        let event = Event::OptionChanged {
+            scope: "global".into(),
+            name: "".into(),
+            value: None,
+        };
+        assert!(events.reaches(&event, &model, |c| c == ClientId(7)));
+        assert!(!events.reaches(&event, &model, |_| false));
     }
 
     /// Events added after v1.0 reach only a subscription that names them,

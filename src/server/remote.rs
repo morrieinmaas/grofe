@@ -228,7 +228,8 @@ pub fn open_url(state: &mut State, ctx: &ClientCtx, c: OpenUrl) -> Result<String
     // A remote client subscribes for its own session (`subscribe -c`): a
     // pane of another session has nobody to open it, and `grofe open` falls
     // back to this machine's opener.
-    if !state.events.reaches(&event, &state.model) {
+    let attached = |id| state.clients.contains_key(&id);
+    if !state.events.reaches(&event, &state.model, attached) {
         return Err(crate::open::NO_SUBSCRIBER.to_string());
     }
     state.events.emit(event);
