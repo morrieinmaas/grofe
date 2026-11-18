@@ -421,3 +421,80 @@ fn meta_o_then_c_c_in_one_read_are_two_keys() {
     assert_eq!(f.handle(keys(b"\x1bO\x03"), now), [Action::Send(want)]);
     assert_eq!(f.handle(keys(b"x"), now), [Action::Send(b"x".to_vec())]);
 }
+
+/// Cancelled upload of `paste`, as the hook reports it.
+fn cancelled(paste: FilePaste) -> Input {
+    Input::Uploaded {
+        paste,
+        arrived: Vec::new(),
+        error: None,
+        cancelled: true,
+        grew: Vec::new(),
+    }
+}
+
+#[test]
+fn a_paste_over_several_reads_during_an_upload_is_text_not_keys() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = uploading(&mut f, &a, now);
+    // An Esc at the end of one read, and C-c, the prefix and a lone Esc in
+    // the next, all inside the paste: text, no cancel, nothing through.
+    assert_eq!(f.handle(keys(b"\x1b[200~abc\x1b"), now), []);
+    assert_eq!(f.handle(keys(b"\x03\x02def"), now), []);
+    assert_eq!(f.handle(keys(b"\x1b"), now), []);
+    assert_eq!(f.handle(keys(b"ghi\x1b[201~"), now), []);
+    // Then the user cancels for real; the held paste comes out whole.
+    assert_eq!(f.handle(keys(b"\x03"), now), [Action::CancelUpload]);
+    assert_eq!(
+        f.handle(cancelled(paste), now),
+        [
+            Action::Message("grofe: upload cancelled".into()),
+            Action::Send(b"\x1b[200~abc\x1b\x03\x02def\x1bghi\x1b[201~".to_vec())
+        ]
+    );
+}
+
+#[test]
+fn an_end_marker_split_across_reads_still_ends_the_paste() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = uploading(&mut f, &a, now);
+    assert_eq!(f.handle(keys(b"\x1b[200~text\x1b"), now), []);
+    assert_eq!(f.handle(keys(b"[201~"), now), []);
+    // After the paste ended, C-c is a key again.
+    assert_eq!(f.handle(keys(b"\x03"), now), [Action::CancelUpload]);
+    assert_eq!(
+        f.handle(cancelled(paste), now),
+        [
+            Action::Message("grofe: upload cancelled".into()),
+            Action::Send(b"\x1b[200~text\x1b[201~".to_vec())
+        ]
+    );
+}
+
+#[test]
+fn a_paste_over_several_reads_while_one_is_checked_stays_one_paste() {
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let held = b"\x1b[200~/hung/file\x1b[201~";
+    let got = f.handle(keys(held), now);
+    let [Action::CheckFiles { id, .. }] = got.as_slice() else {
+        panic!("{got:?}");
+    };
+    let id = *id;
+    assert_eq!(f.handle(keys(b"\x1b[200~one"), now), []);
+    assert_eq!(f.handle(keys(b"\x03two\x1b[201~"), now), []);
+    // The check finds no file: the held paste as text, then the second
+    // paste, still one bracketed paste.
+    let checked = Input::FilesChecked {
+        id,
+        original: b"/hung/file".to_vec(),
+        files: None,
+    };
+    let mut want = held.to_vec();
+    want.extend(b"\x1b[200~one\x03two\x1b[201~");
+    assert_eq!(f.handle(checked, now), [Action::Send(want)]);
+}

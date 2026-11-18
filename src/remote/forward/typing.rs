@@ -39,6 +39,10 @@ pub struct Held {
     /// The key before was the prefix: this one is its command.
     armed: bool,
     overflowed: bool,
+    /// A bracketed paste began in a read and has not ended yet.
+    in_paste: bool,
+    /// The open paste's last bytes, for an end marker split across reads.
+    tail: Vec<u8>,
 }
 
 impl Held {
@@ -50,6 +54,8 @@ impl Held {
             prefix,
             armed: false,
             overflowed: false,
+            in_paste: false,
+            tail: Vec::new(),
         }
     }
 
@@ -82,15 +88,39 @@ impl Held {
     /// One read typed while the paste is held: what goes through or cancels,
     /// in order; the rest is kept.
     pub fn take(&mut self, bytes: &[u8]) -> Vec<Typed> {
-        let ctrl_c = parse_prefix("C-c").ok().flatten();
         let mut out = Vec::new();
+        let mut bytes = bytes;
+        // The rest of a bracketed paste begun in an earlier read: up to and
+        // including its end marker, it is text, never keys.
+        if self.in_paste {
+            match self.paste_end(bytes) {
+                Some(end) => {
+                    self.keep(&bytes[..end], &mut out);
+                    self.in_paste = false;
+                    self.tail.clear();
+                    bytes = &bytes[end..];
+                }
+                None => {
+                    self.keep(bytes, &mut out);
+                    self.remember_tail(bytes);
+                    return out;
+                }
+            }
+        }
+        let ctrl_c = parse_prefix("C-c").ok().flatten();
         for (key, span) in self.keys(bytes) {
             let part = &bytes[span.clone()];
             let prefix = key.zip(self.prefix).is_some_and(|(k, p)| k.matches(&p));
             let cancel = key.is_some_and(|k| {
                 k.code == KeyCode::Escape || ctrl_c.is_some_and(|c| k.matches(&c))
             });
-            if self.armed || prefix {
+            if part.starts_with(super::PASTE_START) && !part.ends_with(super::PASTE_END) {
+                // A paste the read ends inside: the next read goes on with it.
+                self.keep(part, &mut out);
+                self.in_paste = true;
+                self.tail.clear();
+                self.remember_tail(part);
+            } else if self.armed || prefix {
                 self.armed = !self.armed && prefix;
                 match out.last_mut() {
                     Some(Typed::Through(through)) => through.extend_from_slice(part),
@@ -101,17 +131,43 @@ impl Held {
                     rest: bytes[span.end..].to_vec(),
                 });
                 return out;
-            } else if self.bytes.len() + part.len() > MAX_QUEUED {
-                let first = !self.overflowed;
-                self.overflowed = true;
-                if first {
-                    out.push(Typed::Dropped { first });
-                }
             } else {
-                self.bytes.extend_from_slice(part);
+                self.keep(part, &mut out);
             }
         }
         out
+    }
+
+    /// Holds `part` for after the paste, unless that passes [`MAX_QUEUED`].
+    fn keep(&mut self, part: &[u8], out: &mut Vec<Typed>) {
+        if self.bytes.len() + part.len() > MAX_QUEUED {
+            let first = !self.overflowed;
+            self.overflowed = true;
+            if first {
+                out.push(Typed::Dropped { first });
+            }
+        } else {
+            self.bytes.extend_from_slice(part);
+        }
+    }
+
+    /// Where in `bytes` an open paste's end marker ends, counting one split
+    /// across reads (its start in [`Held::tail`]).
+    fn paste_end(&self, bytes: &[u8]) -> Option<usize> {
+        let end = super::PASTE_END;
+        let seen = [self.tail.as_slice(), bytes].concat();
+        let at = seen.windows(end.len()).position(|w| w == end)?;
+        Some(at + end.len() - self.tail.len())
+    }
+
+    /// Keeps the last bytes of an open paste, enough to see an end marker
+    /// that the next read finishes.
+    fn remember_tail(&mut self, bytes: &[u8]) {
+        let keep = super::PASTE_END.len() - 1;
+        let mut seen = std::mem::take(&mut self.tail);
+        seen.extend_from_slice(bytes);
+        let from = seen.len().saturating_sub(keep);
+        self.tail = seen[from..].to_vec();
     }
 }
 
