@@ -74,11 +74,31 @@ pub fn stable_agent(state: &State, session: SessionId, client_env: &[(String, St
     };
     let link = paths::agent_link(&state.socket, session.0);
     // A client started in one of our own panes already has the link.
-    if Path::new(target) == link {
+    if Path::new(target) == link || !link_usable(&link) {
         return;
     }
     if let Err(e) = repoint(&link, Path::new(target)) {
         eprintln!("grofe server: ssh-agent link {}: {e}", link.display());
+    }
+}
+
+/// Whether `link` may serve as a session's agent link: its directory is
+/// private (made so if missing) and the link is absent or a symlink of
+/// ours. A shared `-S` directory such as `/tmp` gives a predictable link
+/// name, and another user's planted link must never reach a pane: it would
+/// hand them the keys `ssh-add` offers.
+fn link_usable(link: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Some(dir) = link.parent() else {
+        return false;
+    };
+    if let Err(e) = paths::ensure_private_dir(dir) {
+        eprintln!("grofe server: no ssh-agent link in {}: {e}", dir.display());
+        return false;
+    }
+    match std::fs::symlink_metadata(link) {
+        Err(e) => e.kind() == io::ErrorKind::NotFound,
+        Ok(meta) => meta.file_type().is_symlink() && meta.uid() == nix::unistd::geteuid().as_raw(),
     }
 }
 
@@ -137,6 +157,10 @@ pub fn pane_env(state: &State, session: SessionId, env: &mut Vec<(String, String
         // starts at the global environment's agent, so it is not left
         // dangling in place of a working one.
         let link = paths::agent_link(&state.socket, session.0);
+        // A link that is not safely ours leaves the agent the pane had.
+        if !link_usable(&link) {
+            return browser_env(state, session, env);
+        }
         if std::fs::symlink_metadata(&link).is_err()
             && let Some(agent) = crate::server::hooks::global_var(state, "SSH_AUTH_SOCK")
                 .filter(|a| Path::new(a).is_absolute() && Path::new(a) != link)
@@ -146,6 +170,11 @@ pub fn pane_env(state: &State, session: SessionId, env: &mut Vec<(String, String
         }
         env.push(("SSH_AUTH_SOCK".to_string(), link.display().to_string()));
     }
+    browser_env(state, session, env);
+}
+
+/// [`pane_env`]'s `BROWSER` part.
+fn browser_env(state: &State, session: SessionId, env: &mut Vec<(String, String)>) {
     if session_flag(state, session, "forward-browser")
         && let Some(shim) = OPEN_SHIM.get()
     {

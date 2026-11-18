@@ -688,3 +688,35 @@ fn grofe_open_falls_back_to_the_panes_own_browser() {
         "https://example.com/p\nftp://example.com/f\n"
     );
 }
+
+#[test]
+fn an_agent_dir_that_is_not_private_leaves_the_panes_agent_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let srv = TestServer::unstarted();
+    fs::create_dir_all(srv.socket.parent().unwrap()).expect("socket dir");
+    let dir = link(&srv, 0).parent().unwrap().to_path_buf();
+    // As a shared directory another user made could be.
+    fs::create_dir_all(&dir).expect("agent dir");
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("chmod");
+    run_with_agent(&srv, "/tmp/agent-one", &["new-session", "-d", "-s", "main"]);
+    let (agent, _) = env_of_new_pane(&srv, "open-dir", &["split-window", "-t", "main"]);
+    assert_eq!(agent, "/tmp/agent-one");
+    assert!(fs::symlink_metadata(link(&srv, 0)).is_err(), "no link made");
+}
+
+#[test]
+fn a_planted_file_at_the_link_leaves_the_panes_agent_alone() {
+    let srv = server();
+    srv.cmd(&["start-server"]).expect("start");
+    let planted = link(&srv, 0);
+    grofe::paths::ensure_private_dir(planted.parent().unwrap()).expect("agent dir");
+    fs::write(&planted, "not a link").expect("plant");
+    run_with_agent(&srv, "/tmp/agent-one", &["new-session", "-d", "-s", "main"]);
+    let (agent, _) = env_of_new_pane(&srv, "planted", &["split-window", "-t", "main"]);
+    assert_eq!(agent, "/tmp/agent-one");
+    assert_eq!(
+        fs::read_to_string(&planted).unwrap(),
+        "not a link",
+        "left alone"
+    );
+}
