@@ -258,40 +258,59 @@ fn a_stale_pid_file_is_removed_and_its_pid_left_alone() {
 #[test]
 fn proxies_started_at_once_leave_one() {
     let srv = session_server();
-    let children: Vec<_> = (0..4)
+    let starts: Vec<_> = (0..4)
         .map(|_| {
             let mut cmd = srv.command();
             cmd.args(["proxy", "--quic"])
                 .env(PORTS_ENV, PORTS)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            cmd.spawn().unwrap()
+                .stderr(Stdio::piped());
+            std::thread::spawn(move || cmd.output().unwrap())
         })
         .collect();
-    for child in children {
-        assert!(wait_child(child, WAIT).unwrap().success());
+    let mut said = String::new();
+    for start in starts {
+        let out = start.join().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        said.push_str(&String::from_utf8_lossy(&out.stderr));
     }
-    // Every detached proxy logs its pid as it starts.
-    let (log, _) = proxy_files(&srv.log_path(), 0);
-    let pids: Vec<Pid> = std::fs::read_to_string(&log)
-        .unwrap()
+    // Starts take turns, so each after the first stops the one before it,
+    // which may be gone before it ever logs: the stops are counted from
+    // what the starts said, the survivor from the one pid file left.
+    let stopped: Vec<Pid> = said
         .lines()
-        .filter_map(|l| l.split("pid ").nth(1)?.split(' ').next()?.parse().ok())
+        .filter_map(|l| {
+            l.split("stopped the older proxy ")
+                .nth(1)?
+                .trim()
+                .parse()
+                .ok()
+        })
         .map(Pid::from_raw)
         .collect();
-    let _stop = StopEvery(pids.clone());
-    assert_eq!(pids.len(), 4, "{pids:?}");
-    wait_until("all but one proxy to stop", WAIT, || {
-        pids.iter().filter(|p| !process_gone(**p)).count() == 1
-    });
+    let (log, _) = proxy_files(&srv.log_path(), 0);
     let dir = log.parent().unwrap();
-    let pid_files = std::fs::read_dir(dir)
+    let pid_files: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().ends_with(".pid"))
-        .count();
-    assert_eq!(pid_files, 1);
+        .map(|e| e.path())
+        .collect();
+    let survivor: Vec<Pid> = pid_files
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok()?.trim().parse().ok())
+        .map(Pid::from_raw)
+        .collect();
+    let _stop = StopEvery(stopped.iter().chain(&survivor).copied().collect());
+    assert_eq!(stopped.len(), 3, "{said}");
+    assert_eq!(pid_files.len(), 1, "{pid_files:?}");
+    assert_eq!(survivor.len(), 1);
+    assert!(!stopped.contains(&survivor[0]), "{stopped:?} {survivor:?}");
+    wait_until("the stopped proxies to exit", WAIT, || {
+        stopped.iter().all(|p| process_gone(*p))
+    });
+    assert!(!process_gone(survivor[0]));
 }
 
 /// SIGTERM to every pid when the test ends, passed or not.
