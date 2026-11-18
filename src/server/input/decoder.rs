@@ -72,11 +72,6 @@ impl Decoder {
         self.zip_spans(inputs)
     }
 
-    /// Whether a bracketed paste is open (its end not seen yet).
-    pub fn in_paste(&self) -> bool {
-        self.in_paste
-    }
-
     /// The bytes received and not yet decoded (a sequence or a paste still
     /// waiting), as they were typed; the decoder starts afresh.
     pub fn take_waiting(&mut self) -> Vec<u8> {
