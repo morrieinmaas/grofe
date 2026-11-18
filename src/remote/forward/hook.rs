@@ -13,11 +13,12 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use super::exec::{LinkCell, is_slow, opener, run_slow};
+use super::exec::{LinkCell, is_slow, opener, run_slow, upload};
 use super::ports::Forwarder;
 use super::{Action, Forwarding, Input, Settings};
 use crate::event::Event;
@@ -54,6 +55,8 @@ struct Core {
     /// The id of the forwarding prompt up, if one is; ids count up.
     current: Option<u64>,
     next_id: u64,
+    /// Set to stop the upload running ([`Action::CancelUpload`]).
+    cancel: Arc<AtomicBool>,
 }
 
 /// Work for the worker thread.
@@ -63,6 +66,8 @@ enum Job {
     /// Read the attached session's listening ports ([`Input::Resync`]).
     Resync,
     Slow(Action),
+    /// An upload, stopped once its flag is set.
+    Upload(Action, Arc<AtomicBool>),
     Message(String),
 }
 
@@ -92,6 +97,7 @@ impl ForwardHook {
             conn: None,
             current: None,
             next_id: 0,
+            cancel: Arc::new(AtomicBool::new(false)),
         };
         ForwardHook {
             core: Arc::new(Mutex::new(core)),
@@ -181,6 +187,13 @@ impl Core {
                     queue.extend(self.fw.handle(input, Instant::now()));
                 }
                 Action::StopForward(remote) => self.forwarder.stop(remote),
+                Action::CancelUpload => self.cancel.store(true, Ordering::SeqCst),
+                upload @ Action::Upload { .. } => {
+                    self.cancel = Arc::new(AtomicBool::new(false));
+                    let _ = self
+                        .jobs
+                        .send(Job::Upload(upload, Arc::clone(&self.cancel)));
+                }
                 slow => {
                     debug_assert!(is_slow(&slow));
                     let _ = self.jobs.send(Job::Slow(slow));
@@ -395,6 +408,16 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input
             Job::Event(event) => Input::Event(event),
             Job::Resync => {
                 session = attached_session(&link, &hello);
+                // The session's prefix, which goes through while an upload
+                // holds typing.
+                if let Some(s) = &session {
+                    let argv = ["show-options", "-Av", "-t", s, "prefix"].map(String::from);
+                    let prefix = link
+                        .request(&hello, &argv)
+                        .ok()
+                        .and_then(|p| crate::server::input::parse_prefix(p.trim()).ok().flatten());
+                    let _ = done.send(Input::Prefix(prefix));
+                }
                 match &session {
                     Some(s) => Input::Resync(session_ports(&link, &hello, s)),
                     None => continue,
@@ -413,15 +436,14 @@ fn worker(link: LinkCell, hello: String, jobs: Receiver<Job>, done: Sender<Input
             }
             // An upload on a thread of its own: a big one must not hold up
             // the events behind it.
-            Job::Slow(action @ Action::Upload { .. }) => {
+            Job::Upload(Action::Upload { dir, paste }, cancel) => {
                 let done = done.clone();
                 std::thread::spawn(move || {
-                    if let Some(input) = run_slow(&link, None, action) {
-                        let _ = done.send(input);
-                    }
+                    let _ = done.send(upload(&link, &dir, paste, &cancel));
                 });
                 continue;
             }
+            Job::Upload(..) => continue,
             Job::Slow(action) => {
                 if session.is_none() {
                     session = attached_session(&link, &hello);

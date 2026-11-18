@@ -396,11 +396,45 @@ fn a_multi_file_upload_stops_at_the_first_failure_and_says_what_arrived() {
     let c = local.path().join("third.txt");
     std::fs::write(&c, "three").unwrap();
     let dest = srv.home.join("part");
-    let (arrived, error) =
-        grofe::remote::forward::upload_files(conn.conn(), dest.to_str().unwrap(), &[a, gone, c]);
-    assert_eq!(arrived, [dest.join("first.txt").display().to_string()]);
-    assert!(error.unwrap().contains("gone.txt"));
+    let no = std::sync::atomic::AtomicBool::new(false);
+    let done = grofe::remote::forward::upload_files(
+        conn.conn(),
+        dest.to_str().unwrap(),
+        &[a, gone, c],
+        &[3, 1, 5],
+        &no,
+    );
+    assert_eq!(done.arrived, [dest.join("first.txt").display().to_string()]);
+    assert!(done.error.unwrap().contains("gone.txt"));
     assert_eq!(names(&dest), ["first.txt"], "the rest were not tried");
+    finish(child);
+}
+
+#[test]
+fn an_upload_sends_a_file_as_big_as_pasted_and_stops_when_cancelled() {
+    let srv = TestServer::start();
+    let (child, conn) = spawn_proxy(&srv);
+    let local = tempfile::tempdir().unwrap();
+    let grown = local.path().join("grown.log");
+    std::fs::write(&grown, "0123456789").unwrap();
+    let dest = srv.home.join("cap");
+    let dest_s = dest.to_str().unwrap();
+    let no = std::sync::atomic::AtomicBool::new(false);
+    // Pasted when it held 4 bytes; it has grown to 10 since.
+    let done = grofe::remote::forward::upload_files(
+        conn.conn(),
+        dest_s,
+        std::slice::from_ref(&grown),
+        &[4],
+        &no,
+    );
+    assert_eq!(done.grew, ["grown.log"]);
+    assert_eq!(std::fs::read(dest.join("grown.log")).unwrap(), b"0123");
+    // Cancelled: nothing arrives, and no partial file stays.
+    let yes = std::sync::atomic::AtomicBool::new(true);
+    let done = grofe::remote::forward::upload_files(conn.conn(), dest_s, &[grown], &[10], &yes);
+    assert!(done.cancelled && done.arrived.is_empty(), "{done:?}");
+    wait_until("no partial file", WAIT, || names(&dest) == ["grown.log"]);
     finish(child);
 }
 

@@ -15,6 +15,7 @@ mod ports;
 #[cfg(test)]
 mod tests;
 mod text;
+mod typing;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
@@ -23,7 +24,10 @@ use std::time::{Duration, Instant};
 use crate::event::Event;
 use crate::types::PaneId;
 
-pub use exec::{LinkCell, Opener, is_slow, opener, run_slow, upload_dir, upload_files};
+pub use exec::{
+    LinkCell, Opener, Upload, check_files, is_slow, opener, run_slow, upload, upload_dir,
+    upload_files,
+};
 pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
 use text::count_files;
@@ -126,6 +130,9 @@ impl Settings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilePaste {
     pub files: Vec<PathBuf>,
+    /// Each file's size when pasted: what is sent of it, so a file that
+    /// grows meanwhile cannot pass `remote-upload-max`.
+    pub sizes: Vec<u64>,
     /// Their total size in bytes.
     pub total: u64,
     /// The paste's content, without its markers, for when it passes
@@ -151,16 +158,31 @@ pub enum Input {
     Event(Event),
     /// The answer to the [`Action::Prompt`] on screen.
     Answer(String),
+    /// [`Action::CheckFiles`]'s result: each path's size when every one is
+    /// a local regular file, else `None` (the paste is text).
+    FilesChecked {
+        original: Vec<u8>,
+        files: Option<Vec<(PathBuf, u64)>>,
+    },
+    /// [`Action::CheckOpen`]'s result: the URL of the file to offer, or
+    /// why it is not opened.
+    OpenChecked(Result<String, String>),
     /// [`Action::ResolveDir`]'s result.
     DirResolved(FilePaste, UploadDir),
     /// [`Action::Upload`]'s result: the remote paths of the files that
     /// arrived, in order, and why the next one did not (the rest were not
-    /// tried).
+    /// tried); whether it was cancelled ([`Action::CancelUpload`]); the
+    /// files that grew after the paste (only their pasted size was sent).
     Uploaded {
         paste: FilePaste,
         arrived: Vec<String>,
         error: Option<String>,
+        cancelled: bool,
+        grew: Vec<String>,
     },
+    /// The attached session's prefix key, which goes through while an
+    /// upload holds typing back (so prefix+d still detaches).
+    Prefix(Option<crate::server::input::Key>),
     /// [`Action::StartForward`]'s result: the local port, or why not.
     Forwarded {
         remote: u16,
@@ -194,10 +216,20 @@ pub enum Action {
     Message(String),
     /// Open this URL on this machine.
     OpenUrl(String),
+    /// Look at a paste's paths ([`Input::FilesChecked`]): off the input
+    /// thread, as a path on a hung mount blocks.
+    CheckFiles {
+        paths: Vec<PathBuf>,
+        original: Vec<u8>,
+    },
+    /// Look at the file a `file:` URL names ([`Input::OpenChecked`]).
+    CheckOpen(String),
     /// Find where the paste's files go ([`Input::DirResolved`]).
     ResolveDir(FilePaste),
     /// Upload the paste's files into `dir` ([`Input::Uploaded`]).
     Upload { dir: String, paste: FilePaste },
+    /// Stop the upload running (Esc or C-c typed during it).
+    CancelUpload,
     /// Forward local connections to remote `port` ([`Input::Forwarded`]).
     StartForward(u16),
     /// Stop forwarding remote `port`.
@@ -235,9 +267,11 @@ pub struct Forwarding {
     /// Keys typed while a file paste is on its way (its directory, its
     /// prompt, its upload): they go after the pasted text, so an Enter
     /// cannot run a command before the paths are in it.
-    // ponytail: a paste whose answer never comes (another hook's prompt
-    // took its place) holds the keys after it until the client ends.
-    queued: Option<Vec<u8>>,
+    queued: Option<typing::Held>,
+    /// The session's prefix, which goes through while typing is held.
+    prefix: Option<crate::server::input::Key>,
+    /// An upload runs: Esc or C-c cancels it.
+    uploading: bool,
     /// Whether the front ask is on screen. A prompt can go unanswered (a
     /// link drop, another prompt in its place): then it is shown again.
     showing: bool,
@@ -258,6 +292,8 @@ impl Forwarding {
             declined: BTreeSet::new(),
             queued: None,
             showing: false,
+            prefix: typing::Held::default_prefix(),
+            uploading: false,
         }
     }
 
@@ -294,12 +330,29 @@ impl Forwarding {
             Input::Event(event) => self.event(event, &mut out),
             Input::Resync(panes) => self.resync(panes, &mut out),
             Input::Answer(answer) => self.answer(&answer, now, &mut out),
+            Input::FilesChecked { original, files } => {
+                self.files_checked(original, files, now, &mut out)
+            }
+            Input::OpenChecked(Ok(url)) => self.ask(Ask::Open(url), &mut out),
+            Input::OpenChecked(Err(e)) => {
+                out.push(Action::Message(format!("grofe: not opening a url: {e}")))
+            }
+            Input::Prefix(prefix) => self.prefix = prefix,
             Input::DirResolved(paste, dir) => self.dir_resolved(paste, dir, now, &mut out),
             Input::Uploaded {
                 paste,
                 arrived,
                 error,
-            } => self.uploaded(paste, arrived, error, now, &mut out),
+                cancelled,
+                grew,
+            } => {
+                self.uploading = false;
+                if cancelled {
+                    self.cancelled(paste, arrived, now, &mut out);
+                } else {
+                    self.uploaded(paste, arrived, error, grew, now, &mut out);
+                }
+            }
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
                     "forwarding {}:{remote} to localhost:{local}",
@@ -327,12 +380,7 @@ impl Forwarding {
                 if !is_file_url(&url) {
                     out.push(Action::OpenUrl(url));
                 } else {
-                    match text::local_file_to_open(&url) {
-                        Ok(resolved) => self.ask(Ask::Open(resolved), out),
-                        Err(e) => {
-                            out.push(Action::Message(format!("grofe: not opening a url: {e}")))
-                        }
-                    }
+                    out.push(Action::CheckOpen(url));
                 }
             }
             Event::PortsChanged { pane, ports } => {
@@ -367,10 +415,13 @@ impl Forwarding {
         out: &mut Vec<Action>,
     ) {
         match self.settings.upload_paste {
-            UploadMode::On => out.push(Action::Upload {
-                dir: dir.path,
-                paste,
-            }),
+            UploadMode::On => {
+                self.uploading = true;
+                out.push(Action::Upload {
+                    dir: dir.path,
+                    paste,
+                });
+            }
             UploadMode::Ask => self.ask(Ask::Upload(paste, dir), out),
             UploadMode::Off => {
                 send(out, &bracketed(&paste.original));
@@ -384,9 +435,16 @@ impl Forwarding {
         paste: FilePaste,
         arrived: Vec<String>,
         error: Option<String>,
+        grew: Vec<String>,
         now: Instant,
         out: &mut Vec<Action>,
     ) {
+        if !grew.is_empty() {
+            out.push(Action::Message(format!(
+                "grofe: {} grew while uploading; only its size when pasted was sent",
+                grew.join(", ")
+            )));
+        }
         if let Some(e) = &error {
             let count = paste.files.len();
             out.push(Action::Message(match arrived.len() {
@@ -405,9 +463,39 @@ impl Forwarding {
         self.release(now, out);
     }
 
+    /// A cancelled upload: what arrived is pasted, else nothing (the user
+    /// said stop).
+    fn cancelled(
+        &mut self,
+        paste: FilePaste,
+        arrived: Vec<String>,
+        now: Instant,
+        out: &mut Vec<Action>,
+    ) {
+        let count = paste.files.len();
+        out.push(Action::Message(match arrived.len() {
+            0 => "grofe: upload cancelled".to_string(),
+            n => format!("grofe: upload cancelled ({n} of {count} uploaded, their paths pasted)"),
+        }));
+        if !arrived.is_empty() {
+            let quoted: Vec<String> = arrived.iter().map(|p| crate::util::quote::sh(p)).collect();
+            send(out, &bracketed(quoted.join(" ").as_bytes()));
+        }
+        self.release(now, out);
+    }
+
     fn keys(&mut self, bytes: &[u8], now: Instant, out: &mut Vec<Action>) {
-        if let Some(queued) = &mut self.queued {
-            return queued.extend_from_slice(bytes);
+        if let Some(held) = &mut self.queued {
+            match held.take(bytes, self.uploading) {
+                typing::Typed::Queued => {}
+                typing::Typed::Through => send(out, bytes),
+                typing::Typed::Cancel => out.push(Action::CancelUpload),
+                typing::Typed::Dropped { first: true } => out.push(Action::Message(
+                    "grofe: typing dropped while the upload runs (Esc cancels it)".to_string(),
+                )),
+                typing::Typed::Dropped { first: false } => {}
+            }
+            return;
         }
         if self.held.is_empty() {
             self.held_since = Some(now);
@@ -421,8 +509,11 @@ impl Forwarding {
                     self.paste_since = None;
                     self.held_since = Some(now);
                     self.paste(content, out);
-                    if let Some(queued) = &mut self.queued {
-                        queued.append(&mut self.held);
+                    if self.queued.is_some() {
+                        let rest = std::mem::take(&mut self.held);
+                        if !rest.is_empty() {
+                            self.keys(&rest, now, out);
+                        }
                         return;
                     }
                     continue;
@@ -468,16 +559,35 @@ impl Forwarding {
 
     /// A whole bracketed paste: an upload when it names local files.
     fn paste(&mut self, content: Vec<u8>, out: &mut Vec<Action>) {
-        let files = match self.settings.upload_paste {
+        let paths = match self.settings.upload_paste {
             UploadMode::Off => None,
-            _ => std::str::from_utf8(&content)
-                .ok()
-                .and_then(parse_paths)
-                .and_then(|p| local_files(&p).map(|total| (p, total))),
+            _ => std::str::from_utf8(&content).ok().and_then(parse_paths),
         };
-        let Some((files, total)) = files else {
+        let Some(paths) = paths else {
             return send(out, &bracketed(&content));
         };
+        // Typing waits from here until the paste is done.
+        self.queued = Some(typing::Held::new(self.prefix));
+        out.push(Action::CheckFiles {
+            paths,
+            original: content,
+        });
+    }
+
+    /// The paste's paths as the worker found them.
+    fn files_checked(
+        &mut self,
+        content: Vec<u8>,
+        files: Option<Vec<(PathBuf, u64)>>,
+        now: Instant,
+        out: &mut Vec<Action>,
+    ) {
+        let Some(files) = files else {
+            send(out, &bracketed(&content));
+            return self.release(now, out);
+        };
+        let total = files.iter().map(|(_, s)| s).sum::<u64>();
+        let (files, sizes): (Vec<PathBuf>, Vec<u64>) = files.into_iter().unzip();
         if total > self.settings.upload_max {
             out.push(Action::Message(format!(
                 "grofe: not uploading {} ({}): over remote-upload-max ({} MiB)",
@@ -485,11 +595,12 @@ impl Forwarding {
                 human_size(total),
                 self.settings.upload_max >> 20
             )));
-            return send(out, &bracketed(&content));
+            send(out, &bracketed(&content));
+            return self.release(now, out);
         }
-        self.queued = Some(Vec::new());
         out.push(Action::ResolveDir(FilePaste {
             files,
+            sizes,
             total,
             original: content,
         }));
@@ -565,8 +676,8 @@ impl Forwarding {
     /// The file paste is done (pasted, or its text is): the keys typed
     /// meanwhile go now.
     fn release(&mut self, now: Instant, out: &mut Vec<Action>) {
-        if let Some(queued) = self.queued.take() {
-            self.keys(&queued, now, out);
+        if let Some(held) = self.queued.take() {
+            self.keys(&held.bytes, now, out);
         }
     }
 
@@ -578,10 +689,13 @@ impl Forwarding {
         let answer = answer.trim().to_ascii_lowercase();
         let yes = answer == "y" || answer == "yes";
         match ask {
-            Ask::Upload(paste, dir) if yes => out.push(Action::Upload {
-                dir: dir.path,
-                paste,
-            }),
+            Ask::Upload(paste, dir) if yes => {
+                self.uploading = true;
+                out.push(Action::Upload {
+                    dir: dir.path,
+                    paste,
+                });
+            }
             Ask::Upload(paste, _) => {
                 send(out, &bracketed(&paste.original));
                 self.release(now, out);
@@ -644,13 +758,4 @@ fn split_start(bytes: &[u8]) -> usize {
         .rev()
         .find(|&n| bytes.ends_with(&PASTE_START[..n]))
         .unwrap_or(0)
-}
-
-/// The total size of `paths` when every one is a local regular file.
-/// Directories are not uploaded, so a paste naming one stays text.
-fn local_files(paths: &[PathBuf]) -> Option<u64> {
-    paths.iter().try_fold(0u64, |total, p| {
-        let meta = std::fs::metadata(p).ok().filter(|m| m.is_file())?;
-        Some(total + meta.len())
-    })
 }
