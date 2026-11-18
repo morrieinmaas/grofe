@@ -392,6 +392,44 @@ struct Slot {
     idle_since: Instant,
 }
 
+/// What [`serve`] and every [`admit`] share.
+struct Gate {
+    token: [u8; TOKEN_LEN],
+    slot: Mutex<Slot>,
+    /// Wakes [`serve`] when the slot changes.
+    changed: Notify,
+    connect: Connect,
+    rt: Handle,
+    pending: Arc<Semaphore>,
+    fails: Mutex<FailLog>,
+}
+
+/// How long [`serve`] may wait for the next connection.
+enum Wait {
+    /// A client is connected: no idle timeout runs.
+    Forever,
+    For(Duration),
+    /// Idle for `remote-quic-idle`: time to exit.
+    Done,
+}
+
+fn lock_slot(gate: &Gate) -> io::Result<std::sync::MutexGuard<'_, Slot>> {
+    gate.slot
+        .lock()
+        .map_err(|_| io::Error::other("slot poisoned"))
+}
+
+fn idle_wait(gate: &Gate, idle: Duration) -> io::Result<Wait> {
+    let s = lock_slot(gate)?;
+    Ok(match s.current {
+        Some(_) => Wait::Forever,
+        None => match idle.checked_sub(s.idle_since.elapsed()) {
+            Some(left) if !left.is_zero() => Wait::For(left),
+            _ => Wait::Done,
+        },
+    })
+}
+
 async fn serve(
     udp: UdpSocket,
     config: quinn::ServerConfig,
@@ -406,24 +444,24 @@ async fn serve(
         udp,
         Arc::new(TokioRuntime),
     )?;
-    let slot = Arc::new(Mutex::new(Slot {
-        generation: 0,
-        current: None,
-        idle_since: Instant::now(),
-    }));
-    let changed = Arc::new(Notify::new());
-    let pending = Arc::new(Semaphore::new(MAX_PENDING));
-    let fails = Arc::new(Mutex::new(FailLog::default()));
+    let gate = Arc::new(Gate {
+        token,
+        slot: Mutex::new(Slot {
+            generation: 0,
+            current: None,
+            idle_since: Instant::now(),
+        }),
+        changed: Notify::new(),
+        connect,
+        rt,
+        pending: Arc::new(Semaphore::new(MAX_PENDING)),
+        fails: Mutex::new(FailLog::default()),
+    });
     loop {
-        let wait = {
-            let s = slot.lock().map_err(|_| io::Error::other("slot poisoned"))?;
-            match s.current {
-                Some(_) => None,
-                None => match idle.checked_sub(s.idle_since.elapsed()) {
-                    Some(left) if !left.is_zero() => Some(left),
-                    _ => break,
-                },
-            }
+        let wait = match idle_wait(&gate, idle)? {
+            Wait::Forever => None,
+            Wait::For(d) => Some(d),
+            Wait::Done => break,
         };
         let sleep = async {
             match wait {
@@ -434,35 +472,9 @@ async fn serve(
         tokio::select! {
             incoming = endpoint.accept() => {
                 let Some(incoming) = incoming else { break };
-                // A retry first proves the peer can receive at the address
-                // it claims, before any handshake work or state.
-                if !incoming.remote_address_validated() && incoming.may_retry() {
-                    let _ = incoming.retry();
-                    continue;
-                }
-                let Ok(permit) = Arc::clone(&pending).try_acquire_owned() else {
-                    incoming.refuse();
-                    log_failure(&fails, "refused a connection: too many unauthenticated");
-                    continue;
-                };
-                let admit = admit(
-                    incoming,
-                    token,
-                    Arc::clone(&slot),
-                    Arc::clone(&changed),
-                    Arc::clone(&connect),
-                    rt.clone(),
-                );
-                let fails = Arc::clone(&fails);
-                tokio::spawn(async move {
-                    let admitted = admit.await;
-                    drop(permit);
-                    if let Err(e) = admitted {
-                        log_failure(&fails, &e.to_string());
-                    }
-                });
+                on_incoming(&gate, incoming);
             }
-            _ = changed.notified() => {}
+            _ = gate.changed.notified() => {}
             _ = sleep => {}
         }
     }
@@ -470,18 +482,43 @@ async fn serve(
     Ok(())
 }
 
-/// Handshakes one incoming connection and checks its token, all within
-/// [`TOKEN_TIMEOUT`]. A good one takes the slot, closing any current
-/// client, and runs the proxy protocol over its stream on a plain thread;
-/// a bad or missing one closes only that connection.
-async fn admit(
+/// One incoming connection: a retry first, then [`admit`] on its own task
+/// while an unauthenticated slot is free.
+fn on_incoming(gate: &Arc<Gate>, incoming: quinn::Incoming) {
+    // A retry first proves the peer can receive at the address it claims,
+    // before any handshake work or state.
+    if !incoming.remote_address_validated() && incoming.may_retry() {
+        let _ = incoming.retry();
+        return;
+    }
+    let Ok(permit) = Arc::clone(&gate.pending).try_acquire_owned() else {
+        incoming.refuse();
+        log_failure(
+            &gate.fails,
+            "refused a connection: too many unauthenticated",
+        );
+        return;
+    };
+    let gate = Arc::clone(gate);
+    tokio::spawn(async move {
+        let admitted = admit(incoming, Arc::clone(&gate)).await;
+        drop(permit);
+        if let Err(e) = admitted {
+            log_failure(&gate.fails, &e.to_string());
+        }
+    });
+}
+
+/// The handshake, the first stream and the token it starts with, all
+/// within [`TOKEN_TIMEOUT`].
+async fn handshake(
     incoming: quinn::Incoming,
-    token: [u8; TOKEN_LEN],
-    slot: Arc<Mutex<Slot>>,
-    changed: Arc<Notify>,
-    connect: Connect,
-    rt: Handle,
-) -> io::Result<()> {
+) -> io::Result<(
+    quinn::Connection,
+    quinn::SendStream,
+    quinn::RecvStream,
+    [u8; TOKEN_LEN],
+)> {
     let from = incoming.remote_address();
     let first = async {
         let conn = incoming.await.map_err(connection_error)?;
@@ -501,17 +538,45 @@ async fn admit(
     };
     // Dropping the handshake on timeout abandons the connection, which
     // quinn then closes.
-    let (conn, (send, recv, got)) = match tokio::time::timeout(TOKEN_TIMEOUT, first).await {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => return Err(io::Error::new(e.kind(), format!("{from}: {e}"))),
-        Err(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("{from}: no handshake and token in time"),
-            ));
-        }
-    };
-    if !ct_eq(&got, &token) {
+    match tokio::time::timeout(TOKEN_TIMEOUT, first).await {
+        Ok(Ok((conn, (send, recv, got)))) => Ok((conn, send, recv, got)),
+        Ok(Err(e)) => Err(io::Error::new(e.kind(), format!("{from}: {e}"))),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("{from}: no handshake and token in time"),
+        )),
+    }
+}
+
+/// Puts `conn` in the slot, closing any current client; its generation.
+fn take_slot(gate: &Gate, conn: &quinn::Connection) -> io::Result<u64> {
+    let mut s = lock_slot(gate)?;
+    if let Some(old) = s.current.take() {
+        old.close(VarInt::from_u32(CLOSE_REPLACED), b"replaced");
+    }
+    s.generation += 1;
+    s.current = Some(conn.clone());
+    Ok(s.generation)
+}
+
+/// Empties the slot if `generation` still holds it.
+fn release_slot(gate: &Gate, generation: u64) {
+    if let Ok(mut s) = gate.slot.lock()
+        && s.generation == generation
+    {
+        s.current = None;
+        s.idle_since = Instant::now();
+    }
+}
+
+/// Handshakes one incoming connection and checks its token, all within
+/// [`TOKEN_TIMEOUT`]. A good one takes the slot, closing any current
+/// client, and runs the proxy protocol over its stream on a plain thread;
+/// a bad or missing one closes only that connection.
+async fn admit(incoming: quinn::Incoming, gate: Arc<Gate>) -> io::Result<()> {
+    let from = incoming.remote_address();
+    let (conn, send, recv, got) = handshake(incoming).await?;
+    if !ct_eq(&got, &gate.token) {
         conn.close(VarInt::from_u32(CLOSE_BAD_TOKEN), b"bad token");
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -519,40 +584,27 @@ async fn admit(
         ));
     }
     conn.set_receive_window(VarInt::from_u32(AUTHED_WINDOW));
-    let generation = {
-        let mut s = slot.lock().map_err(|_| io::Error::other("slot poisoned"))?;
-        if let Some(old) = s.current.take() {
-            old.close(VarInt::from_u32(CLOSE_REPLACED), b"replaced");
-        }
-        s.generation += 1;
-        s.current = Some(conn.clone());
-        s.generation
-    };
-    changed.notify_one();
+    let generation = take_slot(&gate, &conn)?;
+    gate.changed.notify_one();
     eprintln!("grofe proxy --quic: client {}", conn.remote_address());
     let reader = QuicReader {
-        rt: rt.clone(),
+        rt: gate.rt.clone(),
         _keep: None,
         recv,
     };
     let writer = QuicWriter {
-        rt,
+        rt: gate.rt.clone(),
         _keep: None,
         send,
     };
     std::thread::spawn(move || {
-        let why = match crate::remote::proxy::run(reader, writer, connect) {
+        let why = match crate::remote::proxy::run(reader, writer, Arc::clone(&gate.connect)) {
             Ok(why) => why,
             Err(e) => e.to_string(),
         };
         conn.close(VarInt::from_u32(CLOSE_DONE), b"");
-        if let Ok(mut s) = slot.lock()
-            && s.generation == generation
-        {
-            s.current = None;
-            s.idle_since = Instant::now();
-        }
-        changed.notify_one();
+        release_slot(&gate, generation);
+        gate.changed.notify_one();
         eprintln!("grofe proxy --quic: client gone: {why}");
     });
     Ok(())

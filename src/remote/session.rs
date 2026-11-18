@@ -292,27 +292,8 @@ impl Loop {
         let mut clocks = Clocks::now();
         let mut last_tick = Instant::now();
         loop {
-            match rx.recv_timeout(TICK) {
-                Ok(Out::Input(bytes)) => self.input(a, bytes),
-                Ok(Out::Detach) => match &self.state {
-                    State::Online(c) => c.send(Frame::Detach),
-                    State::Offline { .. } => return Ok("detached".to_string()),
-                },
-                Ok(Out::Wake) => {
-                    if let State::Online(c) = &self.state
-                        && RESIZE_PENDING.swap(false, Ordering::SeqCst)
-                    {
-                        let (cols, rows) = client::tty_size();
-                        c.send(Frame::Resize(cols, rows));
-                    }
-                }
-                Ok(Out::Remote(ev)) => {
-                    if let Some(end) = self.event(a, ev) {
-                        return end;
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return Err("lost server".to_string()),
+            if let Some(end) = self.receive(a, rx.recv_timeout(TICK)) {
+                return end;
             }
             if self.detach.fired {
                 return Ok("detached".to_string());
@@ -321,28 +302,66 @@ impl Loop {
                 self.switch_to(a, to);
             }
             let now = Clocks::now();
-            if let State::Offline { next } = &mut self.state {
-                if woke(clocks, now) && next.is_some() {
-                    *next = Some(now.mono);
-                }
-                if next.is_some_and(|t| now.mono >= t) {
-                    *next = None;
-                    self.attempt(a);
-                }
-                self.draw_bar(&a.host);
-            }
+            self.offline_step(a, clocks, now);
             clocks = now;
             if now.mono.duration_since(last_tick) >= TICK {
                 last_tick = now.mono;
-                self.with_hooks(a, |hooks, cx| {
-                    for h in hooks {
-                        h.tick(cx, now.mono);
-                    }
-                });
-                if matches!(self.state, State::Online(_)) {
-                    self.redraw_changed_overlay();
+                self.tick_hooks(a, now.mono);
+            }
+        }
+    }
+
+    /// One message from the queue (or the lack of one); `Some` ends the client.
+    fn receive(
+        &mut self,
+        a: &mut RemoteAttach,
+        msg: Result<Out, RecvTimeoutError>,
+    ) -> Option<Result<String, String>> {
+        match msg {
+            Ok(Out::Input(bytes)) => self.input(a, bytes),
+            Ok(Out::Detach) => match &self.state {
+                State::Online(c) => c.send(Frame::Detach),
+                State::Offline { .. } => return Some(Ok("detached".to_string())),
+            },
+            Ok(Out::Wake) => {
+                if let State::Online(c) = &self.state
+                    && RESIZE_PENDING.swap(false, Ordering::SeqCst)
+                {
+                    let (cols, rows) = client::tty_size();
+                    c.send(Frame::Resize(cols, rows));
                 }
             }
+            Ok(Out::Remote(ev)) => return self.event(a, ev),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Some(Err("lost server".to_string())),
+        }
+        None
+    }
+
+    /// While offline: starts the next attempt when it is due (at once after
+    /// a sleep, `clocks` being the previous look) and keeps the bar drawn.
+    fn offline_step(&mut self, a: &RemoteAttach, clocks: Clocks, now: Clocks) {
+        if let State::Offline { next } = &mut self.state {
+            if woke(clocks, now) && next.is_some() {
+                *next = Some(now.mono);
+            }
+            if next.is_some_and(|t| now.mono >= t) {
+                *next = None;
+                self.attempt(a);
+            }
+            self.draw_bar(&a.host);
+        }
+    }
+
+    /// [`Hook::tick`] for every hook, then the overlay if it changed.
+    fn tick_hooks(&mut self, a: &mut RemoteAttach, now: Instant) {
+        self.with_hooks(a, |hooks, cx| {
+            for h in hooks {
+                h.tick(cx, now);
+            }
+        });
+        if matches!(self.state, State::Online(_)) {
+            self.redraw_changed_overlay();
         }
     }
 

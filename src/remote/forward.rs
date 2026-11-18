@@ -269,66 +269,11 @@ impl Forwarding {
         match input {
             Input::Keys(bytes) => self.keys(&bytes, now, &mut out),
             Input::Tick => self.tick(now, &mut out),
-            Input::Event(Event::OpenUrl { url, .. }) => {
-                if !is_file_url(&url) {
-                    out.push(Action::OpenUrl(url));
-                } else {
-                    match text::local_file_to_open(&url) {
-                        Ok(()) => self.ask(Ask::Open(url), &mut out),
-                        Err(e) => {
-                            out.push(Action::Message(format!("grofe: not opening a url: {e}")))
-                        }
-                    }
-                }
-            }
-            Input::Event(Event::PortsChanged { pane, ports }) => {
-                self.ports(pane, ports.into_iter().collect(), &mut out)
-            }
-            Input::Event(Event::PaneExited { pane, .. }) => {
-                self.ports(pane, BTreeSet::new(), &mut out);
-                self.pane_ports.remove(&pane);
-            }
-            Input::Event(_) => {}
-            Input::Resync(panes) => {
-                let known: Vec<PaneId> = self.pane_ports.keys().copied().collect();
-                for pane in known {
-                    if !panes.iter().any(|(p, _)| *p == pane) {
-                        self.ports(pane, BTreeSet::new(), &mut out);
-                        self.pane_ports.remove(&pane);
-                    }
-                }
-                for (pane, ports) in panes {
-                    self.ports(pane, ports.into_iter().collect(), &mut out);
-                }
-            }
+            Input::Event(event) => self.event(event, &mut out),
+            Input::Resync(panes) => self.resync(panes, &mut out),
             Input::Answer(answer) => self.answer(&answer, now, &mut out),
-            Input::DirResolved(paste, dir) => match self.settings.upload_paste {
-                UploadMode::On => out.push(Action::Upload {
-                    dir: dir.path,
-                    paste,
-                }),
-                UploadMode::Ask => self.ask(Ask::Upload(paste, dir), &mut out),
-                UploadMode::Off => {
-                    send(&mut out, &bracketed(&paste.original));
-                    self.release(now, &mut out);
-                }
-            },
-            Input::Uploaded {
-                result: Ok(paths), ..
-            } => {
-                let quoted: Vec<String> = paths.iter().map(|p| shell_quote(p)).collect();
-                send(&mut out, &bracketed(quoted.join(" ").as_bytes()));
-                self.release(now, &mut out);
-            }
-            Input::Uploaded {
-                paste,
-                result: Err(e),
-            } => {
-                // The text stays: only the upload failed.
-                out.push(Action::Message(format!("grofe: {e}")));
-                send(&mut out, &bracketed(&paste.original));
-                self.release(now, &mut out);
-            }
+            Input::DirResolved(paste, dir) => self.dir_resolved(paste, dir, now, &mut out),
+            Input::Uploaded { paste, result } => self.uploaded(paste, result, now, &mut out),
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
                     "forwarding {}:{remote} to localhost:{local}",
@@ -348,6 +293,85 @@ impl Forwarding {
             }
         }
         out
+    }
+
+    fn event(&mut self, event: Event, out: &mut Vec<Action>) {
+        match event {
+            Event::OpenUrl { url, .. } => {
+                if !is_file_url(&url) {
+                    out.push(Action::OpenUrl(url));
+                } else {
+                    match text::local_file_to_open(&url) {
+                        Ok(()) => self.ask(Ask::Open(url), out),
+                        Err(e) => {
+                            out.push(Action::Message(format!("grofe: not opening a url: {e}")))
+                        }
+                    }
+                }
+            }
+            Event::PortsChanged { pane, ports } => {
+                self.ports(pane, ports.into_iter().collect(), out)
+            }
+            Event::PaneExited { pane, .. } => {
+                self.ports(pane, BTreeSet::new(), out);
+                self.pane_ports.remove(&pane);
+            }
+            _ => {}
+        }
+    }
+
+    fn resync(&mut self, panes: Vec<(PaneId, Vec<u16>)>, out: &mut Vec<Action>) {
+        let known: Vec<PaneId> = self.pane_ports.keys().copied().collect();
+        for pane in known {
+            if !panes.iter().any(|(p, _)| *p == pane) {
+                self.ports(pane, BTreeSet::new(), out);
+                self.pane_ports.remove(&pane);
+            }
+        }
+        for (pane, ports) in panes {
+            self.ports(pane, ports.into_iter().collect(), out);
+        }
+    }
+
+    fn dir_resolved(
+        &mut self,
+        paste: FilePaste,
+        dir: UploadDir,
+        now: Instant,
+        out: &mut Vec<Action>,
+    ) {
+        match self.settings.upload_paste {
+            UploadMode::On => out.push(Action::Upload {
+                dir: dir.path,
+                paste,
+            }),
+            UploadMode::Ask => self.ask(Ask::Upload(paste, dir), out),
+            UploadMode::Off => {
+                send(out, &bracketed(&paste.original));
+                self.release(now, out);
+            }
+        }
+    }
+
+    fn uploaded(
+        &mut self,
+        paste: FilePaste,
+        result: Result<Vec<String>, String>,
+        now: Instant,
+        out: &mut Vec<Action>,
+    ) {
+        match result {
+            Ok(paths) => {
+                let quoted: Vec<String> = paths.iter().map(|p| shell_quote(p)).collect();
+                send(out, &bracketed(quoted.join(" ").as_bytes()));
+            }
+            Err(e) => {
+                // The text stays: only the upload failed.
+                out.push(Action::Message(format!("grofe: {e}")));
+                send(out, &bracketed(&paste.original));
+            }
+        }
+        self.release(now, out);
     }
 
     fn keys(&mut self, bytes: &[u8], now: Instant, out: &mut Vec<Action>) {
