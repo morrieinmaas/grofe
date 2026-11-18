@@ -154,44 +154,65 @@ impl Drop for Remote {
     }
 }
 
+fn quic_attach(r: &Remote, env: &[(&str, &str)]) -> Harness {
+    let mut c = r.client(&["--transport", "quic"]);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    Harness::spawn(c, 80, 24)
+}
+
 #[test]
-fn a_one_shot_runs_over_quic() {
+fn a_one_shot_under_quic_uses_ssh_and_leaves_a_quic_attach_alone() {
     let r = Remote::new();
-    r.srv.cmd(&["new-session", "-d", "-s", "alpha"]).unwrap();
+    let mut h = quic_attach(&r, &[]);
+    h.wait_for(common::PROMPT.trim());
+    assert_eq!(r.bootstraps(), 1);
+    let proxy = r.proxies();
+    assert_eq!(proxy.len(), 1);
+    assert_eq!(r.quic_clients(), 1);
+
     let out = run_bounded(
         r.client(&["--transport", "quic", "list-sessions"]),
         CMD_TIMEOUT,
     );
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout, r.srv.run(&["list-sessions"]).stdout);
-    assert!(!out.stderr.contains("using ssh"), "{}", out.stderr);
-    assert_eq!(r.bootstraps(), 1);
-    assert_eq!(r.proxies().len(), 1);
-    assert_eq!(r.quic_clients(), 1);
+    assert_eq!(r.bootstraps(), 1, "the one-shot started a QUIC proxy");
+    assert_eq!(r.proxies(), proxy);
+    assert!(
+        !common::process_gone(proxy[0]),
+        "the attach's proxy stopped"
+    );
+
+    h.send("echo still-here\r");
+    h.wait_for("still-here");
+    h.send("\x02d");
+    h.wait_exit();
+    r.assert_proxies_stop();
 }
 
 #[test]
 fn silent_udp_falls_back_to_ssh_and_says_so() {
     let r = Remote::new();
-    r.srv.cmd(&["new-session", "-d", "-s", "alpha"]).unwrap();
     let quiet = UdpSocket::bind("127.0.0.1:0").unwrap();
     fs::write(
         r.root().join("silent"),
         quiet.local_addr().unwrap().port().to_string(),
     )
     .unwrap();
-    let out = run_bounded(
-        r.client(&["--transport", "quic", "list-sessions"]),
-        Duration::from_secs(40),
-    );
-    assert!(out.status.success(), "{out:?}");
-    assert_eq!(out.stdout, r.srv.run(&["list-sessions"]).stdout);
+    let mut h = quic_attach(&r, &[]);
+    h.wait_for_timeout(common::PROMPT.trim(), Duration::from_secs(40));
+    let said = String::from_utf8_lossy(h.output()).into_owned();
     assert!(
-        out.stderr.contains("over UDP") && out.stderr.contains("using ssh instead"),
-        "{}",
-        out.stderr
+        said.contains("over UDP") && said.contains("using ssh instead"),
+        "{said}"
     );
-    assert_eq!(out.stderr.lines().count(), 1, "{}", out.stderr);
+    h.send("echo over-ssh\r");
+    h.wait_for("over-ssh");
+    assert_eq!(r.quic_clients(), 0);
+    h.send("\x02d");
+    h.wait_exit();
     r.assert_proxies_stop();
 }
 
