@@ -103,7 +103,7 @@ pub fn session_closed(state: &State, session: SessionId) {
     let _ = std::fs::remove_file(paths::agent_link(&state.socket, session.0));
 }
 
-/// The server is exiting: every agent link of this instance goes.
+/// The server is starting or exiting: every agent link of this instance goes.
 pub fn remove_links(state: &State) {
     let link = paths::agent_link(&state.socket, 0);
     let Some(prefix) = link

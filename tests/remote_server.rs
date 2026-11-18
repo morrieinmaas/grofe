@@ -177,6 +177,32 @@ fn a_link_nothing_made_starts_at_the_global_agent() {
 }
 
 #[test]
+fn a_link_a_dead_server_left_does_not_carry_over() {
+    let srv = TestServer::unstarted();
+    // The socket's directory first: the link's name hashes its real path.
+    fs::create_dir_all(srv.socket.parent().unwrap()).expect("socket dir");
+    let stale = link(&srv, 0);
+    grofe::paths::ensure_private_dir(stale.parent().unwrap()).expect("agent dir");
+    std::os::unix::fs::symlink("/tmp/agent-of-a-dead-server", &stale).expect("plant");
+    srv.cmd(&["start-server"]).expect("start");
+    srv.cmd(&[
+        "set-environment",
+        "-g",
+        "SSH_AUTH_SOCK",
+        "/tmp/agent-global",
+    ])
+    .expect("global agent");
+    let mut cmd = srv.command();
+    cmd.env_remove("SSH_AUTH_SOCK")
+        .args(["new-session", "-d", "-s", "main"]);
+    assert!(run_bounded(cmd, CMD_TIMEOUT).status.success());
+    assert_eq!(
+        fs::read_link(&stale).expect("the new session's link"),
+        Path::new("/tmp/agent-global")
+    );
+}
+
+#[test]
 fn the_link_goes_with_its_session() {
     let srv = server();
     run_with_agent(&srv, "/tmp/agent-one", &["new-session", "-d", "-s", "main"]);
