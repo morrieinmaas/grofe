@@ -18,12 +18,8 @@ fn run(f: &mut Forwarding, input: Input, now: Instant) -> Vec<Action> {
     while let Some(input) = inputs.pop() {
         for action in f.handle(input, now) {
             match action {
-                Action::CheckFiles { paths, original } => inputs.push(Input::FilesChecked {
-                    original,
-                    files: check_files(paths),
-                }),
-                Action::CheckOpen(url) => {
-                    inputs.push(Input::OpenChecked(text::local_file_to_open(&url)))
+                local @ (Action::CheckFiles { .. } | Action::CheckOpen(_)) => {
+                    inputs.extend(run_local(local))
                 }
                 other => out.push(other),
             }
@@ -119,6 +115,7 @@ fn a_file_paste_split_across_reads_asks_and_uploads() {
         from = cut;
     }
     let paste = FilePaste {
+        id: 1,
         files: vec![a.clone(), b.clone()],
         sizes: vec![3_000_000, 100_000],
         total: 3_100_000,
@@ -253,13 +250,17 @@ fn over_the_cap_says_so_and_pastes_the_text() {
 
 #[test]
 fn a_failed_upload_says_so_and_pastes_the_text() {
+    let (_d, a, _) = files();
     let mut f = fw(UploadMode::On, ForwardMode::Ask);
-    let paste = FilePaste {
-        files: vec!["/a".into()],
-        sizes: vec![1],
-        total: 1,
-        original: b"/a".to_vec(),
+    let got = run(
+        &mut f,
+        Input::Keys(bracketed(escaped(&a).as_bytes())),
+        Instant::now(),
+    );
+    let [Action::ResolveDir(paste)] = got.as_slice() else {
+        panic!("{got:?}");
     };
+    let paste = paste.clone();
     let failed = Input::Uploaded {
         paste,
         arrived: Vec::new(),
@@ -271,7 +272,7 @@ fn a_failed_upload_says_so_and_pastes_the_text() {
         run(&mut f, failed, Instant::now()),
         [
             Action::Message("grofe: upload of a failed: broken pipe".into()),
-            Action::Send(b"\x1b[200~/a\x1b[201~".to_vec())
+            Action::Send(bracketed(escaped(&a).as_bytes()))
         ]
     );
 }

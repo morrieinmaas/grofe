@@ -29,6 +29,8 @@ pub enum Typed {
 #[derive(Debug)]
 pub struct Held {
     pub bytes: Vec<u8>,
+    /// The paste's id ([`super::FilePaste::id`]).
+    pub id: u64,
     /// The paste's own text, for when it is given up.
     pub original: Vec<u8>,
     prefix: Option<Key>,
@@ -39,9 +41,10 @@ pub struct Held {
 }
 
 impl Held {
-    pub fn new(original: Vec<u8>, prefix: Option<Key>) -> Held {
+    pub fn new(id: u64, original: Vec<u8>, prefix: Option<Key>) -> Held {
         Held {
             bytes: Vec::new(),
+            id,
             original,
             prefix,
             armed: false,
@@ -102,7 +105,7 @@ mod tests {
 
     #[test]
     fn the_prefix_and_its_key_go_through_and_the_rest_waits() {
-        let mut h = Held::new(Vec::new(), Held::default_prefix());
+        let mut h = Held::new(0, Vec::new(), Held::default_prefix());
         assert_eq!(h.take(b"ls"), Typed::Queued);
         assert_eq!(h.take(b"\x02"), Typed::Through);
         assert_eq!(h.take(b"d"), Typed::Through);
@@ -116,7 +119,7 @@ mod tests {
 
     #[test]
     fn esc_or_c_c_cancels() {
-        let mut h = Held::new(Vec::new(), Held::default_prefix());
+        let mut h = Held::new(0, Vec::new(), Held::default_prefix());
         assert_eq!(h.take(b"\x03"), Typed::Cancel);
         assert_eq!(h.take(b"\x1b"), Typed::Cancel);
         assert_eq!(h.take(b"\x1b[99;5u"), Typed::Cancel);
@@ -124,7 +127,7 @@ mod tests {
 
     #[test]
     fn typing_past_the_cap_is_dropped_with_one_message() {
-        let mut h = Held::new(Vec::new(), None);
+        let mut h = Held::new(0, Vec::new(), None);
         let big = vec![b'x'; MAX_QUEUED];
         assert_eq!(h.take(&big), Typed::Queued);
         assert_eq!(h.take(b"y"), Typed::Dropped { first: true });

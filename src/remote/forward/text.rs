@@ -278,6 +278,7 @@ mod tests {
     #[test]
     fn prompt_texts() {
         let paste = FilePaste {
+            id: 1,
             files: vec!["/a".into(), "/b".into()],
             sizes: vec![3_000_000, 100_000],
             total: 3_100_000,
@@ -292,6 +293,7 @@ mod tests {
             "upload 2 files (3.1 MB) to host:~/src? [y/N]"
         );
         let one = FilePaste {
+            id: 2,
             files: vec!["/a".into()],
             sizes: vec![12],
             total: 12,

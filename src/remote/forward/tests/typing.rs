@@ -118,13 +118,18 @@ fn a_new_question_after_a_dropped_one_shows_the_first_again() {
 
 #[test]
 fn an_upload_that_fails_part_way_pastes_what_arrived() {
+    let (_d, a, b) = files();
     let mut f = fw(UploadMode::On, ForwardMode::Ask);
-    let paste = FilePaste {
-        files: vec!["/a".into(), "/b".into(), "/c".into()],
-        sizes: vec![1, 1, 1],
-        total: 3,
-        original: b"/a /b /c".to_vec(),
+    let text = format!("{} {}", escaped(&a), escaped(&b));
+    let got = run(
+        &mut f,
+        Input::Keys(bracketed(text.as_bytes())),
+        Instant::now(),
+    );
+    let [Action::ResolveDir(paste)] = got.as_slice() else {
+        panic!("{got:?}");
     };
+    let paste = paste.clone();
     let part = Input::Uploaded {
         paste,
         arrived: vec!["/r/a".into()],
@@ -136,7 +141,7 @@ fn an_upload_that_fails_part_way_pastes_what_arrived() {
         run(&mut f, part, Instant::now()),
         [
             Action::Message(
-                "grofe: upload of b failed: broken pipe (1 of 3 uploaded, their paths pasted)"
+                "grofe: upload of b failed: broken pipe (1 of 2 uploaded, their paths pasted)"
                     .into()
             ),
             Action::Send(b"\x1b[200~'/r/a'\x1b[201~".to_vec())
@@ -153,6 +158,7 @@ fn path_checks_go_to_the_worker_not_the_input_thread() {
     assert_eq!(
         got,
         [Action::CheckFiles {
+            id: 1,
             paths: vec!["/hung/mount/file".into()],
             original: b"/hung/mount/file".to_vec()
         }]
@@ -257,6 +263,7 @@ fn esc_while_a_paste_is_looked_at_gives_it_up_as_text() {
     assert_eq!(f.handle(keys(b"x"), now), [Action::Send(b"x".to_vec())]);
     // The check answering late changes nothing.
     let late = Input::FilesChecked {
+        id: 1,
         original: b"/hung/mount/file".to_vec(),
         files: Some(vec![("/hung/mount/file".into(), 1)]),
     };
@@ -319,4 +326,33 @@ fn a_known_prefix_is_kept() {
     );
     assert_eq!(f.handle(keys(b"d"), now), [Action::Send(b"d".to_vec())]);
     assert_eq!(f.handle(keys(b"\x02"), now), []);
+}
+
+#[test]
+fn a_late_check_of_a_paste_given_up_never_counts_for_the_same_paste_again() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = bracketed(escaped(&a).as_bytes());
+    let first = f.handle(Input::Keys(paste.clone()), now);
+    let [Action::CheckFiles { id: stale, .. }] = first.as_slice() else {
+        panic!("{first:?}");
+    };
+    let stale = *stale;
+    // Esc gives it up; the same file is dropped again.
+    f.handle(keys(b"\x1b"), now);
+    let again = f.handle(Input::Keys(paste), now);
+    let [Action::CheckFiles { id: fresh, .. }] = again.as_slice() else {
+        panic!("{again:?}");
+    };
+    assert_ne!(*fresh, stale);
+    // The first check answers late, with the same text: nothing happens,
+    // and typing still waits for the second.
+    let late = Input::FilesChecked {
+        id: stale,
+        original: escaped(&a).into_bytes(),
+        files: Some(vec![(a.clone(), 3_000_000)]),
+    };
+    assert_eq!(f.handle(late, now), []);
+    assert_eq!(f.handle(keys(b"ls"), now), []);
 }

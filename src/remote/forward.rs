@@ -52,6 +52,9 @@ pub const FALLBACK_UPLOAD_DIR: &str = "~/.cache/grofe/uploads";
 /// A bracketed paste of local files, waiting for its upload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilePaste {
+    /// Which paste this is: each one typing waits for gets its own, so a
+    /// late answer for a paste given up never counts for the next.
+    pub id: u64,
     pub files: Vec<PathBuf>,
     /// Each file's size when pasted: what is sent of it, so a file that
     /// grows meanwhile cannot pass `remote-upload-max`.
@@ -84,6 +87,7 @@ pub enum Input {
     /// [`Action::CheckFiles`]'s result: each path's size when every one is
     /// a local regular file, else `None` (the paste is text).
     FilesChecked {
+        id: u64,
         original: Vec<u8>,
         files: Option<Vec<(PathBuf, u64)>>,
     },
@@ -142,6 +146,7 @@ pub enum Action {
     /// Look at a paste's paths ([`Input::FilesChecked`]): off the input
     /// thread, as a path on a hung mount blocks.
     CheckFiles {
+        id: u64,
         paths: Vec<PathBuf>,
         original: Vec<u8>,
     },
@@ -195,6 +200,8 @@ pub struct Forwarding {
     prefix: Option<crate::server::input::Key>,
     /// An upload runs: Esc or C-c cancels it.
     uploading: bool,
+    /// The last paste id given out.
+    next_paste: u64,
     /// Whether the front ask is on screen. A prompt can go unanswered (a
     /// link drop, another prompt in its place): then it is shown again.
     showing: bool,
@@ -217,6 +224,7 @@ impl Forwarding {
             showing: false,
             prefix: typing::Held::default_prefix(),
             uploading: false,
+            next_paste: 0,
         }
     }
 
@@ -253,9 +261,11 @@ impl Forwarding {
             Input::Event(event) => self.event(event, &mut out),
             Input::Resync(panes) => self.resync(panes, &mut out),
             Input::Answer(answer) => self.answer(&answer, now, &mut out),
-            Input::FilesChecked { original, files } => {
-                self.files_checked(original, files, now, &mut out)
-            }
+            Input::FilesChecked {
+                id,
+                original,
+                files,
+            } => self.files_checked(id, original, files, now, &mut out),
             Input::OpenChecked(Ok(url)) => self.ask(Ask::Open(url), &mut out),
             Input::OpenChecked(Err(e)) => {
                 out.push(Action::Message(format!("grofe: not opening a url: {e}")))
@@ -268,7 +278,7 @@ impl Forwarding {
                 error,
                 cancelled,
                 grew,
-            } => {
+            } if self.pending_is(paste.id) => {
                 self.uploading = false;
                 if cancelled {
                     self.cancelled(paste, arrived, now, &mut out);
@@ -276,6 +286,8 @@ impl Forwarding {
                     self.uploaded(paste, arrived, error, grew, now, &mut out);
                 }
             }
+            // Not the paste typing waits for: nothing to do.
+            Input::Uploaded { .. } => {}
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
                     "forwarding {}:{remote} to localhost:{local}",
@@ -337,7 +349,7 @@ impl Forwarding {
         now: Instant,
         out: &mut Vec<Action>,
     ) {
-        if !self.pending_is(&paste.original) {
+        if !self.pending_is(paste.id) {
             return; // given up meanwhile (Esc)
         }
         match self.settings.upload_paste {
@@ -499,8 +511,11 @@ impl Forwarding {
             return send(out, &bracketed(&content));
         };
         // Typing waits from here until the paste is done.
-        self.queued = Some(typing::Held::new(content.clone(), self.prefix));
+        self.next_paste += 1;
+        let id = self.next_paste;
+        self.queued = Some(typing::Held::new(id, content.clone(), self.prefix));
         out.push(Action::CheckFiles {
+            id,
             paths,
             original: content,
         });
@@ -509,12 +524,13 @@ impl Forwarding {
     /// The paste's paths as the worker found them.
     fn files_checked(
         &mut self,
+        id: u64,
         content: Vec<u8>,
         files: Option<Vec<(PathBuf, u64)>>,
         now: Instant,
         out: &mut Vec<Action>,
     ) {
-        if !self.pending_is(&content) {
+        if !self.pending_is(id) {
             return; // given up meanwhile (Esc)
         }
         let Some(files) = files else {
@@ -534,6 +550,7 @@ impl Forwarding {
             return self.release(now, out);
         }
         out.push(Action::ResolveDir(FilePaste {
+            id,
             files,
             sizes,
             total,
@@ -608,9 +625,9 @@ impl Forwarding {
         }
     }
 
-    /// Whether the paste typing waits for is the one with this text.
-    fn pending_is(&self, original: &[u8]) -> bool {
-        self.queued.as_ref().is_some_and(|h| h.original == original)
+    /// Whether paste `id` is the one typing waits for.
+    fn pending_is(&self, id: u64) -> bool {
+        self.queued.as_ref().is_some_and(|h| h.id == id)
     }
 
     /// Esc or C-c before the upload: the paste goes as text, and the typing
@@ -618,9 +635,9 @@ impl Forwarding {
     /// to finish unheard.
     fn give_up(&mut self, now: Instant, out: &mut Vec<Action>) {
         let Some(held) = &self.queued else { return };
-        let original = held.original.clone();
+        let (id, original) = (held.id, held.original.clone());
         self.asks
-            .retain(|a| !matches!(a, Ask::Upload(p, _) if p.original == original));
+            .retain(|a| !matches!(a, Ask::Upload(p, _) if p.id == id));
         send(out, &bracketed(&original));
         self.release(now, out);
     }

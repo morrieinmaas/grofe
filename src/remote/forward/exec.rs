@@ -78,7 +78,12 @@ pub fn run_slow(link: &Link, target: Option<&str>, action: Action) -> Option<Inp
 /// no connection needed.
 pub fn run_local(action: Action) -> Option<Input> {
     match action {
-        Action::CheckFiles { paths, original } => Some(Input::FilesChecked {
+        Action::CheckFiles {
+            id,
+            paths,
+            original,
+        } => Some(Input::FilesChecked {
+            id,
             original,
             files: check_files(paths),
         }),
