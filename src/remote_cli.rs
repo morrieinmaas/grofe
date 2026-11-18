@@ -41,7 +41,11 @@ pub(super) fn remote_route(globals: &Globals, rest: &[String]) -> Option<ExitCod
         (host, machine) => host.as_ref().or(machine.as_ref()),
     };
     match (host, url) {
-        (None, None) => None,
+        (None, None) => stray_remote_flag(&globals.remote).map(|flag| {
+            fail(&format!(
+                "grofe: {flag} needs -r <host> or --machine <name>"
+            ))
+        }),
         (Some(_), Some(_)) => Some(fail("grofe: -r and an ssh:// target cannot go together")),
         (Some(host), None) => {
             // A saved machine's name stands for its target, session and
@@ -538,6 +542,20 @@ pub(super) struct RemoteFlags {
     pub(super) machine: Option<String>,
     /// `--machines`: the multi-machine client.
     pub(super) machines: bool,
+}
+
+/// The first remote-only option given (`--transport`, `--install`,
+/// `--no-install`, `--install-from`), for a call that runs nowhere remote.
+fn stray_remote_flag(flags: &RemoteFlags) -> Option<&'static str> {
+    if flags.transport.is_some() {
+        return Some("--transport");
+    }
+    match flags.install {
+        Install::Ask => None,
+        Install::Yes => Some("--install"),
+        Install::No => Some("--no-install"),
+        Install::From(_) => Some("--install-from"),
+    }
 }
 
 /// The global options that belong to a remote call ([`RemoteFlags`]).
