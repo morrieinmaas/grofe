@@ -224,8 +224,11 @@ pub fn render_picker(machines: &[MachineView], selected: usize, cols: u16, rows:
     let border = |out: &mut String, row: usize, l: char, fill: &str, r: char| {
         out.push_str(&format!("\x1b[{row};{left}H\x1b[0m{l}{fill}{r}"));
     };
-    let mut top_fill = format!("─{title}");
-    top_fill.push_str(&"─".repeat(width - 2 - title.width() - 1));
+    // Between the corners: one rule, the title cut to what is left, rules.
+    let room = width - 2;
+    let shown = &title[..title.len().min(room - 1)];
+    let mut top_fill = format!("─{shown}");
+    top_fill.push_str(&"─".repeat(room - 1 - shown.width()));
     border(&mut out, top, '╭', &top_fill, '╮');
     if machines.is_empty() {
         let text = fit(EMPTY, inner);
@@ -457,6 +460,26 @@ mod tests {
         assert!(selected[0].0.contains("m11"), "{text:#?}");
         assert!(text.iter().any(|l| l.contains("m8")) && !text.iter().any(|l| l.contains("m7 ")));
         assert!(render_picker(&list, 0, 3, 2).is_empty());
+    }
+
+    #[test]
+    fn picker_fits_any_screen_it_draws_on() {
+        let list = [
+            view("local", Link::Connected, &[("claude", "working")]),
+            view("box", Link::Offline, &[]),
+        ];
+        for cols in 4..=12u16 {
+            for rows in 3..=6u16 {
+                for selected in 0..2 {
+                    let bytes = render_picker(&list, selected, cols, rows);
+                    let screen = draw(&bytes, usize::from(cols), usize::from(rows));
+                    let top = screen.iter().find(|r| r.0.contains('╭'));
+                    let top = top.unwrap_or_else(|| panic!("{cols}x{rows}: no box"));
+                    assert!(top.0.trim_end().ends_with('╮'), "{cols}x{rows}: {top:?}");
+                }
+            }
+        }
+        assert!(render_picker(&list, 0, 4, 2).is_empty());
     }
 
     #[test]
