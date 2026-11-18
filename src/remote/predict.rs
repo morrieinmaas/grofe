@@ -174,6 +174,52 @@ enum Status {
     Mismatch,
 }
 
+/// One step of [`Predictor::parse`].
+enum Step {
+    /// A key and how many bytes it took.
+    Key(Key, usize),
+    /// The rest is the start of a key cut off by the end of the read: keep
+    /// it for the next one, flushing first if `flush`.
+    Cut { flush: bool },
+}
+
+/// The key a byte other than ESC at the start of `rest` begins, outside a
+/// paste.
+fn byte_key(rest: &[u8]) -> Step {
+    match rest[0] {
+        0x08 | 0x7f => Step::Key(Key::Back, 1),
+        b @ 0x20..=0x7e => Step::Key(Key::Char(b as char), 1),
+        0x00..=0x1f => Step::Key(Key::Flush, 1),
+        _ => utf8_key(rest),
+    }
+}
+
+/// A UTF-8 char at the start of `rest`.
+fn utf8_key(rest: &[u8]) -> Step {
+    let need = match rest[0] {
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf7 => 4,
+        _ => 1,
+    };
+    let have = rest.len();
+    let tail = &rest[1..need.min(have)];
+    if tail.iter().any(|b| !(0x80..=0xbf).contains(b)) {
+        // Not UTF-8: leave the following bytes (maybe an ESC) alone.
+        return Step::Key(Key::Flush, 1);
+    }
+    if need > have {
+        return Step::Cut { flush: false };
+    }
+    let c = std::str::from_utf8(&rest[..need])
+        .ok()
+        .and_then(|s| s.chars().next());
+    match c {
+        Some(c) if !c.is_control() => Step::Key(Key::Char(c), need),
+        _ => Step::Key(Key::Flush, need),
+    }
+}
+
 enum Key {
     Char(char),
     Back,
@@ -350,72 +396,46 @@ impl Predictor {
         let mut keys = Vec::new();
         let mut i = 0;
         while i < buf.len() {
-            let b = buf[i];
-            match b {
-                0x1b => {
-                    let Some((key, len)) = escape(&buf[i..]) else {
-                        // Cut off by the end of the read: flush now, finish it next time.
-                        keys.push(Key::Flush);
-                        self.carry = buf[i..].to_vec();
-                        break;
-                    };
-                    match key {
-                        Key::Paste(on) => {
-                            self.in_paste = on;
-                            keys.push(Key::Flush);
-                        }
-                        _ if self.in_paste => keys.push(Key::Flush),
-                        key => keys.push(key),
-                    }
+            let rest = &buf[i..];
+            let step = if rest[0] == 0x1b {
+                self.escape_key(rest)
+            } else if self.in_paste {
+                Step::Key(Key::Flush, 1)
+            } else {
+                byte_key(rest)
+            };
+            match step {
+                Step::Key(key, len) => {
+                    keys.push(key);
                     i += len;
                 }
-                _ if self.in_paste => {
-                    keys.push(Key::Flush);
-                    i += 1;
-                }
-                0x08 | 0x7f => {
-                    keys.push(Key::Back);
-                    i += 1;
-                }
-                0x20..=0x7e => {
-                    keys.push(Key::Char(b as char));
-                    i += 1;
-                }
-                0x00..=0x1f => {
-                    keys.push(Key::Flush);
-                    i += 1;
-                }
-                _ => {
-                    let need = match b {
-                        0xc0..=0xdf => 2,
-                        0xe0..=0xef => 3,
-                        0xf0..=0xf7 => 4,
-                        _ => 1,
-                    };
-                    let have = buf.len() - i;
-                    let tail = &buf[i + 1..i + need.min(have)];
-                    if tail.iter().any(|b| !(0x80..=0xbf).contains(b)) {
-                        // Not UTF-8: leave the following bytes (maybe an ESC) alone.
+                Step::Cut { flush } => {
+                    if flush {
                         keys.push(Key::Flush);
-                        i += 1;
-                        continue;
                     }
-                    if need > have {
-                        self.carry = buf[i..].to_vec();
-                        break;
-                    }
-                    let c = std::str::from_utf8(&buf[i..i + need])
-                        .ok()
-                        .and_then(|s| s.chars().next());
-                    match c {
-                        Some(c) if !c.is_control() => keys.push(Key::Char(c)),
-                        _ => keys.push(Key::Flush),
-                    }
-                    i += need;
+                    self.carry = rest.to_vec();
+                    break;
                 }
             }
         }
         keys
+    }
+
+    /// The key an escape sequence at the start of `rest` stands for; a
+    /// paste marker switches [`Predictor::in_paste`].
+    fn escape_key(&mut self, rest: &[u8]) -> Step {
+        let Some((key, len)) = escape(rest) else {
+            // Cut off by the end of the read: flush now, finish it next time.
+            return Step::Cut { flush: true };
+        };
+        match key {
+            Key::Paste(on) => {
+                self.in_paste = on;
+                Step::Key(Key::Flush, len)
+            }
+            _ if self.in_paste => Step::Key(Key::Flush, len),
+            key => Step::Key(key, len),
+        }
     }
 
     fn can_predict(&self) -> bool {
