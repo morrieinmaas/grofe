@@ -52,7 +52,7 @@ shift 2
 case "$*" in *"proxy --quic"*) echo quic >> '{root}/bootstraps' ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
-export GROFE_REMOTE_UDP_PORTS=47100-47999
+export GROFE_REMOTE_UDP_PORTS="$(cat '{root}/udp-ports' 2>/dev/null || echo 47100-47999)"
 unset GROFE_PANE TMUX
 case "$*" in *"proxy --quic"*) [ -e '{root}/silent' ] && {{
   /bin/sh -c "$*" | /usr/bin/sed "s/\"port\":[0-9]*/\"port\":$(cat '{root}/silent')/"
@@ -286,4 +286,30 @@ fn a_gone_proxy_is_bootstrapped_again_over_ssh() {
     h.send("\x02d");
     h.wait_exit();
     r.assert_proxies_stop();
+}
+
+#[test]
+fn a_failing_proxy_quic_falls_back_to_ssh_and_says_why() {
+    let r = Remote::new();
+    // A grofe that knows `proxy --quic` but cannot run it there.
+    fs::write(r.root().join("udp-ports"), "0-0").unwrap();
+    let mut h = quic_attach(&r, &[]);
+    h.wait_for(common::PROMPT.trim());
+    let said = String::from_utf8_lossy(h.output()).into_owned();
+    assert!(
+        said.contains("grofe proxy --quic failed there: bad port range")
+            && said.contains("using ssh instead"),
+        "{said}"
+    );
+    assert!(!said.contains("no usable proxy"), "{said}");
+    assert!(
+        !r.root().join("home/.local/share/grofe").exists(),
+        "it installed"
+    );
+    h.send("echo over-ssh\r");
+    h.wait_for("over-ssh");
+    assert_eq!(r.bootstraps(), 1);
+    assert!(r.proxies().is_empty());
+    h.send("\x02d");
+    h.wait_exit();
 }

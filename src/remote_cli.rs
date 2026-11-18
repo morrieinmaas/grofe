@@ -520,7 +520,7 @@ pub(super) fn proxy_cmd(globals: &Globals, quic: bool) -> ExitCode {
     if quic {
         return match grofe::remote::quic::server::proxy_quic(&socket, connect) {
             Ok(()) => ExitCode::SUCCESS,
-            Err(e) => fail(&format!("proxy --quic: {e}")),
+            Err(e) => fail(&format!("{}{e}", grofe::remote::quic::server::FAILED)),
         };
     }
     match grofe::remote::proxy::run(io::stdin(), io::stdout(), connect) {

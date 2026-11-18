@@ -26,6 +26,10 @@ use super::{
 };
 use crate::remote::proxy::Connect;
 
+/// How `grofe proxy --quic` starts the one stderr line it fails with (the
+/// client reads it to tell a failed proxy from an old grofe).
+pub const FAILED: &str = "proxy --quic: ";
+
 /// How long an incoming connection has to finish its handshake and present
 /// the token.
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
