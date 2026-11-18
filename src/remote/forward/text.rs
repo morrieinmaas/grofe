@@ -131,9 +131,12 @@ const RUNNABLE: &[&str] = &[
 
 /// Whether a `file:` URL from the remote may be offered for opening here:
 /// an existing regular file that is neither executable nor of a kind that
-/// runs ([`RUNNABLE`]). Directories go too: on macOS an app is one.
-pub(super) fn local_file_to_open(url: &str) -> Result<(), String> {
+/// runs ([`RUNNABLE`]). Directories go too: on macOS an app is one. The
+/// checks are on the file a symlink leads to (`notes.pdf` -> `run.terminal`
+/// opens as a terminal file), and the URL to open names that file.
+pub(super) fn local_file_to_open(url: &str) -> Result<String, String> {
     let path = crate::open::file_path(url).ok_or("not a file on this machine")?;
+    let path = std::fs::canonicalize(&path).map_err(|_| "that file does not exist here")?;
     let meta = std::fs::metadata(&path).map_err(|_| "that file does not exist here")?;
     if meta.is_dir() {
         return Err("a directory or bundle is not opened".to_string());
@@ -149,7 +152,8 @@ pub(super) fn local_file_to_open(url: &str) -> Result<(), String> {
     if RUNNABLE.contains(&ext.as_str()) {
         return Err(format!("a .{ext} file is not opened"));
     }
-    Ok(())
+    crate::open::path_url(&path.to_string_lossy())
+        .ok_or_else(|| "that file does not exist here".to_string())
 }
 
 #[cfg(test)]
@@ -162,7 +166,21 @@ mod tests {
         let url = |p: &std::path::Path| format!("file://{}", p.display());
         let doc = dir.path().join("notes.pdf");
         std::fs::write(&doc, "x").unwrap();
-        assert_eq!(local_file_to_open(&url(&doc)), Ok(()));
+        let real = std::fs::canonicalize(&doc).unwrap();
+        assert_eq!(local_file_to_open(&url(&doc)), Ok(url(&real)));
+        // A symlink is judged by, and opens, what it leads to.
+        let term = dir.path().join("run.terminal");
+        std::fs::write(&term, "x").unwrap();
+        let disguised = dir.path().join("readme.pdf");
+        std::os::unix::fs::symlink(&term, &disguised).unwrap();
+        assert!(
+            local_file_to_open(&url(&disguised))
+                .unwrap_err()
+                .contains(".terminal")
+        );
+        let via = dir.path().join("via-link.pdf");
+        std::os::unix::fs::symlink(&doc, &via).unwrap();
+        assert_eq!(local_file_to_open(&url(&via)), Ok(url(&real)));
         let exe = dir.path().join("run");
         std::fs::write(&exe, "#!/bin/sh").unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();

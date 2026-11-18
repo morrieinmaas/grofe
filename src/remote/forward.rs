@@ -328,7 +328,7 @@ impl Forwarding {
                     out.push(Action::OpenUrl(url));
                 } else {
                     match text::local_file_to_open(&url) {
-                        Ok(()) => self.ask(Ask::Open(url), out),
+                        Ok(resolved) => self.ask(Ask::Open(resolved), out),
                         Err(e) => {
                             out.push(Action::Message(format!("grofe: not opening a url: {e}")))
                         }

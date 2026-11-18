@@ -399,6 +399,8 @@ fn a_file_url_from_the_remote_asks_first_and_a_runnable_one_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let doc = dir.path().join("report.pdf");
     std::fs::write(&doc, "x").unwrap();
+    // The offer names the real path (macOS: /tmp is a link).
+    let doc = std::fs::canonicalize(&doc).unwrap();
     let exe = dir.path().join("tool");
     std::fs::write(&exe, "x").unwrap();
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();

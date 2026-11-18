@@ -332,7 +332,9 @@ fn grofe_open_in_a_remote_pane_runs_the_local_opener() {
         "the remote opened only the other session's url"
     );
     // A local file asks first.
-    let doc = r.file("report.txt", "x");
+    // The real path: the offer and the opener name the file a link (macOS
+    // /tmp) leads to.
+    let doc = fs::canonicalize(r.file("report.txt", "x")).unwrap();
     let url = format!("file://{}", doc.display());
     open("main", &url);
     h.wait_for(&format!("open {url}? [y/N]"));
