@@ -46,11 +46,7 @@ impl Hook for MachinesHook {
     }
 
     fn on_input(&mut self, cx: &mut HookCtx<'_>, bytes: Vec<u8>) -> Input {
-        let keys = self.decoder.feed(&bytes, Instant::now(), Duration::ZERO);
-        let machine_key = keys
-            .iter()
-            .any(|k| matches!(k, Decoded::Key(k) if k.matches(&self.key)));
-        if !machine_key {
+        if !typed_key(&mut self.decoder, &bytes, &self.key) {
             return match slot(&self.forward).as_mut() {
                 Some(f) => f.on_input(cx, bytes),
                 None => Input::send(bytes),
@@ -109,6 +105,16 @@ impl Hook for MachinesHook {
         drop(cx.request_bg(argv));
         self.sent = Some((current, text));
     }
+}
+
+/// Whether `key` was typed in `bytes`. The decoder keeps bracketed-paste
+/// state across reads and hands paste content out as a paste, never as
+/// keys, so an `ESC m` inside a paste is not the machine key.
+fn typed_key(decoder: &mut Decoder, bytes: &[u8], key: &Key) -> bool {
+    decoder
+        .feed(bytes, Instant::now(), Duration::ZERO)
+        .iter()
+        .any(|k| matches!(k, Decoded::Key(k) if k.matches(key)))
 }
 
 /// The request that sets `#{client_machines}` for `client` on the server
@@ -186,6 +192,24 @@ impl Prompt for PickerPrompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn m_m() -> Key {
+        crate::server::input::parse_key("M-m").unwrap()
+    }
+
+    #[test]
+    fn the_machine_key_inside_a_paste_is_pasted() {
+        let mut d = Decoder::new();
+        assert!(!typed_key(&mut d, b"\x1b[200~a\x1bmb\x1b[201~", &m_m()));
+        // A paste split over reads, the key in the middle read.
+        assert!(!typed_key(&mut d, b"\x1b[200~ab", &m_m()));
+        assert!(!typed_key(&mut d, b"c\x1bmd", &m_m()));
+        assert!(!typed_key(&mut d, b"e\x1b[201~", &m_m()));
+        // Typed outside a paste, legacy or kitty, it is the key.
+        assert!(typed_key(&mut d, b"\x1bm", &m_m()));
+        assert!(typed_key(&mut d, b"\x1b[109;3u", &m_m()));
+        assert!(!typed_key(&mut d, b"m", &m_m()));
+    }
 
     #[test]
     fn client_machines_goes_out_as_set_client_info() {
