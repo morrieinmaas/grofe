@@ -117,6 +117,16 @@ const RUNNABLE: &[&str] = &[
     "prefpane",
     "desktop",
     "sh",
+    "bash",
+    "zsh",
+    "py",
+    "pyw",
+    "pl",
+    "rb",
+    "jnlp",
+    "dmg",
+    "mobileconfig",
+    "url",
 ];
 
 /// Whether a `file:` URL from the remote may be offered for opening here:
@@ -168,6 +178,11 @@ mod tests {
                 .unwrap_err()
                 .contains(".command")
         );
+        for ext in ["py", "pyw", "jnlp", "dmg", "mobileconfig"] {
+            let f = dir.path().join(format!("x.{ext}"));
+            std::fs::write(&f, "x").unwrap();
+            assert!(local_file_to_open(&url(&f)).is_err(), "{ext}");
+        }
         let app = dir.path().join("Evil.app");
         std::fs::create_dir(&app).unwrap();
         assert!(

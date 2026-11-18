@@ -153,10 +153,13 @@ pub enum Input {
     Answer(String),
     /// [`Action::ResolveDir`]'s result.
     DirResolved(FilePaste, UploadDir),
-    /// [`Action::Upload`]'s result: the remote paths, or why it failed.
+    /// [`Action::Upload`]'s result: the remote paths of the files that
+    /// arrived, in order, and why the next one did not (the rest were not
+    /// tried).
     Uploaded {
         paste: FilePaste,
-        result: Result<Vec<String>, String>,
+        arrived: Vec<String>,
+        error: Option<String>,
     },
     /// [`Action::StartForward`]'s result: the local port, or why not.
     Forwarded {
@@ -292,7 +295,11 @@ impl Forwarding {
             Input::Resync(panes) => self.resync(panes, &mut out),
             Input::Answer(answer) => self.answer(&answer, now, &mut out),
             Input::DirResolved(paste, dir) => self.dir_resolved(paste, dir, now, &mut out),
-            Input::Uploaded { paste, result } => self.uploaded(paste, result, now, &mut out),
+            Input::Uploaded {
+                paste,
+                arrived,
+                error,
+            } => self.uploaded(paste, arrived, error, now, &mut out),
             Input::Forwarded { remote, local } => match local {
                 Ok(local) => out.push(Action::Message(format!(
                     "forwarding {}:{remote} to localhost:{local}",
@@ -375,20 +382,25 @@ impl Forwarding {
     fn uploaded(
         &mut self,
         paste: FilePaste,
-        result: Result<Vec<String>, String>,
+        arrived: Vec<String>,
+        error: Option<String>,
         now: Instant,
         out: &mut Vec<Action>,
     ) {
-        match result {
-            Ok(paths) => {
-                let quoted: Vec<String> = paths.iter().map(|p| crate::util::quote::sh(p)).collect();
-                send(out, &bracketed(quoted.join(" ").as_bytes()));
-            }
-            Err(e) => {
-                // The text stays: only the upload failed.
-                out.push(Action::Message(format!("grofe: {e}")));
-                send(out, &bracketed(&paste.original));
-            }
+        if let Some(e) = &error {
+            let count = paste.files.len();
+            out.push(Action::Message(match arrived.len() {
+                0 => format!("grofe: {e}"),
+                n => format!("grofe: {e} ({n} of {count} uploaded, their paths pasted)"),
+            }));
+        }
+        if arrived.is_empty() {
+            // The text stays: nothing arrived.
+            send(out, &bracketed(&paste.original));
+        } else {
+            // What is there now: the files that arrived, never a local path.
+            let quoted: Vec<String> = arrived.iter().map(|p| crate::util::quote::sh(p)).collect();
+            send(out, &bracketed(quoted.join(" ").as_bytes()));
         }
         self.release(now, out);
     }

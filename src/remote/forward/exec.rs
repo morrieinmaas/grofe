@@ -64,8 +64,12 @@ pub fn run_slow(link: &Link, target: Option<&str>, action: Action) -> Option<Inp
             Some(Input::DirResolved(paste, upload_dir(link.conn(), target)))
         }
         Action::Upload { dir, paste } => {
-            let result = upload_files(link.conn(), &dir, &paste.files);
-            Some(Input::Uploaded { paste, result })
+            let (arrived, error) = upload_files(link.conn(), &dir, &paste.files);
+            Some(Input::Uploaded {
+                paste,
+                arrived,
+                error,
+            })
         }
         _ => None,
     }
@@ -154,11 +158,15 @@ fn control(conn: &ProxyConn, requests: &[Vec<String>]) -> Result<Vec<String>, St
 }
 
 /// Uploads each of `files` into `dir` on the remote; the remote paths, in
-/// order.
-pub fn upload_files(conn: &ProxyConn, dir: &str, files: &[PathBuf]) -> Result<Vec<String>, String> {
-    files
-        .iter()
-        .map(|path| {
+/// order, until one fails; and why that one failed.
+pub fn upload_files(
+    conn: &ProxyConn,
+    dir: &str,
+    files: &[PathBuf],
+) -> (Vec<String>, Option<String>) {
+    let mut arrived = Vec::new();
+    for path in files {
+        let one = || {
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -167,6 +175,11 @@ pub fn upload_files(conn: &ProxyConn, dir: &str, files: &[PathBuf]) -> Result<Ve
                 File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
             conn.upload(dir, name, file)
                 .map_err(|e| format!("upload of {name} failed: {e}"))
-        })
-        .collect()
+        };
+        match one() {
+            Ok(remote) => arrived.push(remote),
+            Err(e) => return (arrived, Some(e)),
+        }
+    }
+    (arrived, None)
 }
