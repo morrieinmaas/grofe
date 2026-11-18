@@ -32,6 +32,18 @@ pub enum Typed {
     Dropped { first: bool },
 }
 
+/// Where a paste the decoder passes on in pieces stands.
+#[derive(Debug, Default)]
+enum Paste {
+    #[default]
+    None,
+    /// Open: its pieces so far.
+    Open(Vec<u8>),
+    /// Dropped for the cap while still open: its later pieces, and what the
+    /// decoder still holds of it, go too, through its end.
+    Dropping,
+}
+
 /// The keys typed while a paste is held.
 #[derive(Debug)]
 pub struct Held {
@@ -47,9 +59,8 @@ pub struct Held {
     armed: bool,
     overflowed: bool,
     decoder: Decoder,
-    /// A long paste the decoder passes on in pieces, so far; `None` once it
-    /// was dropped for the cap (its later pieces go too).
-    paste: Option<Vec<u8>>,
+    /// A bracketed paste the decoder passes on in pieces.
+    paste: Paste,
 }
 
 impl Held {
@@ -63,7 +74,7 @@ impl Held {
             armed: false,
             overflowed: false,
             decoder: Decoder::with_spans(),
-            paste: None,
+            paste: Paste::None,
         }
     }
 
@@ -87,14 +98,25 @@ impl Held {
     }
 
     /// Everything held, as typed, for after the paste: kept keys, then what
-    /// still waits (a sequence, an open paste).
-    pub fn into_bytes(mut self) -> Vec<u8> {
+    /// still waits (a sequence, an open paste: kept whole, or dropped whole
+    /// past [`MAX_QUEUED`]); and whether something was dropped there.
+    pub fn into_bytes(mut self) -> (Vec<u8>, bool) {
         let mut out = std::mem::take(&mut self.bytes);
-        if let Some(piece) = self.paste.take() {
-            out.extend(piece);
+        let waiting = self.decoder.take_waiting();
+        let unit = match std::mem::take(&mut self.paste) {
+            // The dropped paste's rest goes with it.
+            Paste::Dropping => return (out, false),
+            Paste::Open(mut pieces) => {
+                pieces.extend(waiting);
+                pieces
+            }
+            Paste::None => waiting,
+        };
+        if out.len() + unit.len() > MAX_QUEUED {
+            return (out, true);
         }
-        out.extend(self.decoder.take_waiting());
-        out
+        out.extend(unit);
+        (out, false)
     }
 
     #[cfg(test)]
@@ -144,17 +166,18 @@ impl Held {
     /// or dropped whole if it would pass the cap.
     fn paste_piece(&mut self, start: bool, end: bool, raw: Vec<u8>, out: &mut Vec<Typed>) {
         if start {
-            self.paste = Some(Vec::new());
+            self.paste = Paste::Open(Vec::new());
         }
-        if let Some(paste) = &mut self.paste {
-            paste.extend(raw);
-            if self.bytes.len() + paste.len() > MAX_QUEUED {
-                self.paste = None;
+        if let Paste::Open(pieces) = &mut self.paste {
+            pieces.extend(raw);
+            if self.bytes.len() + pieces.len() > MAX_QUEUED {
+                self.paste = Paste::Dropping;
                 self.drop_typing(out);
             }
         }
-        if end && let Some(paste) = self.paste.take() {
-            self.bytes.extend(paste);
+        // The end: an open paste is kept, a dropping one is done.
+        if end && let Paste::Open(pieces) = std::mem::take(&mut self.paste) {
+            self.bytes.extend(pieces);
         }
     }
 

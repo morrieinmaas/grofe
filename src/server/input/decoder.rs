@@ -72,6 +72,11 @@ impl Decoder {
         self.zip_spans(inputs)
     }
 
+    /// Whether a bracketed paste is open (its end not seen yet).
+    pub fn in_paste(&self) -> bool {
+        self.in_paste
+    }
+
     /// The bytes received and not yet decoded (a sequence or a paste still
     /// waiting), as they were typed; the decoder starts afresh.
     pub fn take_waiting(&mut self) -> Vec<u8> {
@@ -164,6 +169,10 @@ impl Decoder {
                 let data = std::mem::take(&mut self.buf);
                 self.span(&data);
                 out.push(self.paste_piece(data, true));
+            } else if let Some(s) = &mut self.spans {
+                // An empty paste that timed out is no input: its start marker
+                // belongs to none.
+                s.pending.clear();
             }
             self.in_paste = false;
         } else {
@@ -678,5 +687,17 @@ mod span_tests {
         let mut plain = Decoder::new();
         assert_eq!(plain.feed(b"a", now, wait).len(), 1);
         assert!(plain.spans.is_none());
+    }
+
+    #[test]
+    fn a_paste_start_that_times_out_empty_is_glued_to_no_key() {
+        let mut d = Decoder::with_spans();
+        let now = Instant::now();
+        let wait = Duration::from_millis(25);
+        assert!(d.feed_spans(b"\x1b[200~", now, wait).is_empty());
+        assert!(d.flush_spans(now + PASTE_TIMEOUT, wait).is_empty());
+        let got = d.feed_spans(b"\x02", now + PASTE_TIMEOUT, wait);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, b"\x02");
     }
 }

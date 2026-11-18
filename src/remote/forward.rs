@@ -670,7 +670,13 @@ impl Forwarding {
     /// meanwhile go now.
     fn release(&mut self, now: Instant, out: &mut Vec<Action>) {
         if let Some(held) = self.queued.take() {
-            self.keys(&held.into_bytes(), now, out);
+            let (bytes, dropped) = held.into_bytes();
+            if dropped {
+                out.push(Action::Message(
+                    "grofe: a paste typed meanwhile was dropped (over the typing cap)".to_string(),
+                ));
+            }
+            self.keys(&bytes, now, out);
         }
     }
 

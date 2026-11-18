@@ -587,3 +587,76 @@ fn a_lone_esc_or_a_split_paste_start_waits_for_the_next_read() {
         b"ab\x1b[A\x1b[200~x\x03y\x1b[201~"
     );
 }
+
+/// The upload of `paste` finished (one file there); what that sends.
+fn finish_upload(f: &mut Forwarding, paste: FilePaste, now: Instant) -> Vec<Action> {
+    f.handle(
+        Input::Uploaded {
+            paste,
+            arrived: vec!["/r/a".into()],
+            error: None,
+            cancelled: false,
+            grew: Vec::new(),
+        },
+        now,
+    )
+}
+
+/// A bracketed paste start and `n` bytes of `fill`.
+fn open_paste(n: usize, fill: u8) -> Vec<u8> {
+    let mut b = b"\x1b[200~".to_vec();
+    b.extend(vec![fill; n]);
+    b
+}
+
+#[test]
+fn a_huge_paste_dropped_for_the_cap_leaks_nothing_later() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = uploading(&mut f, &a, now);
+    // Past the decoder's 1 MiB piece size: a first piece comes out, too big.
+    let got = f.handle(Input::Keys(open_paste((1 << 20) + 10, b'p')), now);
+    assert!(matches!(got.as_slice(), [Action::Message(_)]), "{got:?}");
+    // More of it, newlines and all, before any end marker: still the paste.
+    assert_eq!(f.handle(keys(b"rm -rf x\r"), now), []);
+    let sent = finish_upload(&mut f, paste, now);
+    assert_eq!(sent, [Action::Send(b"\x1b[200~'/r/a'\x1b[201~".to_vec())]);
+}
+
+#[test]
+fn after_a_dropped_paste_ends_typing_is_kept_again() {
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = uploading(&mut f, &a, now);
+    f.handle(Input::Keys(open_paste((1 << 20) + 10, b'p')), now);
+    assert_eq!(f.handle(keys(b"tail\r\x1b[201~"), now), []);
+    assert_eq!(f.handle(keys(b"ok"), now), []);
+    let sent = finish_upload(&mut f, paste, now);
+    assert_eq!(sent, [Action::Send(b"\x1b[200~'/r/a'\x1b[201~ok".to_vec())]);
+}
+
+#[test]
+fn an_open_paste_too_big_for_the_cap_at_release_is_dropped_with_a_message() {
+    use crate::remote::forward::typing::MAX_QUEUED;
+    let (_d, a, _) = files();
+    let now = Instant::now();
+    let mut f = fw(UploadMode::On, ForwardMode::Ask);
+    let paste = uploading(&mut f, &a, now);
+    // Under the decoder's piece size, so it still waits there, unended.
+    assert_eq!(
+        f.handle(Input::Keys(open_paste(MAX_QUEUED + 10, b'p')), now),
+        []
+    );
+    let sent = finish_upload(&mut f, paste, now);
+    assert_eq!(
+        sent,
+        [
+            Action::Send(b"\x1b[200~'/r/a'\x1b[201~".to_vec()),
+            Action::Message(
+                "grofe: a paste typed meanwhile was dropped (over the typing cap)".into()
+            )
+        ]
+    );
+}
