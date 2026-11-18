@@ -68,10 +68,42 @@ pub trait Prompt: Send {
     /// (and its text is drawn again).
     fn key(&mut self, cx: &mut HookCtx<'_>, bytes: &[u8]) -> Option<Input>;
 
+    /// The prompt went without an answer: replaced by another, or taken
+    /// down by a dropped or switched link. Its owner may raise it again.
+    fn dropped(&mut self) {}
+
+    /// Who raised it, for [`HookCtx::close_prompt_tagged`].
+    fn tag(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Bytes that draw the prompt as an overlay on a `cols` x `rows`
     /// screen instead of the bottom row (the machine picker's box).
     fn overlay(&self, _cols: u16, _rows: u16) -> Option<Vec<u8>> {
         None
+    }
+}
+
+/// Puts `new` in `slot`; one it replaces is told ([`Prompt::dropped`]).
+fn replace_prompt(slot: &mut Option<Box<dyn Prompt>>, new: Box<dyn Prompt>) {
+    if let Some(mut old) = slot.replace(new) {
+        old.dropped();
+    }
+}
+
+/// Takes the prompt in `slot` away if it is `tag`'s; whether it did.
+fn take_tagged(slot: &mut Option<Box<dyn Prompt>>, tag: &str) -> bool {
+    if slot.as_ref().is_some_and(|p| p.tag() == Some(tag)) {
+        *slot = None;
+        return true;
+    }
+    false
+}
+
+/// Takes down the prompt up, if any, telling it ([`Prompt::dropped`]).
+pub(super) fn drop_overlay(overlay: &mut Option<Box<dyn Prompt>>) {
+    if let Some(mut p) = overlay.take() {
+        p.dropped();
     }
 }
 
@@ -163,12 +195,19 @@ impl HookCtx<'_> {
 
     /// Raises `prompt`, replacing one already up.
     pub fn prompt(&mut self, prompt: Box<dyn Prompt>) {
-        *self.prompt = Some(prompt);
+        replace_prompt(self.prompt, prompt);
     }
 
     /// Takes the prompt down unanswered, if one is up, and redraws.
     pub fn close_prompt(&mut self) {
         if self.prompt.take().is_some() {
+            self.redraw();
+        }
+    }
+
+    /// [`HookCtx::close_prompt`], only when the prompt up is `tag`'s.
+    pub fn close_prompt_tagged(&mut self, tag: &str) {
+        if take_tagged(self.prompt, tag) {
             self.redraw();
         }
     }
@@ -190,5 +229,67 @@ impl HookCtx<'_> {
     /// channel closes (its session keeps running) and `to` attaches.
     pub fn switch(&mut self, to: Switch) {
         *self.switch = Some(to);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A prompt that counts its drops.
+    struct Counted {
+        tag: Option<&'static str>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Prompt for Counted {
+        fn text(&self) -> String {
+            String::new()
+        }
+        fn key(&mut self, _cx: &mut HookCtx<'_>, _bytes: &[u8]) -> Option<Input> {
+            None
+        }
+        fn dropped(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+        fn tag(&self) -> Option<&'static str> {
+            self.tag
+        }
+    }
+
+    fn counted(tag: Option<&'static str>) -> (Box<dyn Prompt>, Arc<AtomicUsize>) {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let p = Counted {
+            tag,
+            drops: Arc::clone(&drops),
+        };
+        (Box::new(p), drops)
+    }
+
+    #[test]
+    fn a_replaced_or_lost_prompt_is_told() {
+        let mut slot = None;
+        let (first, first_drops) = counted(Some("forward"));
+        replace_prompt(&mut slot, first);
+        let (picker, picker_drops) = counted(None);
+        replace_prompt(&mut slot, picker);
+        assert_eq!(first_drops.load(Ordering::SeqCst), 1);
+        drop_overlay(&mut slot);
+        assert_eq!(picker_drops.load(Ordering::SeqCst), 1);
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn a_tagged_close_leaves_another_hooks_prompt_up() {
+        let mut slot = None;
+        let (picker, _) = counted(None);
+        replace_prompt(&mut slot, picker);
+        assert!(!take_tagged(&mut slot, "forward"));
+        assert!(slot.is_some(), "the picker stays");
+        let (ours, _) = counted(Some("forward"));
+        replace_prompt(&mut slot, ours);
+        assert!(take_tagged(&mut slot, "forward"));
+        assert!(slot.is_none());
     }
 }
