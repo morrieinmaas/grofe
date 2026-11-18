@@ -3,16 +3,30 @@
 //! following the session the client switched to.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{
     Conn, Failure, Kind, Loop, RemoteAttach, State, Switch, draw_bottom_row, handshake,
     hook_events, post,
 };
 use crate::client::Out;
+use crate::remote::connect::Link;
 use crate::remote::reconnect::{Clocks, DetachKey, bar_text, woke};
 
 impl Loop {
+    /// Online after a sleep: the link is likely dead with nothing having
+    /// said so yet (the pings would take ~10 s to notice). One ping with a
+    /// short bound decides, off the main thread; no pong drops the link,
+    /// and its reader's loss starts the reconnect at once.
+    pub(super) fn online_wake(&self, before: Clocks, now: Clocks) {
+        if let State::Online(c) = &self.state
+            && woke(before, now)
+        {
+            let link = c.link.clone();
+            std::thread::spawn(move || check_alive(&link, WAKE_PING));
+        }
+    }
+
     /// While offline: starts the next attempt when it is due (at once after
     /// a sleep, `clocks` being the previous look) and keeps the bar drawn.
     pub(super) fn offline_step(&mut self, a: &RemoteAttach, clocks: Clocks, now: Clocks) {
@@ -185,6 +199,21 @@ impl Loop {
     }
 }
 
+/// How long the ping after a wake from sleep waits for its pong.
+pub const WAKE_PING: Duration = Duration::from_secs(2);
+
+/// Pings `link` once: alive when the pong comes within `timeout`, else the
+/// link is closed (its channels fail, so the attach reader reports a drop).
+fn check_alive(link: &Link, timeout: Duration) -> bool {
+    match link.conn().ping(timeout) {
+        Ok(_) => true,
+        Err(_) => {
+            link.close();
+            false
+        }
+    }
+}
+
 /// Whether the next attempt (`next`, none while one is in flight) is due at
 /// `now`, `before` being the previous look at the clocks: a wake from sleep
 /// (the wall clock jumped past the monotonic one) brings it forward to now.
@@ -198,7 +227,37 @@ fn attempt_due(next: &mut Option<Instant>, before: Clocks, now: Clocks) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use crate::remote::proxy_proto::{Mux, ProxyHello, Role, encode_hello};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    /// A link to a fake proxy end; with `answer` it answers pings.
+    fn link_to_fake(answer: bool) -> (Link, UnixStream) {
+        let (a, b) = UnixStream::pair().unwrap();
+        (&b).write_all(encode_hello(&ProxyHello::current(&[])).as_bytes())
+            .unwrap();
+        let link = Link::over("box", a.try_clone().unwrap(), a, None).unwrap();
+        let mut r = BufReader::new(b.try_clone().unwrap());
+        let mut line = String::new();
+        r.read_line(&mut line).unwrap();
+        if answer {
+            // The reader thread keeps the proxy end answering.
+            Mux::start(r, b.try_clone().unwrap(), Role::Proxy, |c, _| c.close(""));
+        }
+        (link, b)
+    }
+
+    /// After a wake, a link whose peer is gone (silent) is dropped at once;
+    /// a live one is kept.
+    #[test]
+    fn the_ping_after_a_wake_drops_a_dead_link_and_keeps_a_live_one() {
+        let (dead, _keep) = link_to_fake(false);
+        assert!(!check_alive(&dead, Duration::from_millis(200)));
+        assert!(dead.dropped().is_some());
+        let (live, _keep) = link_to_fake(true);
+        assert!(check_alive(&live, Duration::from_secs(5)));
+        assert!(live.dropped().is_none());
+    }
 
     /// Spec: a resumed wake from sleep (a wall clock jump over 5 s) retries
     /// at once, however long the backoff had left.

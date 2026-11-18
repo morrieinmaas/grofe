@@ -58,7 +58,7 @@ pub fn proxy_failure(stderr: &str) -> Option<String> {
 pub fn bootstrap(target: &Target, batch: bool) -> Result<Bootstrap, BootError> {
     let remote = ssh::remote_grofe(env!("CARGO_PKG_VERSION"), QUIC_ARGS);
     let opts = SshOpts {
-        keepalive: false,
+        keepalive: ssh::Keepalive::default(),
         batch,
     };
     let out = ssh::command()
