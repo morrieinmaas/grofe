@@ -100,6 +100,19 @@ impl Shared {
         }
         self.dropped_cv.notify_all();
     }
+
+    /// Installs what ends the transport after the link started. A link that
+    /// already dropped (the stream ended in between) runs it at once, so
+    /// the child is still killed and reaped.
+    fn set_end(&self, end: End) {
+        let mut slot = lock(&self.end);
+        if lock(&self.dropped).is_some() {
+            drop(slot);
+            end();
+        } else {
+            *slot = Some(end);
+        }
+    }
 }
 
 /// One live connection to a remote proxy. Clones share it; dropping the
@@ -362,7 +375,7 @@ fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError>
     };
     match linked {
         Ok(link) if !timed_out => {
-            *lock(&link.shared.end) = Some(kill_child(child));
+            link.shared.set_end(kill_child(child));
             Ok(link)
         }
         Ok(_) => {
