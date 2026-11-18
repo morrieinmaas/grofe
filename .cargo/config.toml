@@ -3,7 +3,3 @@
 # An explicit RUST_TEST_THREADS still wins.
 [env]
 RUST_TEST_THREADS = "6"
-# No test server puts a notification on the desktop it runs on (the built-in
-# osascript/terminal-notifier/notify-send); see GROFE_NOTIFY_DESKTOP in
-# src/server/notify/desktop.rs. A test with its own notify.command still runs it.
-GROFE_NOTIFY_DESKTOP = "off"

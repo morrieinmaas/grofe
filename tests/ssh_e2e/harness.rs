@@ -135,6 +135,7 @@ impl Local {
             .env_remove("TMUX_PANE")
             .env_remove("GROFE_REMOTE_RELEASE_URL")
             .env("GROFE_SSH", root.join("ssh"))
+            .env("GROFE_NOTIFY_DESKTOP", "off")
             .env("HOME", root.join("home"))
             .env("XDG_CONFIG_HOME", root.join("config"))
             .env("XDG_STATE_HOME", root.join("state"))

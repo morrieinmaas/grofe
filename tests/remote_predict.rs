@@ -84,6 +84,7 @@ shift
 # The destination may follow `--` (ssh -T [opts] -- <dest> <cmd>).
 [ "$1" = box ] && shift
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
+export GROFE_NOTIFY_DESKTOP=off
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 unset GROFE_PANE TMUX
 /bin/sh -c "$*" | perl '{root}/delay.pl' {delay}
@@ -106,6 +107,7 @@ unset GROFE_PANE TMUX
     fn attach(&self) -> Harness {
         let root = self.dir.path();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.env("GROFE_NOTIFY_DESKTOP", "off");
         cmd.args(["-r", "box"])
             .current_dir(root)
             .env_remove("GROFE")

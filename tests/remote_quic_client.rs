@@ -51,6 +51,7 @@ while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift 2
 case "$*" in *"proxy --quic"*) echo quic >> '{root}/bootstraps' ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
+export GROFE_NOTIFY_DESKTOP=off
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 export GROFE_REMOTE_UDP_PORTS="$(cat '{root}/udp-ports' 2>/dev/null || echo 47100-47999)"
 unset GROFE_PANE TMUX
@@ -79,6 +80,7 @@ exec /bin/sh -c "exec $*"
 
     fn client(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.env("GROFE_NOTIFY_DESKTOP", "off");
         cmd.args(["-r", "box"])
             .args(args)
             .current_dir(self.root())

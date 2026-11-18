@@ -23,7 +23,7 @@ fn only_a_batch_connect_gives_up_on_a_slow_hello() {
         "#!/bin/sh\n\
          for a; do [ \"$a\" = -G ] && {{ echo 'serveraliveinterval 0'; exit 0; }}; done\n\
          sleep 1\n\
-         GROFE='{sock}' XDG_RUNTIME_DIR='{run}' XDG_STATE_HOME='{state}' exec '{grofe}' proxy\n",
+         GROFE_NOTIFY_DESKTOP=off GROFE='{sock}' XDG_RUNTIME_DIR='{run}' XDG_STATE_HOME='{state}' exec '{grofe}' proxy\n",
         sock = srv.socket.display(),
         run = srv.runtime_dir.display(),
         state = srv.state_home.display(),

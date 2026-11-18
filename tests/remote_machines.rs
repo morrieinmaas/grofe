@@ -15,6 +15,7 @@ fn grofe(config: &Path, args: &[&str]) -> Output {
         .arg(config.join("never.sock"))
         .args(args)
         .env("XDG_CONFIG_HOME", config)
+        .env("GROFE_NOTIFY_DESKTOP", "off")
         .env_remove("TMUX")
         .env_remove("GROFE")
         .output()

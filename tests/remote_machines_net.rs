@@ -73,6 +73,7 @@ case "$host" in
 esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin'
 export GROFE_REMOTE_UDP_PORTS=47100-47999
+export GROFE_NOTIFY_DESKTOP=off
 unset GROFE_PANE TMUX
 case "$*" in
   *"proxy --quic"*) echo "$host" >> '{root}/bootstraps' ;;
@@ -123,6 +124,7 @@ exec /bin/sh -c "exec $*"
             .env("HOME", self.root().join("local-home"))
             .env("XDG_CONFIG_HOME", self.root().join("local-config"))
             .env("XDG_STATE_HOME", self.root().join("local-state"))
+            .env("GROFE_NOTIFY_DESKTOP", "off")
             .env("TERM", "xterm-256color")
             .env_remove("COLORTERM");
         cmd

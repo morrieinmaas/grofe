@@ -64,6 +64,7 @@ case "$*" in *proxy*) echo $$ >> '{root}/proxies'; [ -e '{root}/hang' ] && exec 
   *grofe.tmp*) [ -e '{root}/readonly' ] && {{ echo "mkdir: cannot create directory: Read-only file system" >&2; exit 1; }} ;;
 esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
+export GROFE_NOTIFY_DESKTOP=off
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 unset GROFE_PANE TMUX
 # `exec` inside too: dash (Linux /bin/sh) forks for a -c command's last
@@ -96,6 +97,7 @@ exec /bin/sh -c "exec $*"
     /// A local `grofe <args>` with the fake ssh and private dirs.
     fn local(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.env("GROFE_NOTIFY_DESKTOP", "off");
         cmd.args(args)
             .current_dir(self.root())
             .env_remove("GROFE")

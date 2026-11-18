@@ -58,6 +58,7 @@ while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift 2
 case "$*" in *proxy*) echo $$ >> '{root}/proxies' ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
+export GROFE_NOTIFY_DESKTOP=off
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 export SSH_AUTH_SOCK='{root}/agent.sock'
 unset GROFE_PANE TMUX
@@ -84,6 +85,7 @@ exec /bin/sh -c "exec $*"
     /// A local `grofe -r box <args>` with the fake ssh and private dirs.
     fn client(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
+        cmd.env("GROFE_NOTIFY_DESKTOP", "off");
         cmd.args(["-r", "box"])
             .args(args)
             .current_dir(self.root())

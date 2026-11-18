@@ -9,9 +9,11 @@ use std::time::Duration;
 /// `notify.command` still runs: tests of the desktop path use a fake one.
 pub const BUILTIN_OFF_ENV: &str = "GROFE_NOTIFY_DESKTOP";
 
-/// Whether [`BUILTIN_OFF_ENV`] turns the built-in notifiers off.
+/// Whether the built-in notifiers are off: in unit tests always, else when
+/// [`BUILTIN_OFF_ENV`] says so (every test harness that starts a server
+/// sets it; a developer's own `cargo run` server notifies as usual).
 pub fn builtin_off() -> bool {
-    std::env::var(BUILTIN_OFF_ENV).is_ok_and(|v| v == "off")
+    cfg!(test) || std::env::var(BUILTIN_OFF_ENV).is_ok_and(|v| v == "off")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
