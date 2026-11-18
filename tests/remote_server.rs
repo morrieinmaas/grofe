@@ -50,8 +50,9 @@ fn env_of_new_pane(srv: &TestServer, name: &str, args: &[&str]) -> (String, Stri
     let mut argv = args.to_vec();
     argv.push(&command);
     srv.cmd(&argv).expect("start the pane");
+    // The shell makes the file before printf fills it: wait for the content.
     wait_until("the pane to write its environment", WAIT, || {
-        fs::read_to_string(&file).is_ok()
+        fs::read_to_string(&file).is_ok_and(|t| t.contains('|'))
     });
     let text = fs::read_to_string(&file).expect("env file");
     let (agent, browser) = text.split_once('|').expect("agent|browser");
