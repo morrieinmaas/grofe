@@ -19,6 +19,17 @@ pub struct Decoder {
     /// with its `UserN`: tried before the built-in sequences, as tmux's
     /// key tree takes them.
     pub(super) user_keys: Vec<(Vec<u8>, u16)>,
+    /// With [`Decoder::with_spans`]: the bytes of each input drained so far,
+    /// in order, and bytes consumed that belong to the next input (a paste
+    /// start marker, an ignored report).
+    pub(super) spans: Option<Spans>,
+}
+
+/// The bytes behind each decoded input ([`Decoder::with_spans`]).
+#[derive(Debug, Default)]
+pub(super) struct Spans {
+    raw: Vec<Vec<u8>>,
+    pending: Vec<u8>,
 }
 
 pub(super) const PASTE_START: &[u8] = b"\x1b[200~";
@@ -26,11 +37,86 @@ pub(super) const PASTE_END: &[u8] = b"\x1b[201~";
 /// Paste content held before it is passed on in chunks.
 pub(super) const PASTE_CAP: usize = 1 << 20;
 /// A paste with no data for this long ends, marker or not.
-pub(super) const PASTE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const PASTE_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl Decoder {
     pub fn new() -> Decoder {
         Decoder::default()
+    }
+
+    /// A decoder that also tells the bytes each input came from
+    /// ([`Decoder::feed_spans`]): for a client that must hold some keys back
+    /// and pass others on as they were typed.
+    pub fn with_spans() -> Decoder {
+        Decoder {
+            spans: Some(Spans::default()),
+            ..Decoder::default()
+        }
+    }
+
+    /// As [`Decoder::feed`], each input with the bytes it came from (a
+    /// paste's include its markers). Needs [`Decoder::with_spans`].
+    pub fn feed_spans(
+        &mut self,
+        bytes: &[u8],
+        now: Instant,
+        escape_time: Duration,
+    ) -> Vec<(Input, Vec<u8>)> {
+        let inputs = self.feed(bytes, now, escape_time);
+        self.zip_spans(inputs)
+    }
+
+    /// As [`Decoder::flush`], with spans ([`Decoder::feed_spans`]).
+    pub fn flush_spans(&mut self, now: Instant, escape_time: Duration) -> Vec<(Input, Vec<u8>)> {
+        let inputs = self.flush(now, escape_time);
+        self.zip_spans(inputs)
+    }
+
+    /// The bytes received and not yet decoded (a sequence or a paste still
+    /// waiting), as they were typed; the decoder starts afresh.
+    pub fn take_waiting(&mut self) -> Vec<u8> {
+        let mut out = self
+            .spans
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.pending))
+            .unwrap_or_default();
+        out.append(&mut self.buf);
+        let spans = self.spans.take();
+        *self = Decoder {
+            user_keys: std::mem::take(&mut self.user_keys),
+            spans: spans.map(|_| Spans::default()),
+            ..Decoder::default()
+        };
+        out
+    }
+
+    fn zip_spans(&mut self, inputs: Vec<Input>) -> Vec<(Input, Vec<u8>)> {
+        let raw = self
+            .spans
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.raw))
+            .unwrap_or_default();
+        let mut raw = raw.into_iter();
+        inputs
+            .into_iter()
+            .map(|i| (i, raw.next().unwrap_or_default()))
+            .collect()
+    }
+
+    /// Records the bytes behind the input just pushed (with spans on).
+    fn span(&mut self, bytes: &[u8]) {
+        if let Some(s) = &mut self.spans {
+            let mut raw = std::mem::take(&mut s.pending);
+            raw.extend_from_slice(bytes);
+            s.raw.push(raw);
+        }
+    }
+
+    /// Records bytes consumed for no input yet (with spans on).
+    fn span_pending(&mut self, bytes: &[u8]) {
+        if let Some(s) = &mut self.spans {
+            s.pending.extend_from_slice(bytes);
+        }
     }
 
     /// Sets the `user-keys` sequences (index and bytes).
@@ -76,6 +162,7 @@ impl Decoder {
         if self.in_paste {
             if !self.buf.is_empty() || self.paste_begun {
                 let data = std::mem::take(&mut self.buf);
+                self.span(&data);
                 out.push(self.paste_piece(data, true));
             }
             self.in_paste = false;
@@ -106,6 +193,8 @@ impl Decoder {
                 let from = self.paste_scanned.saturating_sub(PASTE_END.len() - 1);
                 if let Some(end) = find(&rest[from..], PASTE_END).map(|i| i + from) {
                     let data = rest[..end].to_vec();
+                    let raw = rest[..end + PASTE_END.len()].to_vec();
+                    self.span(&raw);
                     out.push(self.paste_piece(data, true));
                     pos += end + PASTE_END.len();
                     self.in_paste = false;
@@ -118,6 +207,7 @@ impl Decoder {
                     let keep = PASTE_END.len() - 1;
                     let n = rest.len() - keep;
                     let data = rest[..n].to_vec();
+                    self.span(&data);
                     out.push(self.paste_piece(data, false));
                     pos += n;
                     self.paste_scanned = keep;
@@ -134,6 +224,13 @@ impl Decoder {
             match step {
                 Step::Need => break,
                 Step::Done(n, tok) => {
+                    if self.spans.is_some() {
+                        let raw = self.buf[pos..pos + n].to_vec();
+                        match tok {
+                            Tok::Input(_) => self.span(&raw),
+                            _ => self.span_pending(&raw),
+                        }
+                    }
                     pos += n;
                     match tok {
                         Tok::Input(i) => out.push(i),
@@ -558,4 +655,28 @@ pub(super) fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
         row: cell(y),
         mods,
     })
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::*;
+
+    #[test]
+    fn each_input_comes_with_the_bytes_it_was_typed_as() {
+        let mut d = Decoder::with_spans();
+        let now = Instant::now();
+        let wait = Duration::from_millis(25);
+        let got = d.feed_spans(b"a\x1b[A\x1b[200~x\x1by\x1b[201~\x03\x1b", now, wait);
+        let raws: Vec<&[u8]> = got.iter().map(|(_, r)| r.as_slice()).collect();
+        assert_eq!(
+            raws,
+            [&b"a"[..], b"\x1b[A", b"\x1b[200~x\x1by\x1b[201~", b"\x03"]
+        );
+        // The lone Esc waits; what still waits comes back as typed.
+        assert_eq!(d.take_waiting(), b"\x1b");
+        // Without spans, nothing is recorded and `feed` is as before.
+        let mut plain = Decoder::new();
+        assert_eq!(plain.feed(b"a", now, wait).len(), 1);
+        assert!(plain.spans.is_none());
+    }
 }

@@ -424,32 +424,8 @@ impl Forwarding {
 
     fn keys(&mut self, bytes: &[u8], now: Instant, out: &mut Vec<Action>) {
         if let Some(held) = &mut self.queued {
-            for part in held.take(bytes) {
-                match part {
-                    typing::Typed::Through(b) => send(out, &b),
-                    typing::Typed::Cancel { rest } => {
-                        if self.uploading {
-                            out.push(Action::CancelUpload);
-                        } else {
-                            self.give_up(now, out);
-                        }
-                        // What came after the cancel key, as typed now.
-                        if !rest.is_empty() {
-                            self.keys(&rest, now, out);
-                        }
-                        return;
-                    }
-                    typing::Typed::Dropped { .. } => out.push(Action::Message(
-                        if self.uploading {
-                            "grofe: typing dropped while the upload runs (Esc cancels it)"
-                        } else {
-                            "grofe: typing dropped while the paste is looked at (Esc pastes it as text)"
-                        }
-                        .to_string(),
-                    )),
-                }
-            }
-            return;
+            let parts = held.take(bytes, now);
+            return self.typed(parts, now, out);
         }
         if self.held.is_empty() {
             self.held_since = Some(now);
@@ -490,7 +466,40 @@ impl Forwarding {
         }
     }
 
+    /// What held typing came to ([`typing::Held`]).
+    fn typed(&mut self, parts: Vec<typing::Typed>, now: Instant, out: &mut Vec<Action>) {
+        for part in parts {
+            match part {
+                typing::Typed::Through(b) => send(out, &b),
+                typing::Typed::Cancel { rest } => {
+                    if self.uploading {
+                        out.push(Action::CancelUpload);
+                    } else {
+                        self.give_up(now, out);
+                    }
+                    // What came after the cancel key, as typed now.
+                    if !rest.is_empty() {
+                        self.keys(&rest, now, out);
+                    }
+                    return;
+                }
+                typing::Typed::Dropped { .. } => out.push(Action::Message(
+                    if self.uploading {
+                        "grofe: typing dropped while the upload runs (Esc cancels it)"
+                    } else {
+                        "grofe: typing dropped while the paste is looked at (Esc pastes it as text)"
+                    }
+                    .to_string(),
+                )),
+            }
+        }
+    }
+
     fn tick(&mut self, now: Instant, out: &mut Vec<Action>) {
+        if let Some(held) = &mut self.queued {
+            let parts = held.tick(now);
+            self.typed(parts, now, out);
+        }
         match (self.paste_since, self.held_since) {
             (Some(since), _) if now.duration_since(since) >= PASTE_TIMEOUT => self.flush_paste(out),
             (None, Some(since))
@@ -523,7 +532,12 @@ impl Forwarding {
         // Typing waits from here until the paste is done.
         self.next_paste += 1;
         let id = self.next_paste;
-        self.queued = Some(typing::Held::new(id, content.clone(), self.prefix));
+        self.queued = Some(typing::Held::new(
+            id,
+            content.clone(),
+            self.prefix,
+            HOLD_TIMEOUT,
+        ));
         out.push(Action::CheckFiles {
             id,
             paths,
@@ -656,7 +670,7 @@ impl Forwarding {
     /// meanwhile go now.
     fn release(&mut self, now: Instant, out: &mut Vec<Action>) {
         if let Some(held) = self.queued.take() {
-            self.keys(&held.bytes, now, out);
+            self.keys(&held.into_bytes(), now, out);
         }
     }
 
