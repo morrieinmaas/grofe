@@ -3,4 +3,4 @@
 # checks both checkouts' HEAD). Both are pushed: canopy `m37-gate`,
 # athome `grofe-config`.
 canopy 07fa17f6b5b8511262eed8b96811dcd727ff0198
-athome ed0d87b711f20b484ba469ec0848906d5f27bf71
+athome fb0ec9333386124b643af41573625bd1f07c71f1
