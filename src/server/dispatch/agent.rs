@@ -185,7 +185,9 @@ pub fn deliver(state: &mut State, raised: Raised) {
             clients::queue_raw(state, id, &bytes);
         }
     }
-    if command {
+    // A test server (desktop::BUILTIN_OFF_ENV) runs a configured command
+    // only, never the desktop's own notifier.
+    if command && (state.notify.cfg.command.is_some() || !desktop::builtin_off()) {
         let os = if cfg!(target_os = "macos") {
             desktop::Os::Mac
         } else {

@@ -276,7 +276,7 @@ run_in() {
       XDG_STATE_HOME="$w/hd/.local/state" XDG_RUNTIME_DIR="$r" TMUX_TMPDIR="$r" \
       CANOPY_SCRATCH_TMPDIR="$r" TMPDIR="$w/tmp" \
       PATH="$w/bin:/usr/bin:/bin:/usr/sbin:/sbin" SHELL=/bin/sh TERM=xterm-256color LANG=en_US.UTF-8 \
-      GROFE_RESTORE_ON_START=0 OPENSESSIONS_SKIP_BINARY_DOWNLOAD=1 \
+      GROFE_RESTORE_ON_START=0 GROFE_NOTIFY_DESKTOP=off OPENSESSIONS_SKIP_BINARY_DOWNLOAD=1 \
       OPENSESSIONS_PID_FILE="$w/tmp/opensessions.pid" CANOPY_ARTIFACTS="$w/artifacts" \
       "$w/bin/$bin" -L "$sock" "$@"
   )

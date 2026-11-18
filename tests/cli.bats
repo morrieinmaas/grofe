@@ -13,6 +13,8 @@ setup() {
     for v in $(compgen -e | grep '^GROFE' || true); do
         unset "$v"
     done
+    # A server started here never notifies the desktop it runs on.
+    export GROFE_NOTIFY_DESKTOP=off
     SOCK="$TMP/s.sock"
     cd "$HOME"
 }

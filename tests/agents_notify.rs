@@ -178,3 +178,45 @@ fn badge_in_status_format() {
         .expect("display");
     assert_eq!(badge.trim(), "⏸1");
 }
+
+/// A harness-started server never runs the desktop's own notifier: a
+/// blocked agent with the default delivery (`auto`, no client attached, so
+/// the command path) spawns none of `osascript`, `terminal-notifier` or
+/// `notify-send`. Shims named so, first on the server's PATH, would write a
+/// marker if one ran.
+#[test]
+fn a_test_server_never_notifies_the_desktop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shims = dir.path().join("bin");
+    fs::create_dir_all(&shims).expect("bin");
+    let marker = dir.path().join("notified");
+    for tool in ["osascript", "terminal-notifier", "notify-send"] {
+        let path = shims.join(tool);
+        fs::write(
+            &path,
+            format!("#!/bin/sh\necho {tool} >> '{}'\n", marker.display()),
+        )
+        .expect("write shim");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let path = format!(
+        "{}:{}",
+        shims.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let srv = TestServer::builder().path_env(&path).start();
+    srv.cmd(&["new-session", "-d", "-s", "main"])
+        .expect("new-session");
+    let id = pane_id(&srv, "main");
+    report(&srv, &id, "blocked", "approve?");
+    assert!(
+        notify_list(&srv).contains("approve?"),
+        "the notification was raised"
+    );
+    std::thread::sleep(QUIET);
+    assert!(
+        !marker.exists(),
+        "a desktop notifier ran: {:?}",
+        fs::read_to_string(&marker)
+    );
+}

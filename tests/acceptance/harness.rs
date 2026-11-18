@@ -64,6 +64,8 @@ impl Harness {
         if let Some(dir) = cmd.get_current_dir() {
             wrapper.current_dir(dir);
         }
+        // Never the desktop's own notifier; `cmd` may still say otherwise.
+        wrapper.env("GROFE_NOTIFY_DESKTOP", "off");
         for (key, value) in cmd.get_envs() {
             match value {
                 Some(value) => {
