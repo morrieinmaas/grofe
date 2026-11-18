@@ -267,7 +267,12 @@ impl Prompt for Answer {
         if let Some(grace) = &mut self.grace
             && grace.passes(Instant::now())
         {
-            cx.send(bytes.to_vec());
+            // Typing meant for the pane, through forwarding as any key is: a
+            // file dropped now still asks before it uploads.
+            let mut core = lock(&self.core);
+            let actions = core.fw.handle(Input::Keys(bytes.to_vec()), Instant::now());
+            let send = core.apply(&self.core, cx, actions);
+            cx.send(send);
             return None;
         }
         let answer = answer_keys(&mut self.decoder, &mut self.line, bytes)?;

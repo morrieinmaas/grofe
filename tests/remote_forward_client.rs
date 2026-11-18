@@ -399,3 +399,35 @@ fn a_port_offer_lets_typing_through_and_takes_a_key_after_a_pause() {
     fs::write(&stop, "").unwrap();
     detach(h);
 }
+
+#[test]
+fn a_file_dropped_while_a_port_offer_is_up_still_uploads() {
+    let r = Remote::new();
+    r.local_config("remote-upload-paste = \"on\"\n");
+    let local = r.file("during-offer.txt", "dropped");
+    let mut h = r.attach(&[]);
+    // A listener in a window of its own, so the shell on screen is free.
+    let port_file = r.root().join("port-offer");
+    let command = format!(
+        "GROFE_T_PORTFILE={} GROFE_T_STOPFILE={} {} --ignored --exact --quiet listener_child",
+        port_file.display(),
+        r.root().join("stop-offer").display(),
+        std::env::current_exe().unwrap().display()
+    );
+    r.srv
+        .cmd(&["new-window", "-d", "-t", "main", &command])
+        .unwrap();
+    wait_until("the listener's port", WAIT, || {
+        fs::read_to_string(&port_file).is_ok_and(|p| p.trim().parse::<u16>().is_ok())
+    });
+    let port = fs::read_to_string(&port_file).unwrap().trim().to_string();
+    h.wait_for(&format!("forward box:{port} to localhost:{port}?"));
+    // At once, inside the offer's grace: the drop goes through forwarding.
+    h.send("echo ");
+    h.send(pasted(&local));
+    let remote = r.pane_dir().join("during-offer.txt");
+    h.wait_for(&format!("echo '{}'", remote.display()));
+    assert_eq!(fs::read_to_string(&remote).unwrap(), "dropped");
+    fs::write(r.root().join("stop-offer"), "").unwrap();
+    detach(h);
+}
