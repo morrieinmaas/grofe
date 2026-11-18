@@ -26,7 +26,7 @@ const QUIC_ARGS: &str = "proxy --quic";
 pub fn bootstrap(target: &Target, batch: bool) -> Result<Bootstrap, ConnectError> {
     let remote = ssh::remote_grofe(env!("CARGO_PKG_VERSION"), QUIC_ARGS);
     let opts = SshOpts {
-        keepalive: false,
+        keepalive: ssh::Keepalive::default(),
         batch,
     };
     let out = ssh::command()

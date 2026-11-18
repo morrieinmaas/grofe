@@ -198,23 +198,49 @@ pub fn program() -> String {
         .unwrap_or_else(|| "ssh".to_string())
 }
 
-/// Whether `ssh -G` output shows the user set `ServerAliveInterval`
-/// (`ssh -G` prints defaults too; `0` is the unset default).
-pub fn keepalive_set(ssh_g: &str) -> bool {
-    ssh_g.lines().any(|l| {
-        let mut words = l.split_whitespace();
-        words
-            .next()
-            .is_some_and(|k| k.eq_ignore_ascii_case("serveraliveinterval"))
-            && words.next().is_some_and(|v| v != "0")
-    })
+/// Which of the keepalive options grofe adds: each only when the user set
+/// no value of their own for it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Keepalive {
+    /// `ServerAliveInterval=15`.
+    pub interval: bool,
+    /// `ServerAliveCountMax=2`.
+    pub count: bool,
+}
+
+impl Keepalive {
+    /// Both options.
+    pub const BOTH: Keepalive = Keepalive {
+        interval: true,
+        count: true,
+    };
+}
+
+/// The keepalive options to add, from `ssh -G` output, which prints
+/// defaults too: `serveraliveinterval 0` is ssh's unset default, and so is
+/// `serveralivecountmax 3`.
+// ponytail: a user who set ServerAliveCountMax to exactly 3 looks unset
+// and gets 2; `ssh -G` cannot tell the two apart.
+pub fn keepalive_from(ssh_g: &str) -> Keepalive {
+    let value = |key: &str| {
+        ssh_g.lines().find_map(|l| {
+            let mut words = l.split_whitespace();
+            let k = words.next()?;
+            k.eq_ignore_ascii_case(key)
+                .then(|| words.next().unwrap_or("").to_string())
+        })
+    };
+    Keepalive {
+        interval: value("serveraliveinterval").is_none_or(|v| v == "0"),
+        count: value("serveralivecountmax").is_none_or(|v| v == "3"),
+    }
 }
 
 /// Options for one ssh run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SshOpts {
-    /// Add `ServerAliveInterval=15` and `ServerAliveCountMax=2`.
-    pub keepalive: bool,
+    /// The keepalive options to add.
+    pub keepalive: Keepalive,
     /// `BatchMode=yes`: never prompt (a reconnect runs with the tty raw).
     pub batch: bool,
 }
@@ -226,16 +252,11 @@ pub fn argv(target: &Target, opts: SshOpts, remote: &str) -> Vec<String> {
     if let Some(p) = target.port {
         out.extend(["-p".to_string(), p.to_string()]);
     }
-    if opts.keepalive {
-        out.extend(
-            [
-                "-o",
-                "ServerAliveInterval=15",
-                "-o",
-                "ServerAliveCountMax=2",
-            ]
-            .map(String::from),
-        );
+    if opts.keepalive.interval {
+        out.extend(["-o", "ServerAliveInterval=15"].map(String::from));
+    }
+    if opts.keepalive.count {
+        out.extend(["-o", "ServerAliveCountMax=2"].map(String::from));
     }
     if opts.batch {
         out.extend(["-o", "BatchMode=yes"].map(String::from));
@@ -244,10 +265,9 @@ pub fn argv(target: &Target, opts: SshOpts, remote: &str) -> Vec<String> {
     out
 }
 
-/// Whether to add the keepalive options for `target`: only when `ssh -G`
-/// shows the user set no `ServerAliveInterval`. If `ssh -G` fails, ssh's
-/// own run will report why.
-pub fn wants_keepalive(target: &Target) -> bool {
+/// The keepalive options to add for `target` ([`keepalive_from`] on its
+/// `ssh -G`). If `ssh -G` fails, both; ssh's own run will report why.
+pub fn wants_keepalive(target: &Target) -> Keepalive {
     let mut cmd = command();
     cmd.arg("-G");
     if let Some(p) = target.port {
@@ -258,8 +278,8 @@ pub fn wants_keepalive(target: &Target) -> bool {
         .stdin(Stdio::null())
         .stderr(Stdio::null());
     match cmd.output() {
-        Ok(out) if out.status.success() => !keepalive_set(&String::from_utf8_lossy(&out.stdout)),
-        _ => true,
+        Ok(out) if out.status.success() => keepalive_from(&String::from_utf8_lossy(&out.stdout)),
+        _ => Keepalive::BOTH,
     }
 }
 
@@ -403,10 +423,45 @@ mod tests {
     }
 
     #[test]
-    fn keepalive_is_read_from_ssh_g() {
-        assert!(!keepalive_set("user me\nserveraliveinterval 0\nport 22\n"));
-        assert!(keepalive_set("serveraliveinterval 30\n"));
-        assert!(!keepalive_set("port 22\n"));
+    fn each_keepalive_option_is_added_only_when_the_user_left_it_unset() {
+        let both_unset = "user me\nserveraliveinterval 0\nserveralivecountmax 3\nport 22\n";
+        assert_eq!(keepalive_from(both_unset), Keepalive::BOTH);
+        let interval_set = "serveraliveinterval 30\nserveralivecountmax 3\n";
+        assert_eq!(
+            keepalive_from(interval_set),
+            Keepalive {
+                interval: false,
+                count: true
+            }
+        );
+        let count_set = "serveraliveinterval 0\nserveralivecountmax 5\n";
+        assert_eq!(
+            keepalive_from(count_set),
+            Keepalive {
+                interval: true,
+                count: false
+            }
+        );
+        let both_set = "serveraliveinterval 30\nserveralivecountmax 5\n";
+        assert_eq!(keepalive_from(both_set), Keepalive::default());
+        // An ssh that prints neither: both added.
+        assert_eq!(keepalive_from("port 22\n"), Keepalive::BOTH);
+        // Only the one asked for goes on the command line.
+        let only_count = argv(
+            &Target::host("box"),
+            SshOpts {
+                keepalive: Keepalive {
+                    interval: false,
+                    count: true,
+                },
+                batch: false,
+            },
+            "cmd",
+        );
+        assert_eq!(
+            only_count,
+            ["-T", "-o", "ServerAliveCountMax=2", "--", "box", "cmd"]
+        );
     }
 
     #[test]
@@ -415,7 +470,7 @@ mod tests {
         let with = argv(
             &t,
             SshOpts {
-                keepalive: true,
+                keepalive: Keepalive::BOTH,
                 batch: false,
             },
             "cmd",
@@ -440,7 +495,7 @@ mod tests {
         let batch = argv(
             &Target::host("box"),
             SshOpts {
-                keepalive: false,
+                keepalive: Keepalive::default(),
                 batch: true,
             },
             "cmd",

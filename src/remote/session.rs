@@ -330,6 +330,7 @@ impl Loop {
                 self.switch_to(a, to);
             }
             let now = Clocks::now();
+            self.online_wake(clocks, now);
             self.offline_step(a, clocks, now);
             clocks = now;
             if now.mono.duration_since(last_tick) >= TICK {
