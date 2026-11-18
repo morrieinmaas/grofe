@@ -127,8 +127,10 @@ A connection that sent `subscribe` receives events as single JSON lines whose
 `event` field names the event, followed by its payload. Ids are runtime ids
 (`%N` panes, `@N` windows, `$N` sessions); `uid` is a pane's stable id;
 `client` is `#{client_name}`. A nullable field is always present, as `null`.
-Fixture: `event-<name>.json` for each event, plus `event-pane-exited-killed`
-and `event-option-changed-unset` for the null shapes.
+Fixture: `event-<name>.json` for each event, plus `event-pane-exited-killed`,
+`event-option-changed-unset`, `event-open-url-no-pane`,
+`event-ports-changed-none` and `event-notify-bare` for the null and empty
+shapes.
 
 | Event | Payload after `event` | Fires when |
 |---|---|---|
@@ -149,6 +151,10 @@ and `event-option-changed-unset` for the null shapes.
 | `alert-silence` | `window`, `session`, `pane` | silence in a monitored window |
 | `option-changed` | `scope` (`global`, `$N`, `@N` or `%N`), `name`, `value` (nullable: null once unset) | an option's value changed |
 | `agent-changed` | `pane`, `uid`, `kind` (nullable), `old` (nullable: null for a new record), `new` (nullable: null once the record is gone) | a pane's agent state changed |
+| `open-url` | `url`, `pane` (nullable: null when the caller was not in a pane) | `open-url <url>` (`grofe open`, `$BROWSER`) was run with an `http`, `https` or `file` URL; only for a subscription naming it |
+| `ports-changed` | `pane`, `ports` (sorted list of TCP port numbers the pane's process tree listens on, now) | that list changed; polled at most every 2 s while a subscription naming it exists; a new subscription naming it gets a snapshot (one event per pane that listens on any port) on the next poll, which existing subscribers receive too; only for a subscription naming it |
+| `pane-echo` | `pane`, `echo` (the pty's ECHO flag, false while a program reads a password) | the flag changed (a new pane counts as echo on); polled with `ports-changed`; a new subscription naming it gets a snapshot (one event per pane) on the next poll, which existing subscribers receive too; only for a subscription naming it |
+| `notify` | `pane`, `session` (nullable), `kind` (nullable), `state`, `msg` (nullable) | an agent notification was raised (the one the tray lists); only for a subscription naming it |
 | `events-dropped` | `count` | a notice, not subscribable: the subscriber's queue overflowed; sent before its next delivered event |
 
 The full table (emitters, consumers, exact firing rules) is spec §7.2.
@@ -157,8 +163,11 @@ The full table (emitters, consumers, exact firing rules) is spec §7.2.
 unknown literal is an error. A bare `subscribe` and every pattern match the
 v1.0 events above except `pane-output`; that event, and any event added after
 v1.0, reach only a subscription naming them literally. `-t` limits events to
-a pane, window or session. A later `subscribe` on the same connection
-replaces the earlier one.
+a pane, window or session. `-c client` (added after v1.0) limits them to the
+session that attached client is in, following it when it switches; an event
+of no pane, window or session (a global option) still passes, except `open-url`, which
+must come from a pane of that session. It cannot go with `-t`. A later
+`subscribe` on the same connection replaces the earlier one.
 
 **Delivery.** In the order things happened. Each subscriber has a queue of
 1024 events; on overflow events are dropped and `events-dropped` with the

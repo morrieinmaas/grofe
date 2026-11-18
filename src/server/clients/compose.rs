@@ -776,6 +776,14 @@ impl FormatVars for ClientVars<'_> {
             "client_tty" => Some(c.tty.clone().unwrap_or_default()),
             "client_pid" => Some(c.pid.unwrap_or(0).to_string()),
             "client_termname" => Some(c.term.clone()),
+            // grofe's own (spec ssh-remote §4): what `set-client-info` set.
+            "client_rtt" => Some(
+                c.info
+                    .rtt_ms
+                    .map(|ms| format!("{ms}ms"))
+                    .unwrap_or_default(),
+            ),
+            "client_machines" => Some(c.info.machines.clone().unwrap_or_default()),
             // tmux: bytes not sent because the client fell behind; here,
             // the dropped frames' diffs.
             "client_discarded" => Some(c.outbox.discarded.to_string()),

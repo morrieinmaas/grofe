@@ -47,6 +47,7 @@ pub(crate) mod picker;
 pub mod plugins;
 pub mod popup;
 pub mod prompt;
+pub mod remote;
 pub mod render;
 pub mod restore;
 pub mod resume;
@@ -214,6 +215,8 @@ pub struct State {
     /// Key tables, input hooks, overlays, window-size owners and the render
     /// schedule: client state that is not per client.
     pub registry: clients::Registry,
+    /// What the `ports-changed` and `pane-echo` poller last reported.
+    pub remote: remote::Remote,
     /// Open prompts and the prompt history (T3.4).
     pub prompts: prompt::Prompts,
     /// Scrollback views (T3.2).
@@ -333,6 +336,7 @@ impl State {
         if self.model.identity == crate::compat::Identity::Tmux {
             return;
         }
+        remote::remove_links(self);
         let Ok(meta) = fs::symlink_metadata(&self.socket) else {
             return;
         };
@@ -659,6 +663,7 @@ async fn serve(
         clients: BTreeMap::new(),
         registry: clients::Registry::default(),
         prompts: prompt::Prompts::default(),
+        remote: remote::Remote::default(),
         mouse: mouse::MouseState::default(),
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),
@@ -716,6 +721,10 @@ async fn serve(
     // As tmux 3.7b's `job_kill_all` once its loop ends: whatever way
     // `serve` leaves, a panic included, the jobs still running get SIGTERM.
     let _jobs = shell_jobs::KillOnExit(state.shell_jobs.clone());
+    // Agent links a server that died without cleaning up left behind: their
+    // session ids come round again from $0, and a stale target (a dead
+    // forwarded agent, another login's) must not carry over to them.
+    remote::remove_links(&state);
     register_builtins(&mut state);
     dispatch::options::apply_config_at_start(&mut state);
     crate::compat::server_started(&mut state);
@@ -971,19 +980,36 @@ fn handle(state: &mut State, msg: ServerMsg) {
             reply,
             tx,
         } => {
+            let mut polled = false;
             let result = match cmd::parse(&req.argv) {
-                Ok(Command::Subscribe(c)) => c
-                    .target
-                    .map(|t| events::Scope::resolve(&state.model, &ctx, &t))
-                    .transpose()
-                    .and_then(|scope| state.events.subscribe(c.events, scope, tx))
-                    .map(|()| String::new()),
+                Ok(Command::Subscribe(c)) if c.client.is_some() && c.target.is_some() => {
+                    Err("subscribe: -c and -t cannot go together".to_string())
+                }
+                Ok(Command::Subscribe(c)) => {
+                    polled = remote::wants_poll(&c.events);
+                    let follow = c.client.as_deref().map(|name| {
+                        clients::client_named(state, name)
+                            .and_then(|id| Some((id, state.clients.get(&id)?.session)))
+                            .map(|(client, session)| events::Scope::Client { client, session })
+                            .ok_or_else(|| format!("no client {name}"))
+                    });
+                    let scope = c
+                        .target
+                        .map(|t| events::Scope::resolve(&state.model, &ctx, &t));
+                    follow
+                        .or(scope)
+                        .transpose()
+                        .and_then(|scope| state.events.subscribe(c.events, scope, tx))
+                        .map(|()| String::new())
+                }
                 // The connection sends only a `subscribe` verb here.
                 Ok(_) => Err("not a subscribe command".to_string()),
                 Err(e) => Err(e.to_string()),
             };
             state.deferred_reply = None;
+            let subscribed = result.is_ok();
             finish(state, req.id, result, reply);
+            remote::ensure_poller(state, subscribed && polled);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
         ServerMsg::Closed { observer } => {
@@ -1398,6 +1424,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         clients: BTreeMap::new(),
         registry: clients::Registry::default(),
         prompts: prompt::Prompts::default(),
+        remote: remote::Remote::default(),
         mouse: mouse::MouseState::default(),
         passthrough: passthrough::Passthrough::default(),
         graphics: graphics::Graphics::default(),

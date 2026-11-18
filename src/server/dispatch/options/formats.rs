@@ -1132,6 +1132,8 @@ impl FormatVars for FormatCtx<'_> {
             }
             "pane_active" => flag(w.active == p.id),
             "pane_pid" => p.handle.pid()?.to_string(),
+            // The TCP ports the pane's processes listen on, comma-separated.
+            "pane_ports" => crate::server::remote::join(&p.handle.ports()),
             "pane_current_command" => p.handle.current_command()?,
             "pane_current_argv" => p.handle.current_argv()?.join(" "),
             // Every member of the foreground group, one argv per line; the

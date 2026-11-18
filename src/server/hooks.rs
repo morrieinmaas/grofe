@@ -1132,7 +1132,10 @@ fn client_event(state: &mut State, id: ClientId, name: &'static str) {
                     rows,
                 })
             }
-            "client-session-changed" => Some(Event::ClientSessionChanged { client, session }),
+            "client-session-changed" => {
+                state.events.client_moved(id, session);
+                Some(Event::ClientSessionChanged { client, session })
+            }
             _ => None,
         };
         if let Some(event) = event {
@@ -1267,6 +1270,7 @@ pub fn run_pending(state: &mut State) {
     prune(state);
     crate::server::alerts::drain(state);
     for (session, name) in std::mem::take(&mut state.model.closed_sessions) {
+        crate::server::remote::session_closed(state, session);
         let closed = Event::SessionClosed {
             session,
             name: name.clone(),
@@ -2032,6 +2036,12 @@ pub fn shell_env(state: &State, session: Option<SessionId>) -> Vec<(String, Stri
     env
 }
 
+/// The global environment's `name`, unless unset or hidden.
+pub fn global_var(state: &State, name: &str) -> Option<String> {
+    let global = state.hooks.global();
+    global.get(name).filter(|v| !v.hidden)?.value.clone()
+}
+
 fn visible(env: &Env) -> Vec<(String, String)> {
     env.iter()
         .filter(|(_, v)| !v.hidden)
@@ -2072,6 +2082,7 @@ pub fn session_environment(
     }
     state.hooks.session_removed.insert(session, removed);
     state.hooks.session_hidden.remove(&session);
+    crate::server::remote::stable_agent(state, session, client_env);
     env
 }
 
@@ -2087,6 +2098,7 @@ pub fn blank_session_environment(state: &mut State, session: SessionId) -> Vec<(
 /// variables from the client's `client_env` again, as tmux 3.7b (recorded):
 /// each it has is set, each it lacks marked removed.
 pub fn update_environment(state: &mut State, session: SessionId, client_env: &[(String, String)]) {
+    crate::server::remote::stable_agent(state, session, client_env);
     for name in update_names(state, session) {
         let value = client_env
             .iter()

@@ -10,6 +10,12 @@ use std::time::{Duration, Instant};
 
 use super::lock;
 
+mod ports;
+
+pub use ports::listening_ports;
+#[cfg(test)]
+use ports::parse_proc_net_tcp;
+
 /// This process's own argv, resolved once. A freshly forked pane child is,
 /// until it execs, still byte-for-byte a copy of the server's own image:
 /// [`Cache`] uses this to recognise (and discard) a sample taken of that
@@ -57,6 +63,63 @@ impl Cache {
             }
         }
         cache.1.clone()
+    }
+}
+
+/// How long [`PortsCache`] reuses a scan: the poll interval of
+/// `ports-changed`, so a status line showing `#{pane_ports}` does not scan
+/// every process on each redraw.
+const PORTS_TTL: Duration = Duration::from_secs(2);
+
+#[derive(Default)]
+struct PortsState {
+    at: Option<Instant>,
+    ports: Vec<u16>,
+    refreshing: bool,
+}
+
+/// A pane's listening ports. [`PortsCache::get`] never scans on the
+/// caller's thread: it returns what the last scan found and, when that is
+/// older than [`PORTS_TTL`], starts a scan on a thread of its own.
+#[derive(Default)]
+pub(crate) struct PortsCache(std::sync::Arc<Mutex<PortsState>>);
+
+impl PortsCache {
+    /// The ports below `root` as of the last scan; empty before the first.
+    pub(crate) fn get(&self, root: i32) -> Vec<u16> {
+        let mut state = lock(&self.0);
+        let stale = state.at.is_none_or(|at| at.elapsed() >= PORTS_TTL);
+        if stale && !state.refreshing {
+            state.refreshing = true;
+            let cache = std::sync::Arc::clone(&self.0);
+            // ponytail: one thread per stale pane per 2 s while a format
+            // asks; a shared scan for all panes would need a server-wide
+            // cache.
+            let started = std::thread::Builder::new()
+                .name("grofe-ports".into())
+                .spawn(move || {
+                    let ports = listening_ports(&[root]).pop().unwrap_or_default();
+                    let mut state = lock(&cache);
+                    *state = PortsState {
+                        at: Some(Instant::now()),
+                        ports,
+                        refreshing: false,
+                    };
+                });
+            if started.is_err() {
+                state.refreshing = false;
+            }
+        }
+        state.ports.clone()
+    }
+
+    /// Records a scan made elsewhere (`list-ports` scans every pane at once).
+    pub(crate) fn set(&self, ports: Vec<u16>) {
+        *lock(&self.0) = PortsState {
+            at: Some(Instant::now()),
+            ports,
+            refreshing: false,
+        };
     }
 }
 
@@ -228,6 +291,16 @@ mod os {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let rest = stat.get(stat.rfind(')')? + 2..)?;
         rest.split(' ').nth(2)?.parse().ok()
+    }
+
+    /// Every process's pid and parent.
+    pub fn all_parents() -> Vec<(i32, i32)> {
+        let Ok(dir) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter_map(|pid| Some((pid, parent(pid)?)))
+            .collect()
     }
 
     fn split_nul(raw: &[u8]) -> Option<Vec<String>> {
@@ -405,6 +478,19 @@ mod os {
         Some(buf)
     }
 
+    /// Every process's pid and parent.
+    pub fn all_parents() -> Vec<(i32, i32)> {
+        let mut pids = vec![0 as libc::c_int; 8192];
+        let size = (pids.len() * mem::size_of::<libc::c_int>()) as libc::c_int;
+        // SAFETY: `pids` is valid for `size` bytes.
+        let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast::<c_void>(), size) };
+        pids.truncate(usize::try_from(n).unwrap_or(0).min(pids.len()));
+        pids.into_iter()
+            .filter(|&p| p > 0)
+            .filter_map(|pid| Some((pid, parent(pid)?)))
+            .collect()
+    }
+
     /// The argv and the environment in a `KERN_PROCARGS2` buffer.
     pub(super) fn parse_procargs2(buf: &[u8]) -> Option<(Vec<String>, Vec<String>)> {
         let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
@@ -546,6 +632,89 @@ mod tests {
         assert_eq!(path.as_deref(), Some("/x/bin:/usr/bin:/bin"));
         assert_eq!(value.as_deref(), Some("a=b"));
         assert_eq!(unset, None);
+    }
+
+    const NET_TCP: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1 0000000000000000 100 0 0 10 0
+   1: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 777 1 0000000000000000 100 0 0 10 0
+   2: 0100007F:D2A4 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1000        0 999 1 0000000000000000 20 4 30 10 -1
+";
+
+    const NET_TCP6: &str = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:1435 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0000000000000000 100 0 0 10 0
+";
+
+    #[test]
+    fn parses_listening_sockets_from_proc_net_tcp() {
+        assert_eq!(parse_proc_net_tcp(NET_TCP), vec![(12345, 8080), (777, 22)]);
+        assert_eq!(parse_proc_net_tcp(NET_TCP6), vec![(4242, 5173)]);
+        assert_eq!(parse_proc_net_tcp(""), vec![]);
+        assert_eq!(parse_proc_net_tcp("garbage\n0: x y 0A z"), vec![]);
+    }
+
+    /// A listener of this very process, found through its pid.
+    #[test]
+    fn finds_the_port_this_process_listens_on() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let ports = listening_ports(&[std::process::id() as i32]);
+        assert!(ports[0].contains(&port), "{ports:?} lacks {port}");
+        assert!(ports[0].windows(2).all(|w| w[0] < w[1]), "sorted, unique");
+    }
+
+    /// A format asking for ports never waits for a scan: the first answer is
+    /// empty, a later one has the port.
+    #[test]
+    fn the_ports_cache_scans_off_the_callers_thread() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cache = PortsCache::default();
+        let me = std::process::id() as i32;
+        assert_eq!(cache.get(me), Vec::<u16>::new());
+        let found = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            cache.get(me).contains(&port)
+        });
+        assert!(found, "the background scan fills the cache");
+    }
+
+    /// A listener of a child process counts for its parent's tree.
+    #[test]
+    fn counts_the_listeners_of_descendants() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("port");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "--quiet"])
+            .arg("server::pane::procinfo::tests::child_that_listens")
+            .env("GROFE_T_PORTFILE", &file)
+            .spawn()
+            .unwrap();
+        let port = (0..400)
+            .find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                std::fs::read_to_string(&file)
+                    .ok()?
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+            })
+            .expect("the child listens");
+        let mine = listening_ports(&[std::process::id() as i32]);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(mine[0].contains(&port), "{mine:?} lacks the child's {port}");
+    }
+
+    /// Not a test of its own: the process `counts_the_listeners_of_descendants`
+    /// starts.
+    #[test]
+    #[ignore = "the child process of counts_the_listeners_of_descendants"]
+    fn child_that_listens() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let file = std::env::var("GROFE_T_PORTFILE").unwrap();
+        std::fs::write(file, port.to_string()).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(10));
     }
 
     #[test]

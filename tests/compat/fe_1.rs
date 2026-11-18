@@ -45,6 +45,7 @@ pub fn grofe_cli(tmpdir: &Path) -> Cli {
         ("XDG_STATE_HOME".to_string(), dir("state")),
         ("XDG_CONFIG_HOME".to_string(), dir("config")),
         ("GROFE_RESTORE_ON_START".to_string(), "0".to_string()),
+        ("GROFE_NOTIFY_DESKTOP".to_string(), "off".to_string()),
     ]);
     let socket = paths::socket_path(
         &Env {

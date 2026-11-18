@@ -552,28 +552,23 @@ fn the_first_attach_fills_the_update_environment() {
     write_snapshot(&srv, &sample(&home(&srv)));
     let srv = srv.restart();
     assert_eq!(list_panes(&srv, PANES_FMT), sample_panes(&home(&srv)));
-    let unset = srv.run(&["show-environment", "-t", "main", "SSH_AUTH_SOCK"]);
+    let unset = srv.run(&["show-environment", "-t", "main", "SSH_ASKPASS"]);
     assert!(
-        !unset.stdout.contains("SSH_AUTH_SOCK="),
+        !unset.stdout.contains("SSH_ASKPASS="),
         "{} {}",
         unset.stdout,
         unset.stderr
     );
-    let _client = Harness::spawn_attach_with_env(
-        srv.command(),
-        "main",
-        &[("SSH_AUTH_SOCK", "/tmp/x")],
-        80,
-        24,
-    );
+    let _client =
+        Harness::spawn_attach_with_env(srv.command(), "main", &[("SSH_ASKPASS", "/tmp/x")], 80, 24);
     try_wait_until(
         || {
-            srv.cmd(&["show-environment", "-t", "main", "SSH_AUTH_SOCK"])
-                .is_ok_and(|out| out == "SSH_AUTH_SOCK=/tmp/x\n")
+            srv.cmd(&["show-environment", "-t", "main", "SSH_ASKPASS"])
+                .is_ok_and(|out| out == "SSH_ASKPASS=/tmp/x\n")
         },
         WAIT,
     )
-    .expect("the attach fills SSH_AUTH_SOCK");
+    .expect("the attach fills SSH_ASKPASS");
     let id = ok(
         &srv,
         &[
@@ -584,11 +579,11 @@ fn the_first_attach_fills_the_update_environment() {
             "-P",
             "-F",
             "#{pane_id}",
-            "echo sock=$SSH_AUTH_SOCK; sleep 60",
+            "echo askpass=$SSH_ASKPASS; sleep 60",
         ],
     );
     let id = id.trim();
-    srv.wait_for(|| srv.capture(id).contains("sock=/tmp/x"), WAIT)
+    srv.wait_for(|| srv.capture(id).contains("askpass=/tmp/x"), WAIT)
         .unwrap_or_else(|_| panic!("new pane env: {}", srv.capture(id)));
 }
 

@@ -107,6 +107,7 @@ fn isolated(tmp: &Path, args: &[&str]) -> Command {
     cmd.args(args)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
+        .env("GROFE_NOTIFY_DESKTOP", "off")
         .env("HOME", tmp)
         .env("XDG_CONFIG_HOME", tmp.join("xdg"));
     cmd

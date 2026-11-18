@@ -508,10 +508,14 @@ pub struct KillServer;
 /// `subscribe <event>... [-t target]` (control mode only): event names or
 /// `*` patterns; empty means every event but `pane-output`. `target`, when
 /// given, limits the events to a pane, window or session (spec §7.2).
+/// `client` (`-c`, grofe's, spec ssh-remote §3) limits them to the session
+/// that client is attached to, following it when it switches; events of no
+/// pane, window or session still pass.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Subscribe {
     pub events: Vec<String>,
     pub target: Option<Target>,
+    pub client: Option<String>,
 }
 
 /// `attach-session`/`attach` (`-t -d --nest`). `nest` is grofe's force for
@@ -1358,6 +1362,31 @@ pub struct PlacePane {
     pub y: Option<Offset>,
 }
 
+/// `open-url <url>` (grofe's own): asks the clients subscribed to the
+/// `open-url` event to open `url`; what `grofe open` and `$BROWSER` send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenUrl {
+    pub url: String,
+}
+
+/// `list-ports [-a] [-t target]` (grofe's own): the TCP ports the processes
+/// of a window's panes (every pane with `-a`) listen on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListPorts {
+    pub target: Target,
+    pub all: bool,
+}
+
+/// `set-client-info [-t client] <key> <value>` (grofe's own): what a remote
+/// client tells the server about itself (`rtt` in milliseconds, `machines`
+/// as free text), shown by `#{client_rtt}` and `#{client_machines}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetClientInfo {
+    pub client: Option<String>,
+    pub key: String,
+    pub value: String,
+}
+
 /// `new-scratchpad` (grofe's own; tmux 3.7b has no such verb): opens a hidden
 /// scratchpad pane, running the shell command or the default shell in `-c`.
 /// Hidden scratchpads are kept server-wide.
@@ -1843,4 +1872,7 @@ pub enum Command {
     ChooseNotification,
     Notify(NotifyCmd),
     KeyMenu(KeyMenu),
+    OpenUrl(OpenUrl),
+    ListPorts(ListPorts),
+    SetClientInfo(SetClientInfo),
 }

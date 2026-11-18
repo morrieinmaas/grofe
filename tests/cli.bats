@@ -13,6 +13,8 @@ setup() {
     for v in $(compgen -e | grep '^GROFE' || true); do
         unset "$v"
     done
+    # A server started here never notifies the desktop it runs on.
+    export GROFE_NOTIFY_DESKTOP=off
     SOCK="$TMP/s.sock"
     cd "$HOME"
 }
@@ -84,7 +86,8 @@ wait_for_line() {
 @test "no GROFE variables reach the binary" {
     run env
     [ "$status" -eq 0 ]
-    ! grep -q '^GROFE' <<<"$output"
+    # Only the harness's own switch that keeps test servers off the desktop.
+    ! grep '^GROFE' <<<"$output" | grep -qv '^GROFE_NOTIFY_DESKTOP='
 }
 
 @test "M1 scenario: new-session, split-window, send-keys echo hi, capture-pane" {
@@ -131,4 +134,16 @@ wait_for_line() {
     [ -z "$output" ]
     run g list-panes -t m
     [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "machine add, ls and rm as a script drives them" {
+    g machine add box box
+    g machine add quick quick --session work --transport quic
+    [ "$(g machine ls | awk '$1 == "box" { print $2 }')" = "box" ]
+    [ "$(g machine ls | awk '$1 == "quick" { print $3, $4, $5 }')" = "work quic on" ]
+    run g machine add box other
+    [ "$status" -eq 1 ]
+    g machine rm box
+    [ "$(g machine ls | awk '{ print $1 }')" = "quick" ]
+    [ ! -e "$SOCK" ]
 }

@@ -288,7 +288,7 @@ pub(super) static ROWS: &[Row] = &[
         ANY,
         parse::parse_display_message,
     ),
-    row("subscribe", "", "t:", ANY, parse::parse_subscribe),
+    row("subscribe", "", "t:c:", ANY, parse::parse_subscribe),
     row(
         "attach-session",
         "attach",
@@ -416,6 +416,14 @@ pub(super) static ROWS: &[Row] = &[
         parse::parse_new_scratchpad,
     ),
     row("show-scratchpad", "", "t:", 1, parse::parse_show_scratchpad),
+    row("open-url", "", "", 1, parse::parse_open_url).min(1),
+    row("list-ports", "", "t:a", 0, |f| {
+        Ok(Command::ListPorts(ListPorts {
+            target: f.target('t')?,
+            all: f.on('a'),
+        }))
+    }),
+    row("set-client-info", "", "t:", 2, parse::parse_set_client_info).min(2),
     row("drag-pane", "", "M", 0, parse::parse_drag_pane),
     row("place-pane", "", "t:X:Y:", 0, parse::parse_place_pane),
     row(

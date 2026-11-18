@@ -3,6 +3,19 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Test and CI hook: `off` in the server's environment stops the built-in
+/// notifiers (`osascript`, `terminal-notifier`, `notify-send`), so a test
+/// server never puts a notification on the desktop it runs on. A configured
+/// `notify.command` still runs: tests of the desktop path use a fake one.
+pub const BUILTIN_OFF_ENV: &str = "GROFE_NOTIFY_DESKTOP";
+
+/// Whether the built-in notifiers are off: in unit tests always, else when
+/// [`BUILTIN_OFF_ENV`] says so (every test harness that starts a server
+/// sets it; a developer's own `cargo run` server notifies as usual).
+pub fn builtin_off() -> bool {
+    cfg!(test) || std::env::var(BUILTIN_OFF_ENV).is_ok_and(|v| v == "off")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
     Mac,

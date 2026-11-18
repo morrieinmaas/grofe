@@ -103,6 +103,38 @@ pub enum Event {
         old: Option<String>,
         new: Option<String>,
     },
+    /// A program in a pane asked to open a URL (`grofe open`, `$BROWSER`);
+    /// only for a subscription naming it, so a remote client can open it
+    /// locally. `pane` is null when the caller was not in a pane.
+    OpenUrl {
+        url: String,
+        pane: Option<PaneId>,
+    },
+    /// The TCP ports a pane's processes listen on changed; `ports` is the
+    /// whole sorted list now. Only for a subscription naming it, polled
+    /// while one exists.
+    PortsChanged {
+        pane: PaneId,
+        ports: Vec<u16>,
+    },
+    /// The pty's ECHO flag changed (a program is reading a password);
+    /// `echo` is the new value. Only for a subscription naming it.
+    PaneEcho {
+        pane: PaneId,
+        echo: bool,
+    },
+    /// An agent notification was raised (agents spec §6), as the tray lists
+    /// it: the pane, its session (null if it has none), the agent's kind
+    /// (nullable), the state it reached and its message (nullable). Only for
+    /// a subscription naming it, so a client watching other machines can
+    /// show their notifications.
+    Notify {
+        pane: PaneId,
+        session: Option<SessionId>,
+        kind: Option<String>,
+        state: String,
+        msg: Option<String>,
+    },
     EventsDropped {
         count: u64,
     },
@@ -129,6 +161,10 @@ impl Event {
             Event::AlertSilence { .. } => "alert-silence",
             Event::OptionChanged { .. } => "option-changed",
             Event::AgentChanged { .. } => "agent-changed",
+            Event::OpenUrl { .. } => "open-url",
+            Event::PortsChanged { .. } => "ports-changed",
+            Event::PaneEcho { .. } => "pane-echo",
+            Event::Notify { .. } => "notify",
             Event::EventsDropped { .. } => "events-dropped",
         }
     }
@@ -142,7 +178,14 @@ impl Event {
         match self {
             Event::PaneExited { pane, .. }
             | Event::PaneOutput { pane, .. }
-            | Event::AgentChanged { pane, .. } => s.pane = Some(*pane),
+            | Event::AgentChanged { pane, .. }
+            | Event::PortsChanged { pane, .. }
+            | Event::PaneEcho { pane, .. } => s.pane = Some(*pane),
+            Event::Notify { pane, session, .. } => {
+                s.pane = Some(*pane);
+                s.session = *session;
+            }
+            Event::OpenUrl { pane, .. } => s.pane = *pane,
             Event::PaneDied { pane, window, .. } | Event::PaneResized { pane, window } => {
                 s.pane = Some(*pane);
                 s.window = Some(*window);
@@ -266,6 +309,38 @@ mod tests {
             r#"{"event":"option-changed","scope":"$0","name":"@x","value":null}"#
         );
         assert_eq!(event.name(), "option-changed");
+    }
+
+    #[test]
+    fn remote_events_serialize_exactly() {
+        let p = PaneId(3);
+        let cases = [
+            (
+                Event::OpenUrl {
+                    url: "https://a/b".into(),
+                    pane: None,
+                },
+                r#"{"event":"open-url","url":"https://a/b","pane":null}"#,
+            ),
+            (
+                Event::PortsChanged {
+                    pane: p,
+                    ports: vec![22, 8080],
+                },
+                r#"{"event":"ports-changed","pane":"%3","ports":[22,8080]}"#,
+            ),
+            (
+                Event::PaneEcho {
+                    pane: p,
+                    echo: true,
+                },
+                r#"{"event":"pane-echo","pane":"%3","echo":true}"#,
+            ),
+        ];
+        for (event, json) in cases {
+            assert_eq!(serde_json::to_string(&event).unwrap(), json);
+            assert_eq!(serde_json::from_str::<Event>(json).unwrap(), event);
+        }
     }
 
     #[test]

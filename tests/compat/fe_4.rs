@@ -197,6 +197,8 @@ fn popup_env_matches_its_golden() {
 const POPUP_ENV_EXTRA: &[&str] = &[
     "GROFE",
     "GROFE_PANE",
+    // The harness's switch that keeps test servers off the desktop.
+    "GROFE_NOTIFY_DESKTOP",
     "GROFE_RESTORE_ON_START",
     "SHLVL",
     "XDG_CONFIG_HOME",

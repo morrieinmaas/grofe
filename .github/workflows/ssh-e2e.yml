@@ -1,0 +1,30 @@
+name: ssh-e2e
+
+# The ssh remote-session scenarios (spec 2026-11-15-ssh-remote.md §6), run
+# against sshd containers by scripts/ssh-e2e.sh. Ubuntu only: it needs a
+# container runtime with NET_ADMIN for `tc netem`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ssh-e2e:
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: scripts/ci-linux.sh toolchain
+      - uses: Swatinem/rust-cache@v2
+      - name: Container end-to-end
+        env:
+          # ubuntu-latest has podman too, and the script prefers it.
+          GROFE_E2E_RUNTIME: docker
+        run: scripts/ssh-e2e.sh

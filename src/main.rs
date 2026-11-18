@@ -17,6 +17,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod layout_glue;
+mod remote_cli;
+
+use remote_cli::{RemoteFlags, machines_route, open_url, proxy_cmd, remote_hello, remote_route};
 
 use grofe::client;
 use grofe::paths::{self, Env};
@@ -36,6 +39,12 @@ usage: grofe [-L socket-name] [-S socket-path] <command> [args...]
 Options:
   -L socket-name   use the named server socket in grofe's socket directory
   -S socket-path   use the server socket at this path
+  -r host          run the command on host over ssh (default: new-session -A -s main)
+  --install        install grofe on the remote host if it has none (--no-install: never)
+  --install-from p install the local binary p there instead of downloading a release
+  --transport t    reach the remote over ssh (default) or quic
+  --machine name   run the command on a saved machine (see grofe machine ls)
+  --machines       this machine and every saved one in one window
   -V, --version    print grofe's version and exit
   -h, --help       print this help and exit
 
@@ -106,6 +115,7 @@ fn main() -> ExitCode {
                     name: cli.name,
                     version: false,
                     help: false,
+                    remote: RemoteFlags::default(),
                 };
                 // Never a socket in tmux's own directory (spec D12).
                 let dirs = grofe::compat::tmux_socket_dirs(
@@ -149,6 +159,12 @@ fn main() -> ExitCode {
             }
         }
     };
+    if let Some(code) = remote_route(&globals, &rest) {
+        return code;
+    }
+    if let Some(code) = machines_route(&globals, &rest) {
+        return code;
+    }
     // Bare `grofe`, like bare `tmux`, means `new-session` (but see
     // `new_and_attach`: bare `grofe` reattaches when sessions exist).
     let bare = rest.is_empty();
@@ -243,6 +259,15 @@ fn main() -> ExitCode {
             control_bridge(&globals.socket())
         }
         "control" if dialect() == Dialect::Grofe => fail("grofe control: takes no arguments"),
+        // The remote end of `grofe -r host` (spec ssh-remote §1): the proxy
+        // protocol on stdin and stdout. grofe's own verb.
+        "proxy" if dialect() == Dialect::Grofe && rest.len() == 1 => proxy_cmd(&globals, false),
+        // The roaming transport (spec ssh-remote §4): the same protocol over
+        // QUIC, after one bootstrap line on stdout.
+        "proxy" if dialect() == Dialect::Grofe && rest.len() == 2 && rest[1] == "--quic" => {
+            proxy_cmd(&globals, true)
+        }
+        "proxy" if dialect() == Dialect::Grofe => fail("grofe proxy: takes only --quic"),
         // grofe's own verb (T4.5): the server reads the snapshot and answers;
         // with no server there is nothing to lose, and none is started.
         "reboot-check" if dialect() == Dialect::Grofe => {
@@ -258,11 +283,44 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // Saved machines (spec ssh-remote §5): a file under the config dir,
+        // no server involved. grofe's own verb.
+        "machine" if dialect() == Dialect::Grofe => {
+            ExitCode::from(grofe::remote::machines::run(&rest[1..]).clamp(0, 255) as u8)
+        }
+        // grofe's own verb: `$BROWSER` in a pane, see `open_url`.
+        "open" if dialect() == Dialect::Grofe => open_url(&globals.socket(), &rest[1..]),
         // grofe's own verb: agent status reports and hook setup.
         "agent" if dialect() == Dialect::Grofe => {
             let hook = rest.iter().any(|a| a == "--hook");
             match rest.get(1).map(String::as_str) {
                 Some("setup") => grofe::agent_setup::run(&rest[2..]),
+                // Every machine's agents (spec ssh-remote §5).
+                Some("list") if rest.iter().any(|a| a == "--all-machines") => {
+                    let hello = match remote_hello() {
+                        Ok(h) => h,
+                        Err(e) => return fail(&e),
+                    };
+                    match grofe::remote::machines::net::all_agents_cmd(
+                        &globals.socket(),
+                        &hello,
+                        rest,
+                    ) {
+                        Ok(out) => {
+                            print!("{}", out.table);
+                            for e in &out.errors {
+                                eprintln!("grofe: {e}");
+                            }
+                            // An offline machine is a row; a refusal fails.
+                            if out.errors.is_empty() {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::FAILURE
+                            }
+                        }
+                        Err(e) => fail(&format!("grofe: {e}")),
+                    }
+                }
                 Some("report") if hook => grofe::agent_cli::run(&globals.socket(), rest),
                 // Outside a server a report is a no-op, never an error.
                 Some("report") => {
@@ -426,6 +484,8 @@ struct Globals {
     version: bool,
     /// `-h` / `--help` among the global options.
     help: bool,
+    /// `-r <host>` and the flags that go with it.
+    remote: RemoteFlags,
 }
 
 impl Globals {
@@ -475,6 +535,7 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
         name: None,
         version: false,
         help: false,
+        remote: RemoteFlags::default(),
     };
     let mut i = 0;
     while let Some(arg) = args.get(i) {
@@ -489,6 +550,9 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
                     globals.name = Some(value.clone());
                 }
                 i += 2;
+            }
+            s if remote_cli::REMOTE_FLAGS.contains(&s) => {
+                i = remote_cli::parse_flag(args, i, &mut globals.remote)?;
             }
             "--" => {
                 i += 1;
@@ -603,7 +667,12 @@ fn install_tmux_shim(socket: &Path) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
-        std::os::unix::fs::symlink(exe, &link)
+        std::os::unix::fs::symlink(&exe, &link)?;
+        // And `BROWSER`'s shim beside it; without it panes get no `BROWSER`.
+        if let Err(e) = grofe::server::remote::install_open_shim(&dir, &exe) {
+            eprintln!("grofe server: no grofe-open shim in {}: {e}", dir.display());
+        }
+        Ok(())
     });
     match made {
         Ok(()) => grofe::compat::set_tmux_link_dir(dir),
@@ -643,26 +712,30 @@ fn attach_existing(socket: &Path, argv: &[String]) -> ExitCode {
         return fail("open terminal failed: not a terminal");
     }
     match existing_for_a(socket, argv) {
-        Some(id) => {
-            let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
-            // `new-session -A` attaches as `attach-session` does, with
-            // `-D`, `-X`, `-E`, `-c` and `-f` as it takes them.
-            if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv_of_new) {
-                if c.kill_parent {
-                    argv.push("-x".to_string());
-                } else if c.detach_others {
-                    argv.push("-d".to_string());
-                }
-                if c.no_env {
-                    argv.push("-E".to_string());
-                }
-                argv.extend(c.cwd.into_iter().flat_map(|d| ["-c".to_string(), d]));
-                argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
-            }
-            attach(socket, &argv)
-        }
+        Some(id) => attach(socket, &attach_argv_for_existing(argv_of_new, id)),
         None => fail("no sessions"),
     }
+}
+
+/// The `attach-session` argv that `new-session -A` (`argv_of_new`) runs
+/// for the existing session `id`.
+fn attach_argv_for_existing(argv_of_new: &[String], id: String) -> Vec<String> {
+    let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
+    // `new-session -A` attaches as `attach-session` does, with
+    // `-D`, `-X`, `-E`, `-c` and `-f` as it takes them.
+    if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(argv_of_new) {
+        if c.kill_parent {
+            argv.push("-x".to_string());
+        } else if c.detach_others {
+            argv.push("-d".to_string());
+        }
+        if c.no_env {
+            argv.push("-E".to_string());
+        }
+        argv.extend(c.cwd.into_iter().flat_map(|d| ["-c".to_string(), d]));
+        argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
+    }
+    argv
 }
 
 /// Whether `argv` is a `new-session` that attaches (no `-d`). One that does
@@ -810,15 +883,23 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         reply => reply,
     };
     match reply {
-        Ok(Reply::Ok { out, .. }) => {
+        Ok(reply) => print_reply(reply),
+        Err(e) => fail(&e),
+    }
+}
+
+/// Prints a request's reply as the CLI does; the exit status it gives.
+fn print_reply(reply: Reply) -> ExitCode {
+    match reply {
+        Reply::Ok { out, .. } => {
             let mut stdout = io::stdout().lock();
             let _ = stdout.write_all(out.as_bytes());
             let _ = stdout.flush();
             ExitCode::SUCCESS
         }
-        Ok(Reply::Err {
+        Reply::Err {
             err, out, status, ..
-        }) => {
+        } => {
             // A failing `run-shell` prints its output (and tmux's message)
             // on stdout and exits with its own status, as tmux 3.7b (D20).
             let mut stdout = io::stdout().lock();
@@ -832,8 +913,7 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
             let status = status.map_or(1, |s| u8::try_from(s).unwrap_or(1));
             ExitCode::from(status)
         }
-        Ok(Reply::Event(_)) => fail("unexpected event reply"),
-        Err(e) => fail(&e),
+        Reply::Event(_) => fail("unexpected event reply"),
     }
 }
 
@@ -1448,8 +1528,13 @@ fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, 
     request_with(stream, &control_hello(target)?, argv)
 }
 
-/// Sends `hello` and one request, and reads until its reply.
-fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Reply, String> {
+/// Sends `hello` and one request on `stream` (a socket or a remote
+/// control channel), and reads until its reply.
+fn request_with<S: Read + Write>(
+    mut stream: S,
+    hello: &str,
+    argv: &[String],
+) -> Result<Reply, String> {
     let req = serde_json::to_string(&Request {
         id: 1,
         argv: argv.to_vec(),
@@ -1457,11 +1542,10 @@ fn request_with(stream: UnixStream, hello: &str, argv: &[String]) -> Result<Repl
         umask: Some(cli_umask()),
     })
     .map_err(|e| e.to_string())?;
-    let mut writer = &stream;
-    writer
+    stream
         .write_all(format!("{hello}\n{req}\n").as_bytes())
         .map_err(|e| format!("sending request: {e}"))?;
-    read_reply(&stream)
+    grofe::remote::connect::read_reply(BufReader::new(stream))
 }
 
 /// Most bytes of stdin a `load-buffer -` sends: its base64 has to fit one
@@ -1517,26 +1601,6 @@ fn hello_for(target: &Path, with_pane: bool) -> Result<String, String> {
     };
     encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())
 }
-
-/// Reads until the reply to the one request sent on `stream`.
-fn read_reply(stream: &UnixStream) -> Result<Reply, String> {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => return Err("server closed the connection without replying".to_string()),
-            Ok(_) => {}
-            Err(e) => return Err(format!("reading reply: {e}")),
-        }
-        match serde_json::from_str::<Reply>(&line) {
-            Ok(Reply::Event(_)) => continue,
-            Ok(reply) => return Ok(reply),
-            Err(e) => return Err(format!("bad reply from server: {e}")),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

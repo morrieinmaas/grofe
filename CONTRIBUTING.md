@@ -33,6 +33,13 @@ build of the docs site.
 - Integration tests start their own server on a private `-S` socket through
   the harness in `tests/common`, so they never touch a grofe or tmux you have
   running.
+- No test server notifies your desktop: `GROFE_NOTIFY_DESKTOP=off`, set by
+  every harness that starts a server (`tests/common`, the acceptance pty
+  harness, the compat CLIs, `tests/cli.bats`, the fake-ssh remote tests),
+  stops the built-in `osascript`, `terminal-notifier` and `notify-send`; unit
+  tests have them off always. A new harness that spawns `grofe` itself must
+  set it. A test of the desktop path sets its own `notify.command`, a fake
+  that records its argv. Your own `cargo run` server notifies as usual.
 - **Never run `tmux` against the default server.** If you are working inside
   tmux, `tmux kill-session` with no target kills your own session. To compare
   with real tmux, always use a private socket and no config:

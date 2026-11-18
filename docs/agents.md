@@ -126,7 +126,9 @@ a notification and is skipped.
   `delivery = "auto"` grofe sends OSC 9 to your terminal when it knows the
   terminal is not focused (Ghostty, WezTerm, iTerm2 and kitty show it as a
   desktop notification, over ssh too), and runs `notify-send` (Linux) or
-  `osascript` (macOS) when no client is attached.
+  `osascript` (macOS) when no client is attached. A server started with
+  `GROFE_NOTIFY_DESKTOP=off` in its environment never runs those built-in
+  notifiers (a configured `command` still runs); grofe's tests and CI use it.
 - **Mute:** `grofe notify mute [duration]` sends everything to the tray only
   until `grofe notify unmute` or the duration ends; the badge shows `🔕`.
   `notify.enabled = false` turns notifications off altogether.

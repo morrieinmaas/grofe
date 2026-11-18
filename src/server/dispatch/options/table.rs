@@ -99,6 +99,18 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "message-pill",
     "message-pill-ends",
     "prompt-position",
+    "stable-ssh-agent",
+    "forward-browser",
+    "machine-key",
+    "remote-upload-paste",
+    "remote-upload-max",
+    "remote-forward-ports",
+    "remote-reconnect",
+    "remote-release-url",
+    "remote-transport",
+    "remote-udp-ports",
+    "remote-quic-idle",
+    "predictive-echo",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -335,6 +347,107 @@ pub(super) const BUILTINS: &[Builtin] = &[
         // isn't implemented and expands empty, matching tmux with no
         // alerts set.
         default: "#{session_name}:#{window_index}:#{window_name} - \"#{pane_title}\" #{session_alerts}",
+        ..Builtin::PLAIN
+    },
+    // Remote sessions (spec 2026-11-15-ssh-remote §3).
+    Builtin {
+        name: "stable-ssh-agent",
+        doc: "Give a session a stable SSH_AUTH_SOCK link that each attach repoints at the attaching client's agent, so old panes keep a working agent.",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "forward-browser",
+        doc: "Set BROWSER in new panes to a grofe-open shim (grofe open), so a remote client opens the URLs a pane asks for.",
+        kind: Kind::Bool,
+        scope: OptionScope::Session,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "machine-key",
+        doc: "The key that opens the machine picker; the client takes it before the server sees it.",
+        kind: Kind::Key,
+        scope: OptionScope::Global,
+        default: "M-m",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-upload-paste",
+        doc: "What a remote client (grofe -r) does with a bracketed paste of local file paths: ask uploads them to the pane's directory after a prompt, on uploads without asking, off pastes the paths as text. Read from this machine's config; a remote server's value is ignored.",
+        kind: Kind::Choice(&["ask", "on", "off"]),
+        scope: OptionScope::Global,
+        default: "ask",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-upload-max",
+        doc: "The largest total size, in MiB, of the files one paste uploads to a remote session; a bigger paste is refused. Read from this machine's config; a remote server's value is ignored.",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "100",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-forward-ports",
+        doc: "What a remote client (grofe -r) does when a remote pane starts listening on a port: ask forwards it to localhost (the same port, or the next free one) after a prompt, auto forwards without asking, off never forwards. Read from this machine's config; a remote server's value is ignored.",
+        kind: Kind::Choice(&["ask", "auto", "off"]),
+        scope: OptionScope::Global,
+        default: "ask",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-reconnect",
+        doc: "Keep a remote attach (grofe -r) alive across a dropped connection: show a reconnect bar and attach again, instead of exiting.",
+        kind: Kind::Bool,
+        scope: OptionScope::Global,
+        default: "on",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-release-url",
+        doc: "Where grofe -r downloads the release it installs on a remote without grofe: an https or file URL, or a directory, holding one v-prefixed directory per version with the archives and SHA256SUMS.",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "https://github.com/termage/grofe/releases/download",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-transport",
+        doc: "How grofe -r reaches the remote proxy: ssh, or quic (a roaming UDP link set up over ssh).",
+        kind: Kind::Choice(&["ssh", "quic"]),
+        scope: OptionScope::Global,
+        default: "ssh",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-udp-ports",
+        doc: "UDP ports grofe proxy --quic picks a free one from, as LOW-HIGH or one port; read on the remote when the roaming transport starts.",
+        kind: Kind::String,
+        scope: OptionScope::Global,
+        default: "60001-61000",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "predictive-echo",
+        doc: "Whether grofe -r draws typed characters at once, underlined, before the remote echoes them: auto does so when the round trip is 50 ms or more, on always, off never. Read from this machine's config.",
+        kind: Kind::Choice(&["auto", "on", "off"]),
+        scope: OptionScope::Global,
+        default: "auto",
+        ..Builtin::PLAIN
+    },
+    Builtin {
+        name: "remote-quic-idle",
+        doc: "Seconds grofe proxy --quic waits with no client connected before it exits; the default is 7 days; 0 is refused.",
+        kind: Kind::Number {
+            max: i32::MAX as i64,
+        },
+        scope: OptionScope::Global,
+        default: "604800",
         ..Builtin::PLAIN
     },
     Builtin {
