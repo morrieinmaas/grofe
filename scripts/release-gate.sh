@@ -62,6 +62,10 @@
 #                              to prove the gate fails and names them
 #   GROFE_GATE_LEGS=<leg>...   run only these legs; the others print SKIP
 #                              (not selected) and the run is no release gate
+#   GROFE_REAL_TMUX=<tmux 3.7b>   on macOS, the real tmux the macos leg
+#                              compares against; the gate refuses to start
+#                              when it (or the default it falls back to) is
+#                              not tmux 3.7b, or when bats does not run
 #   CONTAINER, E2E_PODMAN_NETWORK, E2E_PODMAN_OPTS   as scripts/e2e.sh
 #
 # E2E_STRICT=1 is exported to every leg: a scenario case that failed and
@@ -117,6 +121,22 @@ pin_of() {
 clone_at() {
   git clone --quiet --no-checkout "$1" "$2" &&
     git -C "$2" checkout --quiet --detach "$3"
+}
+
+# macos_preflight: what the macos leg needs from this host, checked before
+# any leg runs. tests/control_mode.rs compares grofe with real tmux 3.7b, the
+# version every golden was recorded on: GROFE_REAL_TMUX names it, and without
+# it the test falls back to /opt/nanobrew/prefix/bin/tmux, which is whatever
+# tmux the package manager last installed. The bats suite needs a bats that
+# runs (a version manager shim with no version selected does not).
+macos_preflight() {
+  local real="${GROFE_REAL_TMUX:-/opt/nanobrew/prefix/bin/tmux}" v
+  v="$("$real" -V 2>/dev/null)" || v="(not runnable)"
+  [ "$v" = "tmux 3.7b" ] ||
+    die "the macos leg needs real tmux 3.7b: $real is $v; set GROFE_REAL_TMUX to a tmux 3.7b binary"
+  export GROFE_REAL_TMUX="$real"
+  bats --version >/dev/null 2>&1 ||
+    die "the macos leg needs bats on PATH, and \`bats --version\` fails"
 }
 
 # --- the legs (each runs in its own process: release-gate.sh --leg <leg>) ---
@@ -275,6 +295,9 @@ main() {
   GROFE_E2E_CANOPY_REPO="$(cd "$GROFE_E2E_CANOPY_REPO" && pwd)"
   GROFE_E2E_ATHOME_REPO="$(cd "$GROFE_E2E_ATHOME_REPO" && pwd)"
   export GROFE_E2E_CANOPY_REPO GROFE_E2E_ATHOME_REPO
+  if [ "$(uname -s)" = Darwin ] && { [ "${#selected[@]}" -eq 0 ] || in_list macos "${selected[@]}"; }; then
+    macos_preflight
+  fi
 
   # The gate tests one commit: a change not committed would be tested by
   # no leg, or by some legs and not others.
