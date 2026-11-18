@@ -107,6 +107,11 @@ CMD ["sleep", "infinity"]
 # logs one miss-log line MISS_ALLOWED does not list (`send-keys -X (not a
 # name): ignored`, a corpus line reaching a pane still in copy mode), and
 # no golden changes with it.
+# Both tmux builds take -fsigned-char: the goldens are recorded on
+# linux/amd64 (scripts/record-compat-goldens.sh), and tmux keeps the case
+# of a search pattern outside ASCII only where `char` is signed
+# (tm_3/unicode), so on an arm64 host the recorder would otherwise disagree
+# with them. On x86_64 the flag is the default.
 # `golden` (uid 1001) is the recorder's user name, which
 # normalization replaces: compat.sh maps the test user onto it.
 FROM docker.io/library/rust:1.98-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS compat
@@ -123,8 +128,8 @@ RUN curl -fsSLo /tmp/tmux.tar.gz \
     "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
   && echo "${TMUX_SHA256}  /tmp/tmux.tar.gz" | sha256sum -c - \
   && mkdir /tmp/tmux && tar -xzf /tmp/tmux.tar.gz -C /tmp/tmux --strip-components=1 \
-  && cd /tmp/tmux && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install \
-  && make distclean && ./configure --prefix=/opt/tmux-sixel --enable-sixel && make -j"$(nproc)" && make install \
+  && cd /tmp/tmux && ./configure CFLAGS='-g -O2 -fsigned-char' --prefix=/usr/local && make -j"$(nproc)" && make install \
+  && make distclean && ./configure CFLAGS='-g -O2 -fsigned-char' --prefix=/opt/tmux-sixel --enable-sixel && make -j"$(nproc)" && make install \
   && cd / && rm -rf /tmp/tmux /tmp/tmux.tar.gz \
   && ln -s /opt/tmux-sixel/bin/tmux /usr/local/bin/tmux-sixel \
   && test "$(/usr/local/bin/tmux -V)" = "tmux ${TMUX_VERSION}" \
