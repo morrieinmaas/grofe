@@ -60,7 +60,7 @@ for a; do [ "$a" = -G ] && {{ echo "serveraliveinterval 0"; exit 0; }}; done
 [ -e '{root}/down' ] && {{ echo "ssh: connect to host box: Connection refused" >&2; exit 255; }}
 while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift 2
-case "$*" in *proxy*) echo $$ >> '{root}/proxies'; [ -e '{root}/hang' ] && exec sleep 60 ;; esac
+case "$*" in *proxy*) echo $$ >> '{root}/proxies'; [ -e '{root}/hang' ] && exec sleep 60; [ -e '{root}/banner' ] && echo "Welcome to box! Last login: today" ;; esac
 export HOME='{root}/home' PATH='{root}/bin:/usr/bin:/bin' GROFE='{sock}'
 export XDG_STATE_HOME='{state}' XDG_RUNTIME_DIR='{run}' XDG_CONFIG_HOME='{cfg}'
 unset GROFE_PANE TMUX
@@ -571,4 +571,16 @@ fn attaching_to_a_fresh_remote_server_never_meets_it_leaving() {
     assert_eq!(sessions.trim(), "main");
     h.send("\x02d");
     h.wait_exit();
+}
+
+/// A remote shell that prints a banner on stdout before the proxy starts
+/// (an unguarded `echo` in `.bashrc`) still connects.
+#[test]
+fn a_banner_before_the_proxy_hello_is_skipped() {
+    let r = Remote::new(true);
+    r.srv.cmd(&["new-session", "-d", "-s", "greeted"]).unwrap();
+    fs::write(r.root().join("banner"), "").unwrap();
+    let out = run_bounded(r.client(&["list-sessions"]), CMD_TIMEOUT);
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout.contains("greeted:"), "{out:?}");
 }
