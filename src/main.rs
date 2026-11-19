@@ -792,9 +792,9 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
         Err(e) => return fail(&e),
     };
     // Kept open until the attach connection is: see [`attach_to`].
-    let mut held = None;
+    let mut held = HangUp(None);
     let (id, created) = match connect_or_start(&socket, own_dir, true).and_then(|stream| {
-        held = stream.try_clone().ok();
+        held = HangUp(stream.try_clone().ok());
         request_with(stream, &hello, &create)
     }) {
         // The id is the last line; `-P`'s output comes before it.
@@ -1196,7 +1196,7 @@ fn shell_command(globals: &Globals, command: &str) -> ExitCode {
 /// (it knows which session holds `$GROFE_PANE`); the client only sends
 /// the pane and `--nest`.
 fn attach(socket: &Path, argv: &[String]) -> ExitCode {
-    match attach_to(socket, argv, false, None) {
+    match attach_to(socket, argv, false, HangUp(None)) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -1207,19 +1207,16 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
 
 /// [`attach`]'s work: the reason the client was let go, or the error.
 /// `created`: the session is the one this client's `new-session` just
-/// made (no `client-attached` hook, as tmux). `held`: a connection to the
-/// server to let go only once the attach connection is open.
-///
-/// `held` and the target check's connection close only once the attach
-/// connection is open, so the server always has one open across the
-/// hand-over: a server that `exit-unattached` or `exit-empty` would end
-/// (see [`request`]) stays up for the attach, as tmux 3.7b's does for its
-/// one client connection.
+/// made (no `client-attached` hook, as tmux). `held`: the connection that
+/// made it, let go only once the attach connection is open, so the server
+/// has one open across the hand-over: an auto-started server that
+/// `exit-unattached` or `exit-empty` would end stays up for the attach, as
+/// tmux 3.7b's does for its one client connection.
 fn attach_to(
     socket: &Path,
     argv: &[String],
     created: bool,
-    held: Option<UnixStream>,
+    held: HangUp,
 ) -> Result<String, String> {
     let parsed = match grofe::cmd::parse(argv) {
         Ok(grofe::cmd::Command::AttachSession(a)) => a,
@@ -1242,12 +1239,7 @@ fn attach_to(
         .into_iter()
         .chain(argv[1..].iter().cloned())
         .collect();
-    let mut check_held = None;
-    let checked = connect_attach().and_then(|s| {
-        check_held = s.try_clone().ok();
-        request_with(s, &control_hello(socket)?, &check)
-    });
-    match checked {
+    match connect_attach().and_then(|s| request(s, socket, &check)) {
         Ok(Reply::Ok { .. }) => {}
         Ok(Reply::Err { err, .. }) => return Err(err),
         Ok(Reply::Event(_)) => return Err("unexpected event reply".to_string()),
@@ -1256,7 +1248,7 @@ fn attach_to(
         Err(e) => return Err(e),
     }
     let stream = connect_attach()?;
-    drop((held, check_held));
+    drop(held);
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: cli_pane(socket),
@@ -1546,18 +1538,25 @@ fn cli_pane(target: &Path) -> Option<PaneId> {
 /// `target` is the socket this request is being sent to, used to decide
 /// whether `$GROFE_PANE` applies (see [`client_pane`]).
 fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, String> {
-    let hang_up = stream.try_clone().ok();
-    let reply = request_with(stream, &control_hello(target)?, argv);
-    // Done, as tmux 3.7b's client sends `MSG_EXITING`: hang up and wait for
-    // the server to close its end, which it does once it has acted on this
-    // connection going (`exit-unattached`, `exit-empty`). The next command
-    // then finds the server as tmux's would.
-    if let Some(mut s) = hang_up {
-        let _ = s.shutdown(std::net::Shutdown::Write);
-        let _ = s.set_read_timeout(Some(HANG_UP_WAIT));
-        let _ = io::copy(&mut s, &mut io::sink());
+    let _done = HangUp(stream.try_clone().ok());
+    request_with(stream, &control_hello(target)?, argv)
+}
+
+/// A connection to the server that, once dropped, is done with, as tmux
+/// 3.7b's client sends `MSG_EXITING`: it hangs up and waits for the server
+/// to close its end, which it does once it has acted on the connection
+/// going (`exit-unattached`, `exit-empty`). The next command then finds
+/// the server as tmux's would.
+struct HangUp(Option<UnixStream>);
+
+impl Drop for HangUp {
+    fn drop(&mut self) {
+        if let Some(s) = &mut self.0 {
+            let _ = s.shutdown(std::net::Shutdown::Write);
+            let _ = s.set_read_timeout(Some(HANG_UP_WAIT));
+            let _ = io::copy(s, &mut io::sink());
+        }
     }
-    reply
 }
 
 /// The longest a CLI waits for the server to close its connection after

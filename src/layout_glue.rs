@@ -11,8 +11,8 @@ use grofe::layouts::{self, Dirs};
 use grofe::protocol::{Reply, Request};
 
 use super::{
-    Globals, attach_to, connect, connect_or_start, control_hello, fail, hello_for, no_server,
-    request, request_with,
+    Globals, HangUp, attach_to, connect, connect_or_start, control_hello, fail, hello_for,
+    no_server, request, request_with,
 };
 
 pub fn run(globals: &Globals, args: &[String]) -> ExitCode {
@@ -107,7 +107,7 @@ impl layouts::Server for Host {
         }
         control_hello(&self.socket)?;
         let argv = ["attach-session", "-t", session_id].map(String::from);
-        let reason = attach_to(&self.socket, &argv, false, None)?;
+        let reason = attach_to(&self.socket, &argv, false, HangUp(None))?;
         println!("[{reason}]");
         Ok(())
     }
