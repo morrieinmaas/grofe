@@ -49,6 +49,7 @@ impl layouts::Server for Host {
         // No pane in the request, as for any new session.
         let hello = hello_for(&self.socket, false)?;
         let stream = connect_or_start(&self.socket, self.own_dir, true)?;
+        let _done = HangUp(stream.try_clone().ok());
         reply(request_with(stream, &hello, argv))
     }
 

@@ -1298,6 +1298,7 @@ fn probe(stream: UnixStream, socket: &Path) -> Result<(), String> {
         request: Default::default(),
     };
     let hello = encode_hello(&Hello::Control(ctx)).map_err(|e| e.to_string())?;
+    let _done = HangUp(stream.try_clone().ok());
     match request_with(stream, &hello, &["list-sessions".to_string()]) {
         Ok(Reply::Ok { .. } | Reply::Err { .. }) => Ok(()),
         Ok(Reply::Event(_)) => Err(not_grofe("unexpected event reply".to_string())),
@@ -1562,6 +1563,8 @@ impl Drop for HangUp {
 /// The longest a CLI waits for the server to close its connection after
 /// the reply: it has its answer, so a server that is slow to get round to
 /// the close does not hold it up for longer.
+// ponytail: past 2 s the CLI goes on, and a server that slow to handle
+// the close can still be found up by the next command.
 const HANG_UP_WAIT: Duration = Duration::from_secs(2);
 
 /// Sends `hello` and one request on `stream` (a socket or a remote

@@ -761,18 +761,21 @@ struct Connections {
 }
 
 impl Connections {
-    /// Runs one connection, then tells the actor it closed. The client sees
-    /// its end of the socket close only once the actor has handled that
-    /// (a copy of the fd goes with the message), as tmux 3.7b's client
-    /// exits only on the server's `MSG_EXITED`: a CLI that has exited is
-    /// no connection any more, so the next one finds a server that
-    /// `exit-unattached` or `exit-empty` was to end gone.
+    /// Runs one connection, then tells the actor it closed. A control
+    /// connection's client (a one-shot CLI) sees its end of the socket close
+    /// only once the actor has handled that (a copy of the fd goes with the
+    /// message), as tmux 3.7b's client exits only on the server's
+    /// `MSG_EXITED`: a CLI that has exited is no connection any more, so the
+    /// next one finds a server that `exit-unattached` or `exit-empty` was to
+    /// end gone.
+    // ponytail: an attach client still exits on its exit frame, before the
+    // actor has handled its close; a command right after a detach can find
+    // the server up where tmux's is gone.
     fn spawn(&self, stream: UnixStream) {
         let msgs = self.msgs.clone();
         let (shutdown, alive) = (self.shutdown.clone(), self.alive.clone());
-        let hold = stream.as_fd().try_clone_to_owned().ok();
         tokio::spawn(async move {
-            let observer = connection(stream, msgs.clone(), shutdown, alive).await;
+            let (observer, hold) = connection(stream, msgs.clone(), shutdown, alive).await;
             let _ = msgs.send(ServerMsg::Closed { observer, hold }).await;
         });
     }
@@ -1133,16 +1136,19 @@ const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 
 /// One client connection. `_alive` is held until the task ends, so shutdown
 /// can wait for in-flight replies to be written. Returns whether the
-/// connection became an observer ([`ServerMsg::Observer`]).
+/// connection became an observer ([`ServerMsg::Observer`]), and for a
+/// control connection a copy of its fd to hold until the actor has
+/// handled the close.
 async fn connection(
     stream: UnixStream,
     msgs: mpsc::Sender<ServerMsg>,
     shutdown: watch::Receiver<bool>,
     alive: mpsc::Sender<()>,
-) -> bool {
+) -> (bool, Option<std::os::fd::OwnedFd>) {
     let mut observer = false;
-    connection_loop(stream, &msgs, shutdown, alive, &mut observer).await;
-    observer
+    let mut hold = None;
+    connection_loop(stream, &msgs, shutdown, alive, &mut observer, &mut hold).await;
+    (observer, hold)
 }
 
 async fn connection_loop(
@@ -1151,6 +1157,7 @@ async fn connection_loop(
     mut shutdown: watch::Receiver<bool>,
     _alive: mpsc::Sender<()>,
     observer: &mut bool,
+    hold: &mut Option<std::os::fd::OwnedFd>,
 ) {
     let codec = LinesCodec::new_with_max_length(protocol::HELLO_MAX_LEN);
     let mut lines = Framed::new(stream, codec);
@@ -1163,6 +1170,9 @@ async fn connection_loop(
     *lines.codec_mut() = protocol::lines_codec();
     let ctx = match protocol::decode_hello(&hello) {
         Ok(Hello::Control(ctx)) => {
+            // Held until the actor has handled the close: see
+            // [`Connections::spawn`].
+            *hold = lines.get_ref().as_fd().try_clone_to_owned().ok();
             // A plugin's own `grofe control` (its env carries GROFE_PLUGIN,
             // which a plugin's `env` cannot override) lives as long as the
             // plugin does.
