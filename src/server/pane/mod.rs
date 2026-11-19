@@ -7,10 +7,13 @@
 //! command, argv and cwd are sampled on demand ([`procinfo::Cache`]).
 
 mod capture_sgr;
+pub(crate) mod cold;
 pub mod io;
+pub(crate) mod looks;
 pub mod marks;
 mod pipe;
 pub mod procinfo;
+pub(crate) mod reflow;
 mod written;
 
 use std::ffi::OsString;
