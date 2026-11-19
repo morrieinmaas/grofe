@@ -39,6 +39,7 @@ unit() {
   cargo clippy --all-targets -- -D warnings
   cargo test --lib --bins
   cargo test --doc
+  cargo test --release --test footprint -- --ignored
 }
 
 acceptance() {

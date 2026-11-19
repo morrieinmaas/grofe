@@ -49,7 +49,8 @@ footprint_mb() {
   fi
 }
 
-# run_case <limit or ""> <idle|cat>: prints the footprint in MB.
+# run_case <limit or ""> <idle|cat>: sets $result to the footprint in MB. It runs
+# in the main shell, not a subshell, so the EXIT trap sees $pid of a failed case.
 run_case() {
   local limit="$1" kind="$2" dir sock
   dir="$(mktemp -d "$root/case.XXXXXX")"
@@ -64,25 +65,26 @@ run_case() {
   }
   if [ "$kind" = idle ]; then
     g new-session -d -x 80 -y 24 -s fp
+    pid="$(g display-message -p '#{pid}')"
     for _ in $(seq 20); do g new-window -d -t fp; done
     sleep 2
   else
     g new-session -d -x 80 -y 24 -s fp "cat '$big'; echo FOOTPRINT-DONE; sleep 600"
+    pid="$(g display-message -p '#{pid}')"
     for _ in $(seq 600); do
       [[ "$(g capture-pane -p -t fp)" == *FOOTPRINT-DONE* ]] && break
       sleep 0.2
     done
     sleep 2
   fi
-  pid="$(g display-message -p '#{pid}')"
-  footprint_mb "$pid"
+  result="$(footprint_mb "$pid")"
   g kill-server || true
   pid=""
 }
 
-idle="$(run_case "" idle)"
-default="$(run_case "" cat)"
-big_limit="$(run_case 50000 cat)"
+run_case "" idle; idle="$result"
+run_case "" cat; default="$result"
+run_case 50000 cat; big_limit="$result"
 
 printf '%-46s %10s\n' "case" "footprint"
 printf '%-46s %7s MB\n' "21 idle 80x24 panes" "$idle"
