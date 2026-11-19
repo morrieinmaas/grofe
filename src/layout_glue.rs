@@ -17,7 +17,11 @@ use super::{
 
 pub fn run(globals: &Globals, args: &[String]) -> ExitCode {
     let (socket, own_dir) = globals.resolve();
-    let mut server = Host { socket, own_dir };
+    let mut server = Host {
+        socket,
+        own_dir,
+        held: HangUp(None),
+    };
     let dirs = Dirs::from_process();
     let mut out = io::stdout().lock();
     match layouts::run(args, &mut server, &dirs, &mut out) {
@@ -29,6 +33,10 @@ pub fn run(globals: &Globals, args: &[String]) -> ExitCode {
 struct Host {
     socket: PathBuf,
     own_dir: bool,
+    /// The first session's connection, held until the attach connection
+    /// is open, so a server `exit-unattached` would end stays up for the
+    /// layout's commands and its attach (see [`attach_to`]).
+    held: HangUp,
 }
 
 fn reply(r: Result<Reply, String>) -> Result<String, String> {
@@ -49,6 +57,9 @@ impl layouts::Server for Host {
         // No pane in the request, as for any new session.
         let hello = hello_for(&self.socket, false)?;
         let stream = connect_or_start(&self.socket, self.own_dir, true)?;
+        if self.held.0.is_none() {
+            self.held = HangUp(stream.try_clone().ok());
+        }
         let _done = HangUp(stream.try_clone().ok());
         reply(request_with(stream, &hello, argv))
     }
@@ -108,7 +119,12 @@ impl layouts::Server for Host {
         }
         control_hello(&self.socket)?;
         let argv = ["attach-session", "-t", session_id].map(String::from);
-        let reason = attach_to(&self.socket, &argv, false, HangUp(None))?;
+        let reason = attach_to(
+            &self.socket,
+            &argv,
+            false,
+            std::mem::replace(&mut self.held, HangUp(None)),
+        )?;
         println!("[{reason}]");
         Ok(())
     }

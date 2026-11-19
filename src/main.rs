@@ -1208,10 +1208,11 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
 /// [`attach`]'s work: the reason the client was let go, or the error.
 /// `created`: the session is the one this client's `new-session` just
 /// made (no `client-attached` hook, as tmux). `held`: the connection that
-/// made it, let go only once the attach connection is open, so the server
-/// has one open across the hand-over: an auto-started server that
-/// `exit-unattached` or `exit-empty` would end stays up for the attach, as
-/// tmux 3.7b's does for its one client connection.
+/// made it. It and the target check's connection are let go only once the
+/// attach connection is open, so the server has one open across the
+/// hand-over: a server that `exit-unattached` or `exit-empty` would end
+/// stays up for the attach, as tmux 3.7b's does for its one client
+/// connection.
 fn attach_to(
     socket: &Path,
     argv: &[String],
@@ -1239,7 +1240,13 @@ fn attach_to(
         .into_iter()
         .chain(argv[1..].iter().cloned())
         .collect();
-    match connect_attach().and_then(|s| request(s, socket, &check)) {
+    // Held, with `held`, until the attach connection is open.
+    let mut checking = HangUp(None);
+    let checked = connect_attach().and_then(|s| {
+        checking = HangUp(s.try_clone().ok());
+        request_with(s, &control_hello(socket)?, &check)
+    });
+    match checked {
         Ok(Reply::Ok { .. }) => {}
         Ok(Reply::Err { err, .. }) => return Err(err),
         Ok(Reply::Event(_)) => return Err("unexpected event reply".to_string()),
@@ -1248,7 +1255,7 @@ fn attach_to(
         Err(e) => return Err(e),
     }
     let stream = connect_attach()?;
-    drop(held);
+    drop((held, checking));
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: cli_pane(socket),
