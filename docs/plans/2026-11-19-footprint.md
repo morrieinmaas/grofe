@@ -33,7 +33,7 @@ Rulings:
 - Ruling: history-limit default 2000 (because tmux parity and the user picked it; cost if wrong: users wanting more set it, and Cold makes that cheap).
 - Ruling: Cold lives inside Marks (because Marks already keys every history row by absolute index and drops rows in sync; cost if wrong: one rename later).
 - Ruling: looks are never evicted (ponytail ceiling: a truecolor flood grows the table by about 64 bytes per distinct look; clear-history resets it).
-- Ruling: a logical line that wraps from Cold into the screen's top row is not rejoined on a width change (ponytail ceiling, rare; tmux rejoins it).
+- Ruling (revised in review): before a resize the newest stored lines go back to alacritty and reflow with the screen, so a line wrapping from Cold onto the screen is rejoined as tmux does. Only alternate-screen resizes keep the old split (ponytail ceiling).
 - Ruling: detail `tests`, T3 and T7 `full` (the 15k cap).
 - Ruling: throughput is checked locally, not asserted in CI (timing is noisy on shared runners); at most 10% slower than before on the 46 MB run.
 - Ruling: the code-size work (dedupe, no behaviour change) is a second plan after this merges, starting from a duplication survey.
