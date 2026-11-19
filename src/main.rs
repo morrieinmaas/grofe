@@ -791,9 +791,12 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
         Ok(h) => h,
         Err(e) => return fail(&e),
     };
-    let (id, created) = match connect_or_start(&socket, own_dir, true)
-        .and_then(|stream| request_with(stream, &hello, &create))
-    {
+    // Kept open until the attach connection is: see [`attach_to`].
+    let mut held = None;
+    let (id, created) = match connect_or_start(&socket, own_dir, true).and_then(|stream| {
+        held = stream.try_clone().ok();
+        request_with(stream, &hello, &create)
+    }) {
         // The id is the last line; `-P`'s output comes before it.
         // ponytail: tmux 3.7b shows `-P`'s output in view mode over the new
         // pane (recorded); grofe has no view mode and drops it.
@@ -810,7 +813,7 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
     if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&new_cmd) {
         argv.extend(c.flags.into_iter().flat_map(|f| ["-f".to_string(), f]));
     }
-    match attach_to(&socket, &argv, created) {
+    match attach_to(&socket, &argv, created, held) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -1193,7 +1196,7 @@ fn shell_command(globals: &Globals, command: &str) -> ExitCode {
 /// (it knows which session holds `$GROFE_PANE`); the client only sends
 /// the pane and `--nest`.
 fn attach(socket: &Path, argv: &[String]) -> ExitCode {
-    match attach_to(socket, argv, false) {
+    match attach_to(socket, argv, false, None) {
         Ok(reason) => {
             println!("[{reason}]");
             ExitCode::SUCCESS
@@ -1204,8 +1207,20 @@ fn attach(socket: &Path, argv: &[String]) -> ExitCode {
 
 /// [`attach`]'s work: the reason the client was let go, or the error.
 /// `created`: the session is the one this client's `new-session` just
-/// made (no `client-attached` hook, as tmux).
-fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, String> {
+/// made (no `client-attached` hook, as tmux). `held`: a connection to the
+/// server to let go only once the attach connection is open.
+///
+/// The attach connection is opened before the target check and before
+/// `held` goes, so the server always has one open across the hand-over:
+/// a server that `exit-unattached` or `exit-empty` would end (see
+/// [`request`]) stays up for the attach, as tmux 3.7b's does for its
+/// one client connection.
+fn attach_to(
+    socket: &Path,
+    argv: &[String],
+    created: bool,
+    held: Option<UnixStream>,
+) -> Result<String, String> {
     let parsed = match grofe::cmd::parse(argv) {
         Ok(grofe::cmd::Command::AttachSession(a)) => a,
         Ok(_) => return Err("attach-session: unexpected command".to_string()),
@@ -1227,6 +1242,8 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
         .into_iter()
         .chain(argv[1..].iter().cloned())
         .collect();
+    let stream = connect_attach()?;
+    drop(held);
     match connect_attach().and_then(|s| request(s, socket, &check)) {
         Ok(Reply::Ok { .. }) => {}
         Ok(Reply::Err { err, .. }) => return Err(err),
@@ -1235,7 +1252,6 @@ fn attach_to(socket: &Path, argv: &[String], created: bool) -> Result<String, St
         Err(e) if server_left(&e) && server_gone(socket) => return Err("no sessions".to_string()),
         Err(e) => return Err(e),
     }
-    let stream = connect_attach()?;
     let ctx = ClientCtx {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         pane: cli_pane(socket),
