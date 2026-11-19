@@ -443,7 +443,7 @@ impl Reader {
                     }
                 }
                 parser.advance(&mut Written(term, marks, Some(&mut *store)), &bytes[fed..]);
-                store.prune(term.grid().history_size());
+                store.prune(marks.history_len(term));
             }
         }
         self.after_parse();
