@@ -1525,8 +1525,24 @@ fn cli_pane(target: &Path) -> Option<PaneId> {
 /// `target` is the socket this request is being sent to, used to decide
 /// whether `$GROFE_PANE` applies (see [`client_pane`]).
 fn request(stream: UnixStream, target: &Path, argv: &[String]) -> Result<Reply, String> {
-    request_with(stream, &control_hello(target)?, argv)
+    let hang_up = stream.try_clone().ok();
+    let reply = request_with(stream, &control_hello(target)?, argv);
+    // Done, as tmux 3.7b's client sends `MSG_EXITING`: hang up and wait for
+    // the server to close its end, which it does once it has acted on this
+    // connection going (`exit-unattached`, `exit-empty`). The next command
+    // then finds the server as tmux's would.
+    if let Some(mut s) = hang_up {
+        let _ = s.shutdown(std::net::Shutdown::Write);
+        let _ = s.set_read_timeout(Some(HANG_UP_WAIT));
+        let _ = io::copy(&mut s, &mut io::sink());
+    }
+    reply
 }
+
+/// The longest a CLI waits for the server to close its connection after
+/// the reply: it has its answer, so a server that is slow to get round to
+/// the close does not hold it up for longer.
+const HANG_UP_WAIT: Duration = Duration::from_secs(2);
 
 /// Sends `hello` and one request on `stream` (a socket or a remote
 /// control channel), and reads until its reply.

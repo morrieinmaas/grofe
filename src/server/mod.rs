@@ -131,9 +131,11 @@ pub enum ServerMsg {
     },
     Pane(PaneEvent),
     /// A client connection ended. `observer`: it had already stopped
-    /// counting (see [`ServerMsg::Observer`]).
+    /// counting (see [`ServerMsg::Observer`]). `hold` keeps the socket open
+    /// until the actor has acted on the close (see [`Connections::spawn`]).
     Closed {
         observer: bool,
+        hold: Option<std::os::fd::OwnedFd>,
     },
     /// A connection turned out to be a plugin's own `grofe control`: it
     /// stops counting as an open connection, since the server supervises it
@@ -759,13 +761,19 @@ struct Connections {
 }
 
 impl Connections {
-    /// Runs one connection, then tells the actor it closed.
+    /// Runs one connection, then tells the actor it closed. The client sees
+    /// its end of the socket close only once the actor has handled that
+    /// (a copy of the fd goes with the message), as tmux 3.7b's client
+    /// exits only on the server's `MSG_EXITED`: a CLI that has exited is
+    /// no connection any more, so the next one finds a server that
+    /// `exit-unattached` or `exit-empty` was to end gone.
     fn spawn(&self, stream: UnixStream) {
         let msgs = self.msgs.clone();
         let (shutdown, alive) = (self.shutdown.clone(), self.alive.clone());
+        let hold = stream.as_fd().try_clone_to_owned().ok();
         tokio::spawn(async move {
             let observer = connection(stream, msgs.clone(), shutdown, alive).await;
-            let _ = msgs.send(ServerMsg::Closed { observer }).await;
+            let _ = msgs.send(ServerMsg::Closed { observer, hold }).await;
         });
     }
 }
@@ -805,9 +813,17 @@ async fn actor(
         // Pane output changes nothing the notify hooks watch, and it is
         // the busiest message: no look at the model after it.
         let mut output = false;
+        // A closed connection's socket, shut once this turn has acted on
+        // the close (exit_if_empty below): dropped at the end of the turn.
+        let mut _closed = None;
         tokio::select! {
             msg = msgs.recv() => match msg {
-                Some(msg) => handle(&mut state, msg),
+                Some(mut msg) => {
+                    if let ServerMsg::Closed { hold, .. } = &mut msg {
+                        _closed = hold.take();
+                    }
+                    handle(&mut state, msg)
+                }
                 None => break,
             },
             Some(event) = pane_events.recv() => {
@@ -1012,7 +1028,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             remote::ensure_poller(state, subscribed && polled);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
-        ServerMsg::Closed { observer } => {
+        ServerMsg::Closed { observer, .. } => {
             if !observer {
                 state.connections = state.connections.saturating_sub(1);
             }
