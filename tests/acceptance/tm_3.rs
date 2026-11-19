@@ -630,6 +630,9 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
 #[test]
 fn commands_behind_a_search_run_in_order() {
     let srv = TestServer::start();
+    // Written against a 50 000-line history, grofe's default before 2000.
+    srv.cmd(&["set-option", "-g", "history-limit", "50000"])
+        .unwrap();
     srv.cmd(&[
         "new-session",
         "-d",
@@ -700,6 +703,9 @@ fn commands_behind_a_search_run_in_order() {
 #[test]
 fn respawning_a_pane_mid_search_leaves_the_new_mode_alone() {
     let srv = TestServer::start();
+    // Written against a 50 000-line history, grofe's default before 2000.
+    srv.cmd(&["set-option", "-g", "history-limit", "50000"])
+        .unwrap();
     srv.cmd(&[
         "new-session",
         "-d",
