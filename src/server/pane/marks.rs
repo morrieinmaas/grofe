@@ -776,4 +776,24 @@ mod tests {
         assert_eq!(e.history(), 10);
         assert_eq!(e.term.grid().history_size(), 0);
     }
+
+    #[test]
+    fn a_widening_rejoins_a_row_that_ended_in_a_leading_spacer() {
+        let mut e = Emu::new(2, 5, 100);
+        e.feed("abcd界z\r\nq1\r\nq2\r\nq3");
+        assert!(e.marks.cold().len() >= 2);
+        e.marks.resize(&mut e.term, Size(2, 10));
+        assert_eq!(e.text(0).trim_end(), "abcd界 z");
+    }
+
+    #[test]
+    fn a_narrowing_at_the_limit_drops_the_oldest_rows_and_their_marks() {
+        let mut e = Emu::new(3, 10, 6);
+        for i in 1..=8 {
+            e.feed(&format!("\x01l{i}xxxxxxx\r\n"));
+        }
+        e.marks.resize(&mut e.term, Size(3, 5));
+        assert_eq!(e.history(), 6);
+        assert_eq!(e.marked(), ["*l5xxx", "*l6xxx", "*l7xxx", "*l8xxx"]);
+    }
 }

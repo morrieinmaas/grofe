@@ -26,7 +26,11 @@ pub fn reflow_rows(
     while i < rows.len() {
         let mut line: Vec<SnapCell> = Vec::new();
         while i < rows.len() && rows[i].1.wrapped && i + 1 < rows.len() {
-            line.extend_from_slice(&rows[i].0);
+            let cells = &rows[i].0;
+            let leading = cells
+                .last()
+                .is_some_and(|c| c.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER));
+            line.extend_from_slice(&cells[..cells.len() - usize::from(leading)]);
             i += 1;
         }
         let (cells, meta) = &rows[i];
@@ -220,6 +224,16 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert!(out[0].0[1].flags.contains(WRITTEN));
         assert_eq!(out[0].1.used, 3);
+    }
+
+    #[test]
+    fn a_leading_spacer_is_dropped_when_rows_join() {
+        let mut a = row("abc", 3, true);
+        a.0.push(cell(' ', CellFlags::LEADING_WIDE_CHAR_SPACER));
+        let out = reflow_rows(&[a, row("界", 2, false)], 8);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0.len(), 5);
+        assert_eq!(out[0].1.used, 5);
     }
 
     #[test]
