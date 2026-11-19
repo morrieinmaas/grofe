@@ -338,13 +338,20 @@ mod tests {
 
     #[test]
     fn a_tcp_channel_reaches_a_port_on_ipv6_localhost_only() {
-        let Ok(v6) = std::net::TcpListener::bind("[::1]:0") else {
+        if std::net::TcpListener::bind("[::1]:0").is_err() {
             return; // no IPv6 here
-        };
-        let port = v6.local_addr().unwrap().port();
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
-            return; // the v4 port is taken by something else
         }
+        // A port below every default ephemeral range (Linux's from 32768,
+        // macOS's from 49152), free on ::1 and on 127.0.0.1. Any port a
+        // `:0` bind could be handed, another test's IPv4 listener could
+        // take on 127.0.0.1 before the connection is made.
+        let Some((_v6, port)) = (20000..21000).find_map(|port| {
+            let v6 = std::net::TcpListener::bind(("::1", port)).ok()?;
+            std::net::TcpListener::bind(("127.0.0.1", port)).ok()?;
+            Some((v6, port))
+        }) else {
+            return; // no such port free on both
+        };
         // 127.0.0.1:port is free (refused), so the connection goes to ::1.
         let stream = connect_local(port).unwrap();
         assert!(stream.peer_addr().unwrap().is_ipv6());

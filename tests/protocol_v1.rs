@@ -955,7 +955,8 @@ fn subscribed(
 }
 
 /// Sends `n` `set -g @n <i>-<pad>` requests on one connection, reading the
-/// replies as it goes.
+/// replies as it goes. Returns once every event they caused is offered to
+/// the subscribers.
 fn fire(srv: &TestServer, n: usize, pad: usize) {
     let mut raw = Raw::open(srv);
     raw.send(&fixture("hello-control"));
@@ -974,6 +975,10 @@ fn fire(srv: &TestServer, n: usize, pad: usize) {
         assert!(raw.line().contains(r#""ok":true"#));
     }
     sender.join().unwrap();
+    // The actor replies to a command before it flushes the command's
+    // events, so the last `set`'s event may not be offered yet. The actor
+    // takes the next request only after that flush.
+    srv.cmd(&["show-options", "-gv", "@n"]).unwrap();
 }
 
 #[test]

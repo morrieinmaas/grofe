@@ -509,18 +509,19 @@ fn two_restores_spawn_the_resumes_in_the_same_order_and_offsets() {
     }
 }
 
-/// With `restore-stagger-ms 0` every resume starts within 100 ms of the
-/// restore.
+/// With `restore-stagger-ms 0` every resume starts at once: in the restore
+/// itself, so all four are logged by the time it has answered. A delayed
+/// resume is logged once its timer has run, after that. (How many ms the
+/// spawns took is no measure: a loaded host stretched four of them past
+/// 400 ms.)
 #[test]
 fn stagger_zero_starts_every_resume_at_once() {
     let srv = TestServer::start();
     let agent = Agent::new();
     agent.config(&srv, "restore-stagger-ms = 0");
     restore(&srv, &four_resumes(&srv.home));
-    let starts = wait_started(&srv, "resume", 4);
-    for (uid, ms) in &starts {
-        assert!(*ms < 100, "{uid} started at {ms} ms");
-    }
+    let log = last_start_log(&srv);
+    assert_eq!(started(&log, "resume").len(), 4, "{log}");
 }
 
 /// At 1000, a pane without a resume has its shell before the resume's delay is

@@ -131,9 +131,11 @@ pub enum ServerMsg {
     },
     Pane(PaneEvent),
     /// A client connection ended. `observer`: it had already stopped
-    /// counting (see [`ServerMsg::Observer`]).
+    /// counting (see [`ServerMsg::Observer`]). `hold` keeps the socket open
+    /// until the actor has acted on the close (see [`Connections::spawn`]).
     Closed {
         observer: bool,
+        hold: Option<std::os::fd::OwnedFd>,
     },
     /// A connection turned out to be a plugin's own `grofe control`: it
     /// stops counting as an open connection, since the server supervises it
@@ -759,13 +761,22 @@ struct Connections {
 }
 
 impl Connections {
-    /// Runs one connection, then tells the actor it closed.
+    /// Runs one connection, then tells the actor it closed. A control
+    /// connection's client (a one-shot CLI) sees its end of the socket close
+    /// only once the actor has handled that (the socket goes with the
+    /// message), as tmux 3.7b's client exits only on the server's
+    /// `MSG_EXITED`: a CLI that has exited is no connection any more, so the
+    /// next one finds a server that `exit-unattached` or `exit-empty` was to
+    /// end gone.
+    // ponytail: an attach client still exits on its exit frame, before the
+    // actor has handled its close; a command right after a detach can find
+    // the server up where tmux's is gone.
     fn spawn(&self, stream: UnixStream) {
         let msgs = self.msgs.clone();
         let (shutdown, alive) = (self.shutdown.clone(), self.alive.clone());
         tokio::spawn(async move {
-            let observer = connection(stream, msgs.clone(), shutdown, alive).await;
-            let _ = msgs.send(ServerMsg::Closed { observer }).await;
+            let (observer, hold) = connection(stream, msgs.clone(), shutdown, alive).await;
+            let _ = msgs.send(ServerMsg::Closed { observer, hold }).await;
         });
     }
 }
@@ -805,9 +816,17 @@ async fn actor(
         // Pane output changes nothing the notify hooks watch, and it is
         // the busiest message: no look at the model after it.
         let mut output = false;
+        // A closed connection's socket, shut once this turn has acted on
+        // the close (exit_if_empty below): dropped at the end of the turn.
+        let mut _closed = None;
         tokio::select! {
             msg = msgs.recv() => match msg {
-                Some(msg) => handle(&mut state, msg),
+                Some(mut msg) => {
+                    if let ServerMsg::Closed { hold, .. } = &mut msg {
+                        _closed = hold.take();
+                    }
+                    handle(&mut state, msg)
+                }
                 None => break,
             },
             Some(event) = pane_events.recv() => {
@@ -1012,7 +1031,7 @@ fn handle(state: &mut State, msg: ServerMsg) {
             remote::ensure_poller(state, subscribed && polled);
         }
         ServerMsg::Pane(event) => handle_pane_event(state, event),
-        ServerMsg::Closed { observer } => {
+        ServerMsg::Closed { observer, .. } => {
             if !observer {
                 state.connections = state.connections.saturating_sub(1);
             }
@@ -1117,16 +1136,19 @@ const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 
 /// One client connection. `_alive` is held until the task ends, so shutdown
 /// can wait for in-flight replies to be written. Returns whether the
-/// connection became an observer ([`ServerMsg::Observer`]).
+/// connection became an observer ([`ServerMsg::Observer`]), and for a
+/// control connection its socket, to hold until the actor has handled the
+/// close.
 async fn connection(
     stream: UnixStream,
     msgs: mpsc::Sender<ServerMsg>,
     shutdown: watch::Receiver<bool>,
     alive: mpsc::Sender<()>,
-) -> bool {
+) -> (bool, Option<std::os::fd::OwnedFd>) {
     let mut observer = false;
-    connection_loop(stream, &msgs, shutdown, alive, &mut observer).await;
-    observer
+    let mut hold = None;
+    connection_loop(stream, &msgs, shutdown, alive, &mut observer, &mut hold).await;
+    (observer, hold)
 }
 
 async fn connection_loop(
@@ -1135,6 +1157,7 @@ async fn connection_loop(
     mut shutdown: watch::Receiver<bool>,
     _alive: mpsc::Sender<()>,
     observer: &mut bool,
+    hold: &mut Option<std::os::fd::OwnedFd>,
 ) {
     let codec = LinesCodec::new_with_max_length(protocol::HELLO_MAX_LEN);
     let mut lines = Framed::new(stream, codec);
@@ -1198,7 +1221,7 @@ async fn connection_loop(
     let (events_tx, mut events_rx) = mpsc::channel(events::QUEUE);
     // A request that arrived while an earlier one waited for its answer.
     let mut next: Option<String> = None;
-    loop {
+    'conn: loop {
         let line = if let Some(line) = next.take() {
             Some(Ok(line))
         } else {
@@ -1261,7 +1284,7 @@ async fn connection_loop(
                 reply = &mut reply_rx => break reply,
                 line = lines.next(), if next.is_none() => match line {
                     Some(Ok(line)) => next = Some(line),
-                    _ => return,
+                    _ => break 'conn,
                 },
             }
         };
@@ -1269,6 +1292,15 @@ async fn connection_loop(
         if send(&mut lines, &reply).await.is_err() {
             break;
         }
+    }
+    // Held until the actor has handled the close (see
+    // [`Connections::spawn`]); an observer's close changes nothing there.
+    if !*observer {
+        *hold = lines
+            .into_inner()
+            .into_std()
+            .ok()
+            .map(std::os::fd::OwnedFd::from);
     }
 }
 
