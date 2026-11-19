@@ -9,6 +9,7 @@ mod common;
 
 use std::fs;
 use std::io::Write;
+#[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
