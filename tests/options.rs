@@ -88,18 +88,18 @@ fn show_options_lists_the_builtin_globals() {
     let srv = TestServer::start();
     let out = srv.cmd(&["show-options", "-g"]).unwrap();
     // The harness starts servers with remain-on-exit on.
-    for line in ["remain-on-exit on", "history-limit 50000", "base-index 1"] {
+    for line in ["remain-on-exit on", "history-limit 2000", "base-index 1"] {
         assert!(out.lines().any(|l| l == line), "{line:?} in {out:?}");
     }
-    srv.cmd(&["set", "-g", "history-limit", "2000"]).unwrap();
+    srv.cmd(&["set", "-g", "history-limit", "5000"]).unwrap();
     assert_eq!(
         srv.cmd(&["show", "-g", "history-limit"]).unwrap(),
-        "history-limit 2000\n"
+        "history-limit 5000\n"
     );
     srv.cmd(&["set", "-gu", "history-limit"]).unwrap();
     assert_eq!(
         srv.cmd(&["show", "-g", "history-limit"]).unwrap(),
-        "history-limit 50000\n"
+        "history-limit 2000\n"
     );
 }
 

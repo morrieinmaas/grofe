@@ -153,7 +153,7 @@ fn conf_d_loads_in_lexical_order() {
 fn defaults_come_from_the_built_in_layer() {
     let s = Setup::new();
     let r = resolved(s.load());
-    assert_eq!(r.get("history-limit"), Some("50000"));
+    assert_eq!(r.get("history-limit"), Some("2000"));
     assert_eq!(r.get("escape-time-ms"), Some("25"));
     let src = r.provenance.get("history-limit").expect("provenance");
     assert_eq!(src.layer, Layer::Defaults);
@@ -598,7 +598,7 @@ fn show_config_explain_names_the_file() {
     let out = s.show_config(&["history-limit", "--explain"], &s.home());
     assert_eq!(
         out.stdout,
-        "history-limit = 50000\n  set by built-in defaults\n"
+        "history-limit = 2000\n  set by built-in defaults\n"
     );
 }
 
