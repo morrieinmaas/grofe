@@ -300,7 +300,7 @@ impl Cold {
         out.clear();
         let (text, runs) = row.data.split_at(row.text as usize);
         let mut chars = std::str::from_utf8(text).unwrap_or_default().chars();
-        for run in runs.chunks_exact(RUN) {
+        for run in runs.as_chunks::<RUN>().0 {
             let n = u16::from_le_bytes([run[0], run[1]]);
             let id = u32::from_le_bytes([run[2], run[3], run[4], run[5]]);
             for c in chars.by_ref().take(n as usize) {

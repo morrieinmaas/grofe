@@ -15,6 +15,7 @@
 - [Messages and the prompt](messages.md)
 - [Lua scripting and packs](lua.md)
 - [Plugins](plugins.md)
+- [Performance and memory](performance.md)
 - [Troubleshooting](troubleshooting.md)
 - [Contributing](contributing.md)
 

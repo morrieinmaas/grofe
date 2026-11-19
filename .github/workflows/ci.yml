@@ -47,6 +47,11 @@ jobs:
         if: runner.os == 'macOS'
         run: scripts/ci-macos.sh unit
 
+      # The server's memory budget (tests/footprint.rs), ignored in a plain
+      # `cargo test`: idle panes and a 46 MB flood stay under their limits.
+      - name: Memory footprint budget
+        run: cargo test --release --test footprint -- --ignored
+
   acceptance:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     timeout-minutes: 30
