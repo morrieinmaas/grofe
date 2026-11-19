@@ -226,6 +226,13 @@ const REINIT: &[u8] = b"\x1b[?1049l\x1b[0m\x1b[?25h\x1b[?7h\x1b[4l\x1b[?6l\x1b[?
     \x1b[?2026l\x1b[r\x1b[?5W\x1b(B\x0f\x1b[<99u\x1b[=0;1u\x1b[H";
 
 impl Emu {
+    /// Frees the grid's cache of spare rows, which once a pane has scrolled
+    /// holds up to 1000 rows (`cols` x 24 B each) for nothing while it is
+    /// idle. The next scroll refills it.
+    pub(crate) fn trim_idle(&mut self) {
+        self.term.grid_mut().truncate();
+    }
+
     /// tmux's `screen_reinit`: the visible lines (and their marks), the
     /// cursor, modes, tab stops and hyperlinks are reset; the scrollback and
     /// the title stay.
@@ -1856,7 +1863,76 @@ fn start_delayed(cmd: tokio::process::Command, slave: &OwnedFd) -> Option<tokio:
 
 #[cfg(test)]
 mod tests {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
     use super::*;
+
+    thread_local! {
+        static LIVE: Cell<isize> = const { Cell::new(0) };
+    }
+
+    /// Counts the live bytes of the thread that allocated them, so a test
+    /// can see what freeing a cache gives back.
+    struct Counting;
+
+    // SAFETY: forwards every call to `System`, only adding to a counter.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            LIVE.with(|n| n.set(n.get() + l.size() as isize));
+            unsafe { System.alloc(l) }
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            LIVE.with(|n| n.set(n.get() + l.size() as isize));
+            unsafe { System.alloc_zeroed(l) }
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            LIVE.with(|n| n.set(n.get() - l.size() as isize));
+            unsafe { System.dealloc(p, l) }
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+            LIVE.with(|n| n.set(n.get() + new as isize - l.size() as isize));
+            unsafe { System.realloc(p, l, new) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOC: Counting = Counting;
+
+    /// A pane that has scrolled keeps up to 1000 spare rows in its grid;
+    /// `trim_idle`, which the reader runs once the pty is drained, frees
+    /// them.
+    #[test]
+    fn trim_idle_frees_the_grids_spare_rows() {
+        use alacritty_terminal::term::test::TermSize;
+        let live = || LIVE.with(Cell::get);
+        let mut emu = Emu {
+            term: Term::new(
+                term::Config::default(),
+                &TermSize::new(200, 50),
+                Listener(Default::default()),
+            ),
+            parser: Processor::new(),
+            images: Store::new(200, 50, 100),
+            marks: Marks::new(100),
+            generation: 0,
+        };
+        let Emu {
+            term,
+            parser,
+            marks,
+            ..
+        } = &mut emu;
+        parser.advance(
+            &mut written::Written(term, marks, None),
+            "line\r\n".repeat(3000).as_bytes(),
+        );
+        let before = live();
+        emu.trim_idle();
+        let freed = before - live();
+        // 1000 rows of 200 cells at 24 B is 4.8 MB; allow for rounding.
+        assert!(freed > 1_000_000, "freed only {freed} bytes");
+    }
 
     /// `retry_pty` over scripted results: how many opens it made and what
     /// it returned.

@@ -175,7 +175,8 @@ fn unpack_colour(v: u32) -> Option<Rgb> {
 /// timeout, and report `Exited` once the child has exited and the master has
 /// drained (EOF/EIO, or `EXIT_GRACE` of quiet).
 pub(crate) async fn reader(mut r: Reader) {
-    let mut buf = vec![0u8; READ_CHUNK];
+    // Allocated for a burst of output, freed once the pty is drained.
+    let mut buf = Vec::new();
     // A pane whose program never ran has no output to drain.
     let mut drained = r.child.is_none();
     let mut exit: Option<Option<i32>> = None;
@@ -197,6 +198,7 @@ pub(crate) async fn reader(mut r: Reader) {
                     drained = true;
                     continue;
                 };
+                buf.resize(READ_CHUNK, 0);
                 match guard.try_io(|fd| {
                     nix::unistd::read(fd.get_ref(), &mut buf).map_err(std::io::Error::from)
                 }) {
@@ -213,6 +215,9 @@ pub(crate) async fn reader(mut r: Reader) {
                         if exit.is_some() {
                             r.slave = None;
                         }
+                        // Drained: give back what a burst grew.
+                        buf = Vec::new();
+                        r.trim_idle();
                     }
                 }
             }
@@ -223,6 +228,7 @@ pub(crate) async fn reader(mut r: Reader) {
                 // held, so look now: if it is empty the slave can go, and
                 // EOF follows without waiting out the grace.
                 if !drained {
+                    buf.resize(READ_CHUNK, 0);
                     match nix::unistd::read(r.master.get_ref(), &mut buf) {
                         Ok(0) => drained = true,
                         Ok(n) => {
@@ -297,6 +303,14 @@ impl Reader {
         let found = self.feed(bytes);
         let tapped = OUTPUT_TAP.load(Ordering::Relaxed).then(|| bytes.to_vec());
         (found, tapped)
+    }
+
+    /// The pty is drained: free the emulator's idle row cache.
+    fn trim_idle(&self) {
+        let mut emu = lock(&self.emu);
+        if emu.generation == self.generation {
+            emu.trim_idle();
+        }
     }
 
     /// End a pending synchronized update, if any, and handle its events.
