@@ -33,3 +33,21 @@ fn an_attaching_new_session_survives_exit_unattached() {
         text.contains("up-and-attached")
     });
 }
+
+/// So does `grofe layout up`: it holds its first session's connection
+/// until it has attached.
+#[test]
+fn layout_up_survives_exit_unattached() {
+    let srv = TestServer::unstarted();
+    let dir = srv.config_home.join("grofe");
+    fs::create_dir_all(dir.join("layouts")).unwrap();
+    fs::write(dir.join("config.toml"), "exit-unattached = true\n").unwrap();
+    fs::write(dir.join("layouts/dev.toml"), "name = \"dev\"\n").unwrap();
+    let mut cmd = srv.command();
+    cmd.args(["layout", "up", "dev"])
+        .env("TERM", "xterm-256color");
+    let mut client = Harness::spawn(cmd, 80, 24);
+    client.wait_until("the status row of dev", CMD_TIMEOUT, |text| {
+        text.lines().last().is_some_and(|l| l.starts_with("[dev]"))
+    });
+}

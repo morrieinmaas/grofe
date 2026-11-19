@@ -57,10 +57,12 @@ impl layouts::Server for Host {
         // No pane in the request, as for any new session.
         let hello = hello_for(&self.socket, false)?;
         let stream = connect_or_start(&self.socket, self.own_dir, true)?;
+        // Kept as `held` if it is the first, else hung up once answered
+        // (a hang-up shuts the socket, so the two cannot share it).
+        let mut done = HangUp(stream.try_clone().ok());
         if self.held.0.is_none() {
-            self.held = HangUp(stream.try_clone().ok());
+            std::mem::swap(&mut self.held, &mut done);
         }
-        let _done = HangUp(stream.try_clone().ok());
         reply(request_with(stream, &hello, argv))
     }
 
