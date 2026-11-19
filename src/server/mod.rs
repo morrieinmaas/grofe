@@ -763,7 +763,7 @@ struct Connections {
 impl Connections {
     /// Runs one connection, then tells the actor it closed. A control
     /// connection's client (a one-shot CLI) sees its end of the socket close
-    /// only once the actor has handled that (a copy of the fd goes with the
+    /// only once the actor has handled that (the socket goes with the
     /// message), as tmux 3.7b's client exits only on the server's
     /// `MSG_EXITED`: a CLI that has exited is no connection any more, so the
     /// next one finds a server that `exit-unattached` or `exit-empty` was to
@@ -1137,8 +1137,8 @@ const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 /// One client connection. `_alive` is held until the task ends, so shutdown
 /// can wait for in-flight replies to be written. Returns whether the
 /// connection became an observer ([`ServerMsg::Observer`]), and for a
-/// control connection a copy of its fd to hold until the actor has
-/// handled the close.
+/// control connection its socket, to hold until the actor has handled the
+/// close.
 async fn connection(
     stream: UnixStream,
     msgs: mpsc::Sender<ServerMsg>,
@@ -1170,9 +1170,6 @@ async fn connection_loop(
     *lines.codec_mut() = protocol::lines_codec();
     let ctx = match protocol::decode_hello(&hello) {
         Ok(Hello::Control(ctx)) => {
-            // Held until the actor has handled the close: see
-            // [`Connections::spawn`].
-            *hold = lines.get_ref().as_fd().try_clone_to_owned().ok();
             // A plugin's own `grofe control` (its env carries GROFE_PLUGIN,
             // which a plugin's `env` cannot override) lives as long as the
             // plugin does.
@@ -1224,7 +1221,7 @@ async fn connection_loop(
     let (events_tx, mut events_rx) = mpsc::channel(events::QUEUE);
     // A request that arrived while an earlier one waited for its answer.
     let mut next: Option<String> = None;
-    loop {
+    'conn: loop {
         let line = if let Some(line) = next.take() {
             Some(Ok(line))
         } else {
@@ -1287,7 +1284,7 @@ async fn connection_loop(
                 reply = &mut reply_rx => break reply,
                 line = lines.next(), if next.is_none() => match line {
                     Some(Ok(line)) => next = Some(line),
-                    _ => return,
+                    _ => break 'conn,
                 },
             }
         };
@@ -1295,6 +1292,15 @@ async fn connection_loop(
         if send(&mut lines, &reply).await.is_err() {
             break;
         }
+    }
+    // Held until the actor has handled the close (see
+    // [`Connections::spawn`]); an observer's close changes nothing there.
+    if !*observer {
+        *hold = lines
+            .into_inner()
+            .into_std()
+            .ok()
+            .map(std::os::fd::OwnedFd::from);
     }
 }
 
