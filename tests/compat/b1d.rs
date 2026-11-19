@@ -31,7 +31,8 @@ fn clock_mode_matches_its_golden() {
 
 /// What the clock draws changes with the time, so no golden holds it: the
 /// screen has the big digits' blocks (and nothing of the pane's own text)
-/// until a key is typed, then the pane is back.
+/// until a key is typed, then the pane is back. The wait is for any block,
+/// not a run of them: at 11:11 every digit is a `1`, one block wide.
 #[test]
 fn the_clock_draws_digits_until_a_key_is_typed() {
     use crate::fe_1::grofe_cli;
@@ -44,7 +45,7 @@ $ set -g status off
 client 80x24 attach -t main
 screen pane-text
 $ clock-mode
-screen ####
+screen #
 keys z
 screen pane-text
 ";
