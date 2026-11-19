@@ -204,8 +204,25 @@ impl Cold {
             .collect()
     }
 
-    /// Re-lays the rows out `cols` wide.
-    pub fn reflow(&mut self, cols: usize) {
+    /// The newest rows that hold the last `lines` logical lines (the last
+    /// of them may run on past the store, into the screen).
+    pub fn tail_rows(&self, lines: usize) -> usize {
+        let len = self.rows.len();
+        let mut seen = 0;
+        for i in (0..len).rev() {
+            if i == 0 || !self.rows[i - 1].wrapped {
+                seen += 1;
+                if seen == lines {
+                    return len - i;
+                }
+            }
+        }
+        len
+    }
+
+    /// Re-lays the rows out `cols` wide; returns how many of the oldest
+    /// rows the limit then dropped.
+    pub fn reflow(&mut self, cols: usize) -> usize {
         let rows: Vec<(Vec<SnapCell>, ColdMeta)> = (0..self.rows.len())
             .map(|i| {
                 let mut cells = Vec::new();
@@ -213,13 +230,12 @@ impl Cold {
                 (cells, meta)
             })
             .collect();
-        let limit = self.limit;
         self.clear();
+        let mut dropped = 0;
         for (cells, meta) in reflow_rows(&rows, cols) {
-            self.push(&cells, meta.used, meta.wrapped);
+            dropped += self.push(&cells, meta.used, meta.wrapped);
         }
-        self.limit = limit;
-        self.trim();
+        dropped
     }
 
     /// Heap bytes of the rows and the looks table.
@@ -425,6 +441,19 @@ mod tests {
         assert_eq!(c.len(), 0);
         let mut out = Vec::new();
         assert_eq!(c.pop_newest(2, &mut out), None);
+    }
+
+    #[test]
+    fn tail_rows_counts_whole_logical_lines() {
+        let mut c = Cold::new(10);
+        assert_eq!(c.tail_rows(3), 0);
+        c.push(&row("ab"), 2, true);
+        c.push(&row("c"), 1, false);
+        c.push(&row("d"), 1, false);
+        c.push(&row("ef"), 2, true);
+        // `ef` runs on into the screen: it is a line of its own here.
+        assert_eq!((c.tail_rows(1), c.tail_rows(2), c.tail_rows(3)), (1, 2, 4));
+        assert_eq!(c.tail_rows(9), 4);
     }
 
     #[test]

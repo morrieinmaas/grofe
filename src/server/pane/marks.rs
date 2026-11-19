@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Cell;
@@ -232,19 +232,27 @@ impl Marks {
     /// `term.resize(size)`, with the marks following their lines and the
     /// cold rows following the screen: a taller screen takes rows back from
     /// the store, a width change reflows it.
+    ///
+    /// A width change hands the emulator the store's last logical lines, one
+    /// more than the screen has rows, so that it reflows them with the
+    /// screen as it did with its own history: a line wrapping from the store
+    /// onto the screen is rejoined, and a screen that loses rows to joins
+    /// takes rows from above. The older rows reflow in the store; logical
+    /// lines reflow independently, so the two parts join up.
     pub fn resize<L: EventListener>(&mut self, term: &mut Term<L>, size: impl Dimensions) {
         let cols = size.columns();
         let widens = cols != term.columns();
         if alt(term) {
             if widens {
                 self.map.clear();
+                // ponytail: the normal screen is not reachable here, so a
+                // line wrapping from the store onto it is not rejoined.
                 self.cold.reflow(cols);
             }
             term.resize(size);
             return;
         }
         self.sync(term);
-        let before = (widens && !self.map.is_empty()).then(|| self.shapes(term));
         let old_lines = term.screen_lines();
         let lines = size.screen_lines();
         if lines != old_lines {
@@ -256,16 +264,56 @@ impl Marks {
             }
         }
         if widens {
-            self.cold.reflow(cols);
+            // After the height change: rows it cut below the cursor are not
+            // lines that went off the top.
+            let before = (!self.map.is_empty()).then(|| self.shapes(term));
+            let k = self.cold.tail_rows(term.screen_lines() + 1);
+            self.unspill(term, k);
+            let mut cut = self.cold.reflow(cols);
             term.resize(size);
-            self.spill(term);
+            cut += self.spill(term);
             if let Some(before) = before {
                 let after = self.shapes(term);
-                let dropped = starts(&before).len().saturating_sub(starts(&after).len());
+                let dropped = if cut > 0 {
+                    starts(&before).len().saturating_sub(starts(&after).len())
+                } else {
+                    0
+                };
                 self.reflow(&before, &after, cols, dropped);
             }
         }
         self.erase_from(self.history_len(term) + term.screen_lines());
+    }
+
+    /// Moves the newest `k` cold rows back into the emulator's (empty)
+    /// history, just above the screen, which stays as it is.
+    fn unspill<L: EventListener>(&mut self, term: &mut Term<L>, k: usize) {
+        if k == 0 {
+            return;
+        }
+        let grid = term.grid_mut();
+        let (lines, cols) = (grid.screen_lines() as i32, grid.columns());
+        let k = k as i32;
+        // Scrolls the screen up into history by `k`, then moves it back
+        // down: the `k` history rows above it are left to fill.
+        grid.scroll_up(&(Line(0)..Line(lines)), k as usize);
+        for i in (0..lines).rev() {
+            grid[Line(i)] = std::mem::take(&mut grid[Line(i - k)]);
+        }
+        let mut cells = Vec::with_capacity(cols);
+        for line in (-k..0).rev() {
+            let Some(meta) = self.cold.pop_newest(cols, &mut cells) else {
+                break;
+            };
+            let mut row = Row::new(cols);
+            for (c, snap) in cells.iter().take(cols).enumerate() {
+                row[Column(c)] = cell_of(snap);
+            }
+            row[Column(cols - 1)]
+                .flags
+                .set(CellFlags::WRAPLINE, meta.wrapped);
+            grid[Line(line)] = row;
+        }
     }
 
     /// Puts the newest cold rows (at most `d`) back on the top of a screen
@@ -785,6 +833,44 @@ mod tests {
         e.marks.resize(&mut e.term, Size(3, 5));
         assert_eq!(e.history(), 6);
         assert_eq!(e.marked(), ["*l5xxx", "*l6xxx", "*l7xxx", "*l8xxx"]);
+    }
+
+    /// A height shrink with the cursor mid-screen cuts rows below it; with a
+    /// width change in the same resize, those are not lines gone off the
+    /// top, so the marks above stay.
+    #[test]
+    fn a_shrink_with_a_width_change_keeps_the_marks_above_the_cursor() {
+        let mut e = Emu::new(10, 20, 100);
+        e.feed("\x01p1\r\n\x01p2");
+        e.marks.resize(&mut e.term, Size(5, 30));
+        assert_eq!(e.marked(), ["*p1", "*p2"]);
+    }
+
+    /// A line wrapping from the store onto the screen is rejoined by a
+    /// widening, as tmux's `grid_reflow` rejoins it, and the marks after it
+    /// stay on their lines.
+    #[test]
+    fn a_widening_rejoins_a_line_wrapping_from_the_store_onto_the_screen() {
+        let mut e = Emu::new(3, 10, 100);
+        e.feed("a\r\n0123456789ABCDEFGHIJKL\r\n\x01pr");
+        assert_eq!(e.marks.cold().len(), 2);
+        e.marks.resize(&mut e.term, Size(3, 30));
+        assert_eq!(e.marked(), ["*pr"]);
+        assert_eq!(lines(&e), ["a", "0123456789ABCDEFGHIJKL", "pr"]);
+    }
+
+    /// A screen that loses rows to a widening's joins takes cold rows from
+    /// above, as the emulator takes them from its own history.
+    #[test]
+    fn a_widening_fills_the_screen_from_the_store() {
+        let mut e = Emu::new(3, 10, 100);
+        e.feed("l1\r\nl2\r\nl3\r\n0123456789ABCD\r\nEFGHIJKLMNOPQ");
+        e.marks.resize(&mut e.term, Size(3, 20));
+        assert_eq!(e.history(), 2);
+        assert_eq!(
+            lines(&e),
+            ["l1", "l2", "l3", "0123456789ABCD", "EFGHIJKLMNOPQ"]
+        );
     }
 
     #[test]

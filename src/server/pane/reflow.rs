@@ -12,7 +12,8 @@ pub struct ColdMeta {
 
 /// Rewrap `rows` to `cols` the way tmux's `grid_reflow` does: rows joined by
 /// `wrapped` form one logical line, which is split again at `cols`. A wide
-/// character that would straddle the edge moves whole to the next row.
+/// character that would straddle the edge moves whole to the next row. A
+/// last row that wraps (its line runs on past `rows`) stays wrapped.
 #[allow(dead_code)]
 pub fn reflow_rows(
     rows: &[(Vec<SnapCell>, ColdMeta)],
@@ -36,12 +37,17 @@ pub fn reflow_rows(
         let (cells, meta) = &rows[i];
         line.extend_from_slice(&cells[..meta.used.min(cells.len())]);
         i += 1;
-        split_line(line, cols, &mut out);
+        split_line(line, cols, meta.wrapped, &mut out);
     }
     out
 }
 
-fn split_line(line: Vec<SnapCell>, cols: usize, out: &mut Vec<(Vec<SnapCell>, ColdMeta)>) {
+fn split_line(
+    line: Vec<SnapCell>,
+    cols: usize,
+    wrapped: bool,
+    out: &mut Vec<(Vec<SnapCell>, ColdMeta)>,
+) {
     let mut pos = 0;
     while line.len() - pos > cols {
         let mut take = cols;
@@ -62,13 +68,7 @@ fn split_line(line: Vec<SnapCell>, cols: usize, out: &mut Vec<(Vec<SnapCell>, Co
     }
     let rest = line[pos..].to_vec();
     let used = rest.len();
-    out.push((
-        rest,
-        ColdMeta {
-            wrapped: false,
-            used,
-        },
-    ));
+    out.push((rest, ColdMeta { wrapped, used }));
 }
 
 #[cfg(test)]
@@ -246,6 +246,22 @@ mod tests {
                 wrapped: false,
                 used: 0
             }
+        );
+    }
+
+    /// A line that runs on past the rows given (into the screen) keeps
+    /// running on: its last piece is not cut off from what follows.
+    #[test]
+    fn a_last_row_that_wraps_stays_wrapped() {
+        let out = reflow_rows(&[row("a", 1, false), row("0123456789", 10, true)], 30);
+        assert_eq!(
+            out.iter().map(|r| r.1.wrapped).collect::<Vec<_>>(),
+            [false, true]
+        );
+        let out = reflow_rows(&[row("0123456789", 10, true)], 4);
+        assert_eq!(
+            out.iter().map(|r| r.1.wrapped).collect::<Vec<_>>(),
+            [true, true, true]
         );
     }
 
