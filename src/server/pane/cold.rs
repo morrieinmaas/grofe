@@ -7,16 +7,119 @@
 use std::collections::VecDeque;
 use std::mem::size_of;
 
+use alacritty_terminal::term::cell::{Cell, CellExtra};
+use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
 use super::SnapCell;
 use super::looks::Looks;
 use super::marks::RowShape;
 use super::reflow::{ColdMeta, reflow_rows};
 
+/// A cell `encode` can store: a [`SnapCell`] or the emulator's own.
+trait Look {
+    fn ch(&self) -> char;
+    /// Never true for two different looks (it may miss equal ones).
+    fn same_look(&self, other: &Self) -> bool;
+    /// The end of the run of cells in `from..to` that look like the first.
+    fn run_end(cells: &[Self], from: usize, to: usize) -> usize
+    where
+        Self: Sized,
+    {
+        cells[from + 1..to]
+            .iter()
+            .position(|c| !c.same_look(&cells[from]))
+            .map_or(to, |n| from + 1 + n)
+    }
+    /// A space in the default look (id 0), which a row need not store.
+    fn default_blank(&self) -> bool;
+    fn look(&self) -> SnapCell;
+}
+
+impl Look for SnapCell {
+    fn ch(&self) -> char {
+        self.c
+    }
+    fn same_look(&self, o: &Self) -> bool {
+        self.fg == o.fg
+            && self.bg == o.bg
+            && self.flags == o.flags
+            && self.underline_color == o.underline_color
+            && self.zerowidth == o.zerowidth
+            && self.hyperlink == o.hyperlink
+    }
+    fn default_blank(&self) -> bool {
+        self.c == ' '
+            && self.fg == Color::Named(NamedColor::Foreground)
+            && self.bg == Color::Named(NamedColor::Background)
+            && self.flags.is_empty()
+            && self.underline_color.is_none()
+            && self.zerowidth.is_empty()
+            && self.hyperlink.is_none()
+    }
+    fn look(&self) -> SnapCell {
+        self.clone()
+    }
+}
+
+impl Look for Cell {
+    #[inline]
+    fn ch(&self) -> char {
+        self.c
+    }
+    #[inline]
+    fn same_look(&self, o: &Self) -> bool {
+        self.flags == o.flags && self.fg == o.fg && self.bg == o.bg && self.extra == o.extra
+    }
+    fn run_end(cells: &[Cell], from: usize, to: usize) -> usize {
+        let first = &cells[from];
+        let rest = &cells[from + 1..to];
+        // Unswitched for the common look, named colours and no extras: the
+        // generic colour compare costs several times more per cell.
+        let n = match (first.fg, first.bg, &first.extra) {
+            (Color::Named(fg), Color::Named(bg), None) => rest.iter().position(|c| {
+                !(c.flags == first.flags
+                    && c.extra.is_none()
+                    && matches!(c.fg, Color::Named(x) if x == fg)
+                    && matches!(c.bg, Color::Named(x) if x == bg))
+            }),
+            _ => rest.iter().position(|c| !c.same_look(first)),
+        };
+        n.map_or(to, |n| from + 1 + n)
+    }
+    #[inline]
+    fn default_blank(&self) -> bool {
+        self.c == ' '
+            && self.flags.is_empty()
+            && self.fg == Color::Named(NamedColor::Foreground)
+            && self.bg == Color::Named(NamedColor::Background)
+            && self
+                .extra
+                .as_deref()
+                .is_none_or(|e| *e == CellExtra::default())
+    }
+    fn look(&self) -> SnapCell {
+        SnapCell {
+            c: self.c,
+            fg: self.fg,
+            bg: self.bg,
+            flags: self.flags,
+            zerowidth: self.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+            underline_color: self.underline_color(),
+            hyperlink: self.hyperlink(),
+        }
+    }
+}
+
+/// Bytes of a run in [`Row::data`]: its length in cells (`u16`) and its
+/// look id (`u32`), little-endian.
+const RUN: usize = 6;
+
 #[derive(Debug)]
 struct Row {
-    text: Box<str>,
-    /// (length in cells, look id)
-    runs: Box<[(u16, u32)]>,
+    /// The text, then the runs, [`RUN`] bytes each: one allocation a row.
+    data: Box<[u8]>,
+    /// The bytes of the text.
+    text: u32,
     /// The cells the row had when pushed.
     width: u32,
     used: u32,
@@ -29,6 +132,8 @@ pub struct Cold {
     rows: VecDeque<Row>,
     looks: Looks,
     limit: usize,
+    /// Reused by [`Cold::encode`].
+    runs: Vec<(u16, u32)>,
 }
 
 #[allow(dead_code)]
@@ -38,6 +143,7 @@ impl Cold {
             rows: VecDeque::new(),
             looks: Looks::new(),
             limit,
+            runs: Vec::new(),
         }
     }
 
@@ -46,6 +152,20 @@ impl Cold {
         let row = self.encode(cells, used, wrapped);
         self.rows.push_back(row);
         self.trim()
+    }
+
+    /// [`Self::push`] for an emulator row, read in place. Its used width
+    /// is where its last cell that is not a default blank ends, which
+    /// covers every [`super::written::WRITTEN`] cell.
+    pub fn push_cells(&mut self, cells: &[Cell], wrapped: bool) -> usize {
+        let row = self.encode(cells, 0, wrapped);
+        self.rows.push_back(row);
+        self.trim()
+    }
+
+    /// Looks interned so far (a hash lookup each), for tests that count them.
+    pub fn lookups(&self) -> usize {
+        self.looks.lookups()
     }
 
     pub fn len(&self) -> usize {
@@ -107,7 +227,7 @@ impl Cold {
         let rows: usize = self
             .rows
             .iter()
-            .map(|r| size_of::<Row>() + r.text.len() + r.runs.len() * size_of::<(u16, u32)>())
+            .map(|r| size_of::<Row>() + r.data.len())
             .sum();
         let looks: usize = (0..self.looks.len() as u32)
             .map(|id| {
@@ -123,26 +243,53 @@ impl Cold {
         dropped
     }
 
-    fn encode(&mut self, cells: &[SnapCell], used: usize, wrapped: bool) -> Row {
-        let ids: Vec<u32> = cells.iter().map(|c| self.looks.intern(c)).collect();
-        let is_blank = |i: usize| cells[i].c == ' ' && ids[i] == 0;
-        let last = (0..cells.len())
-            .rev()
-            .find(|&i| !is_blank(i))
+    fn encode<C: Look>(&mut self, cells: &[C], used: usize, wrapped: bool) -> Row {
+        let last = cells
+            .iter()
+            .rposition(|c| !c.default_blank())
             .map_or(0, |i| i + 1);
         let stored = used.min(cells.len()).max(last);
-        let mut text = String::with_capacity(stored);
-        let mut runs: Vec<(u16, u32)> = Vec::new();
-        for (cell, &id) in cells[..stored].iter().zip(&ids) {
-            text.push(cell.c);
-            match runs.last_mut() {
-                Some((n, look)) if *look == id && *n < u16::MAX => *n += 1,
-                _ => runs.push((1, id)),
+        self.runs.clear();
+        // One lookup per run of equal look, not per cell.
+        let mut i = 0;
+        while i < stored {
+            let end = C::run_end(cells, i, stored);
+            let id = self.looks.intern(&cells[i].look());
+            let mut n = end - i;
+            if let Some((len, look)) = self.runs.last_mut()
+                && *look == id
+            {
+                let add = n.min(usize::from(u16::MAX - *len));
+                *len += add as u16;
+                n -= add;
+            }
+            while n > 0 {
+                let take = n.min(usize::from(u16::MAX));
+                self.runs.push((take as u16, id));
+                n -= take;
+            }
+            i = end;
+        }
+        let mut data = Vec::with_capacity(stored + self.runs.len() * RUN);
+        let mut ascii = true;
+        data.extend(cells[..stored].iter().map(|c| {
+            ascii &= c.ch().is_ascii();
+            c.ch() as u8
+        }));
+        if !ascii {
+            data.clear();
+            for c in &cells[..stored] {
+                data.extend_from_slice(c.ch().encode_utf8(&mut [0; 4]).as_bytes());
             }
         }
+        let text = data.len() as u32;
+        for &(n, id) in &self.runs {
+            data.extend_from_slice(&n.to_le_bytes());
+            data.extend_from_slice(&id.to_le_bytes());
+        }
         Row {
-            text: text.into(),
-            runs: runs.into(),
+            data: data.into_boxed_slice(),
+            text,
             width: cells.len() as u32,
             used: stored as u32,
             wrapped,
@@ -151,8 +298,11 @@ impl Cold {
 
     fn decode(&self, row: &Row, cols: usize, out: &mut Vec<SnapCell>) -> ColdMeta {
         out.clear();
-        let mut chars = row.text.chars();
-        for &(n, id) in row.runs.iter() {
+        let (text, runs) = row.data.split_at(row.text as usize);
+        let mut chars = std::str::from_utf8(text).unwrap_or_default().chars();
+        for run in runs.chunks_exact(RUN) {
+            let n = u16::from_le_bytes([run[0], run[1]]);
+            let id = u32::from_le_bytes([run[2], run[3], run[4], run[5]]);
             for c in chars.by_ref().take(n as usize) {
                 let mut cell = self.looks.get(id).clone();
                 cell.c = c;
@@ -305,5 +455,32 @@ mod tests {
         let mut out = Vec::new();
         c.row(0, 4, &mut out);
         assert_eq!(out, cells);
+    }
+
+    #[test]
+    fn emulator_cells_split_runs_on_every_look_change() {
+        use alacritty_terminal::vte::ansi::NamedColor;
+        let mut cells: Vec<Cell> = "abcdefg  "
+            .chars()
+            .map(|c| Cell {
+                c,
+                ..Cell::default()
+            })
+            .collect();
+        for cell in &mut cells[..7] {
+            cell.fg = Color::Named(NamedColor::Red);
+        }
+        cells[2].bg = Color::Named(NamedColor::Blue);
+        cells[3].flags.insert(CellFlags::BOLD);
+        cells[4].set_underline_color(Some(Color::Indexed(3)));
+        cells[5].fg = Color::Indexed(1);
+        cells[8].bg = Color::Named(NamedColor::Green);
+        let mut c = Cold::new(5);
+        c.push_cells(&cells, false);
+        let mut out = Vec::new();
+        let meta = c.row(0, 9, &mut out);
+        assert_eq!(meta.used, 9);
+        let want: Vec<SnapCell> = cells.iter().map(Look::look).collect();
+        assert_eq!(out, want);
     }
 }

@@ -44,6 +44,8 @@ fn look_key(cell: &SnapCell) -> LookKey {
 pub struct Looks {
     looks: Vec<SnapCell>,
     ids: HashMap<LookKey, u32>,
+    /// Calls to [`Looks::intern`].
+    lookups: usize,
 }
 
 #[allow(dead_code)]
@@ -52,6 +54,7 @@ impl Looks {
         let mut looks = Looks {
             looks: Vec::new(),
             ids: HashMap::new(),
+            lookups: 0,
         };
         looks.intern(&SnapCell {
             c: ' ',
@@ -67,6 +70,7 @@ impl Looks {
 
     /// The id of `cell`'s look; its character is ignored.
     pub fn intern(&mut self, cell: &SnapCell) -> u32 {
+        self.lookups += 1;
         let key = look_key(cell);
         if let Some(&id) = self.ids.get(&key) {
             return id;
@@ -85,6 +89,10 @@ impl Looks {
 
     pub fn len(&self) -> usize {
         self.looks.len()
+    }
+
+    pub fn lookups(&self) -> usize {
+        self.lookups
     }
 }
 

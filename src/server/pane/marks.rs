@@ -90,19 +90,6 @@ impl Dimensions for Dim {
     }
 }
 
-/// A grid cell as the cold store keeps it, [`written::WRITTEN`] included.
-fn snap(cell: &Cell) -> SnapCell {
-    SnapCell {
-        c: cell.c,
-        fg: cell.fg,
-        bg: cell.bg,
-        flags: cell.flags,
-        zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
-        underline_color: cell.underline_color(),
-        hyperlink: cell.hyperlink(),
-    }
-}
-
 fn cell_of(snap: &SnapCell) -> Cell {
     let mut cell = Cell {
         c: snap.c,
@@ -185,6 +172,9 @@ impl Marks {
 
     /// The `n` oldest rows are gone.
     pub fn trim(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
         self.origin += n as u64;
         let keep = self.map.split_off(&self.origin);
         self.map = keep;
@@ -217,22 +207,22 @@ impl Marks {
         let grid = term.grid_mut();
         let cols = grid.columns();
         let mut dropped = 0;
-        let mut cells = Vec::with_capacity(cols);
         for i in 0..h {
             let row = &grid[Line(i as i32 - h as i32)];
-            cells.clear();
-            cells.extend((0..cols).map(|c| snap(&row[Column(c)])));
             let wrapped = row[Column(cols - 1)].flags.contains(CellFlags::WRAPLINE);
-            dropped += self.cold.push(&cells, written::used(row), wrapped);
+            dropped += self.cold.push_cells(&row[..Column(cols)], wrapped);
         }
         grid.update_history(0);
         grid.update_history(HISTORY_SLACK);
         dropped
     }
 
-    /// Spills the history, counting the rows `history-limit` drops.
+    /// Spills the history, counting the rows `history-limit` drops. It
+    /// runs after every operation, most of which push nothing, so that
+    /// check is inlined into the caller.
+    #[inline]
     pub fn sync<L: EventListener>(&mut self, term: &mut Term<L>) {
-        if alt(term) {
+        if term.grid().history_size() == 0 || alt(term) {
             return;
         }
         let dropped = self.spill(term);
@@ -795,5 +785,21 @@ mod tests {
         e.marks.resize(&mut e.term, Size(3, 5));
         assert_eq!(e.history(), 6);
         assert_eq!(e.marked(), ["*l5xxx", "*l6xxx", "*l7xxx", "*l8xxx"]);
+    }
+
+    #[test]
+    fn spill_looks_up_each_style_run_once_not_each_cell() {
+        let mut e = Emu::new(50, 200, 2000);
+        for k in 0..1000 {
+            e.feed(&format!(
+                "\x1b[3{}mline {k} {}\x1b[0m\r\n",
+                k % 8,
+                "x".repeat(100)
+            ));
+        }
+        let rows = e.marks.cold().len();
+        assert_eq!(rows, 951);
+        let lookups = e.marks.cold().lookups();
+        assert!(lookups <= 3 * rows, "{lookups} lookups for {rows} rows");
     }
 }
