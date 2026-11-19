@@ -32,9 +32,11 @@ use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::TermMode;
+use alacritty_terminal::term::cell::Cell;
 
-use super::CellFlags;
+use super::cold::Cold;
 use super::written;
+use super::{CellFlags, SnapCell};
 
 /// `GRID_LINE_START_PROMPT`: `OSC 133 ; A`.
 pub const PROMPT: u8 = 1;
@@ -53,10 +55,11 @@ pub const MARK_OUTPUT: u16 = 65534;
 pub const HISTORY_SLACK: usize = 4096;
 
 /// The marks of one pane's normal screen.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Marks {
-    /// `history-limit`.
-    limit: usize,
+    /// The scrollback, spilled out of the emulator's history at every
+    /// [`Marks::sync`]; the emulator's own history stays empty between two.
+    cold: Cold,
     /// Rows dropped from the top of the grid so far.
     origin: u64,
     /// Mark bits by `origin + top`.
@@ -72,6 +75,50 @@ pub struct RowShape {
     pub wrapped: bool,
 }
 
+/// The screen size a height-only resize asks for.
+struct Dim(usize, usize);
+
+impl Dimensions for Dim {
+    fn total_lines(&self) -> usize {
+        self.0
+    }
+    fn screen_lines(&self) -> usize {
+        self.0
+    }
+    fn columns(&self) -> usize {
+        self.1
+    }
+}
+
+/// A grid cell as the cold store keeps it, [`written::WRITTEN`] included.
+fn snap(cell: &Cell) -> SnapCell {
+    SnapCell {
+        c: cell.c,
+        fg: cell.fg,
+        bg: cell.bg,
+        flags: cell.flags,
+        zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
+        underline_color: cell.underline_color(),
+        hyperlink: cell.hyperlink(),
+    }
+}
+
+fn cell_of(snap: &SnapCell) -> Cell {
+    let mut cell = Cell {
+        c: snap.c,
+        fg: snap.fg,
+        bg: snap.bg,
+        flags: snap.flags.difference(CellFlags::WRAPLINE),
+        ..Cell::default()
+    };
+    for &z in &snap.zerowidth {
+        cell.push_zerowidth(z);
+    }
+    cell.set_underline_color(snap.underline_color);
+    cell.set_hyperlink(snap.hyperlink.clone());
+    cell
+}
+
 fn alt<L: EventListener>(term: &Term<L>) -> bool {
     term.mode().contains(TermMode::ALT_SCREEN)
 }
@@ -79,9 +126,23 @@ fn alt<L: EventListener>(term: &Term<L>) -> bool {
 impl Marks {
     pub fn new(limit: usize) -> Marks {
         Marks {
-            limit,
-            ..Marks::default()
+            cold: Cold::new(limit),
+            origin: 0,
+            map: BTreeMap::new(),
         }
+    }
+
+    pub fn cold(&self) -> &Cold {
+        &self.cold
+    }
+
+    pub fn cold_mut(&mut self) -> &mut Cold {
+        &mut self.cold
+    }
+
+    /// Rows of history: the cold ones and the emulator's own.
+    pub fn history_len<L: EventListener>(&self, term: &Term<L>) -> usize {
+        self.cold.len() + term.grid().history_size()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -134,56 +195,120 @@ impl Marks {
     }
 
     /// Row `top` of the grid the cursor is on.
-    fn cursor_top<L: EventListener>(term: &Term<L>) -> usize {
-        let grid = term.grid();
-        grid.history_size() + grid.cursor.point.line.0.max(0) as usize
+    fn cursor_top<L: EventListener>(&self, term: &Term<L>) -> usize {
+        self.history_len(term) + term.grid().cursor.point.line.0.max(0) as usize
     }
 
     /// Records `bits` for the cursor's line (`input_osc_133`). The alternate
     /// screen has its own grid in tmux, which nothing reads.
     pub fn record<L: EventListener>(&mut self, term: &Term<L>, bits: u8) {
         if !alt(term) {
-            self.set(Self::cursor_top(term), bits);
+            self.set(self.cursor_top(term), bits);
         }
     }
 
-    /// Holds the history to `history-limit`, counting the rows it drops.
+    /// Moves the emulator's history into the cold store, which drops what
+    /// `history-limit` does not keep. Returns the rows it dropped.
+    fn spill<L: EventListener>(&mut self, term: &mut Term<L>) -> usize {
+        let h = term.grid().history_size();
+        if h == 0 {
+            return 0;
+        }
+        let grid = term.grid_mut();
+        let cols = grid.columns();
+        let mut dropped = 0;
+        let mut cells = Vec::with_capacity(cols);
+        for i in 0..h {
+            let row = &grid[Line(i as i32 - h as i32)];
+            cells.clear();
+            cells.extend((0..cols).map(|c| snap(&row[Column(c)])));
+            let wrapped = row[Column(cols - 1)].flags.contains(CellFlags::WRAPLINE);
+            dropped += self.cold.push(&cells, written::used(row), wrapped);
+        }
+        grid.update_history(0);
+        grid.update_history(HISTORY_SLACK);
+        dropped
+    }
+
+    /// Spills the history, counting the rows `history-limit` drops.
     pub fn sync<L: EventListener>(&mut self, term: &mut Term<L>) {
         if alt(term) {
             return;
         }
-        let history = term.grid().history_size();
-        if history > self.limit {
-            let grid = term.grid_mut();
-            grid.update_history(self.limit);
-            grid.update_history(self.limit.saturating_add(HISTORY_SLACK));
-            self.trim(history - self.limit);
+        let dropped = self.spill(term);
+        self.trim(dropped);
+    }
+
+    /// `term.resize(size)`, with the marks following their lines and the
+    /// cold rows following the screen: a taller screen takes rows back from
+    /// the store, a width change reflows it.
+    pub fn resize<L: EventListener>(&mut self, term: &mut Term<L>, size: impl Dimensions) {
+        let cols = size.columns();
+        let widens = cols != term.columns();
+        if alt(term) {
+            if widens {
+                self.map.clear();
+                self.cold.reflow(cols);
+            }
+            term.resize(size);
+            return;
+        }
+        self.sync(term);
+        let before = (widens && !self.map.is_empty()).then(|| self.shapes(term));
+        let old_lines = term.screen_lines();
+        let lines = size.screen_lines();
+        if lines != old_lines {
+            term.resize(Dim(lines, term.columns()));
+            if lines > old_lines {
+                self.pull_back(term, lines - old_lines);
+            } else {
+                self.sync(term);
+            }
+        }
+        if widens {
+            self.cold.reflow(cols);
+            term.resize(size);
+            self.spill(term);
+            if let Some(before) = before {
+                let after = self.shapes(term);
+                let dropped = starts(&before).len().saturating_sub(starts(&after).len());
+                self.reflow(&before, &after, cols, dropped);
+            }
+        }
+        self.erase_from(self.history_len(term) + term.screen_lines());
+    }
+
+    /// Puts the newest cold rows (at most `d`) back on the top of a screen
+    /// that has just grown by `d` rows.
+    fn pull_back<L: EventListener>(&mut self, term: &mut Term<L>, d: usize) {
+        let k = d.min(self.cold.len());
+        if k == 0 {
+            return;
+        }
+        let grid = term.grid_mut();
+        let (lines, cols) = (grid.screen_lines(), grid.columns());
+        grid.scroll_down(&(Line(0)..Line(lines as i32)), k);
+        grid.cursor.point.line += k;
+        grid.saved_cursor.point.line += k;
+        let mut cells = Vec::with_capacity(cols);
+        for line in (0..k).rev() {
+            let Some(meta) = self.cold.pop_newest(cols, &mut cells) else {
+                break;
+            };
+            let row = &mut grid[Line(line as i32)];
+            for (c, snap) in cells.iter().take(cols).enumerate() {
+                row[Column(c)] = cell_of(snap);
+            }
+            let last = &mut row[Column(cols - 1)];
+            last.flags.set(CellFlags::WRAPLINE, meta.wrapped);
         }
     }
 
-    /// `term.resize(size)`, with the marks following their lines.
-    pub fn resize<L: EventListener>(&mut self, term: &mut Term<L>, size: impl Dimensions) {
-        let cols = size.columns();
-        let reflows = cols != term.columns() && !self.map.is_empty();
-        if reflows && alt(term) {
-            self.map.clear();
-        }
-        let before = (reflows && !alt(term)).then(|| shapes(term));
-        term.resize(size);
-        if let Some(before) = before {
-            let after = shapes(term);
-            let full = term.grid().history_size() >= self.limit.saturating_add(HISTORY_SLACK);
-            let dropped = if full {
-                starts(&before).len().saturating_sub(starts(&after).len())
-            } else {
-                0
-            };
-            self.reflow(&before, &after, cols, dropped);
-        }
-        if !alt(term) {
-            self.erase_from(term.grid().history_size() + term.screen_lines());
-        }
-        self.sync(term);
+    /// Every row, oldest first: the cold ones, then the emulator's.
+    fn shapes<L: EventListener>(&self, term: &Term<L>) -> Vec<RowShape> {
+        let mut rows = self.cold.shapes();
+        rows.extend(grid_shapes(term));
+        rows
     }
 
     /// Moves every mark from where `before` had its row to where tmux's
@@ -244,8 +369,8 @@ fn reflowed(
     (row < end).then_some(row)
 }
 
-/// Every row of the grid, oldest first.
-fn shapes<L: EventListener>(term: &Term<L>) -> Vec<RowShape> {
+/// The rows of the grid itself, oldest first.
+fn grid_shapes<L: EventListener>(term: &Term<L>) -> Vec<RowShape> {
     let grid = term.grid();
     let cols = grid.columns();
     (-(grid.history_size() as i32)..grid.screen_lines() as i32)
@@ -427,24 +552,36 @@ mod tests {
             }
 
             pub fn history(&self) -> usize {
-                self.term.grid().history_size()
+                self.marks.history_len(&self.term)
+            }
+
+            /// Row `top` of the history and screen as text.
+            pub fn text(&self, top: usize) -> String {
+                let grid = self.term.grid();
+                let cold = self.marks.cold();
+                let mut cells = Vec::new();
+                if top < cold.len() {
+                    cold.row(top, grid.columns(), &mut cells);
+                    cells.iter().map(|c| c.c).collect()
+                } else {
+                    let line = Line((top - cold.len()) as i32 - grid.history_size() as i32);
+                    (0..grid.columns())
+                        .map(|c| grid[line][Column(c)].c)
+                        .collect()
+                }
             }
 
             /// The text of each marked row, oldest first, with `*` for a
             /// prompt start and `+` for an output start before it.
             pub fn marked(&self) -> Vec<String> {
-                let grid = self.term.grid();
-                let h = grid.history_size() as i32;
-                (-h..grid.screen_lines() as i32)
-                    .filter_map(|i| {
-                        let bits = self.marks.get((i + h) as usize);
+                let rows = self.history() + self.term.screen_lines();
+                (0..rows)
+                    .filter_map(|top| {
+                        let bits = self.marks.get(top);
                         (bits != 0).then(|| {
-                            let text: String = (0..grid.columns())
-                                .map(|c| grid[Line(i)][Column(c)].c)
-                                .collect();
                             let tag = if bits & PROMPT != 0 { "*" } else { "" };
                             let tag2 = if bits & OUTPUT != 0 { "+" } else { "" };
-                            format!("{tag}{tag2}{}", text.trim_end())
+                            format!("{tag}{tag2}{}", self.text(top).trim_end())
                         })
                     })
                     .collect()
@@ -557,5 +694,86 @@ mod tests {
         let mut e = Emu::new(5, 10, 100);
         e.feed("\x1b[?1049h\x01alt\x1b[?1049l");
         assert!(e.marks.is_empty());
+    }
+
+    fn lines(e: &Emu) -> Vec<String> {
+        (0..e.history() + e.term.screen_lines())
+            .map(|t| e.text(t).trim_end().to_string())
+            .collect()
+    }
+
+    fn ten_lines(rows: usize, cols: usize, limit: usize) -> Emu {
+        let mut e = Emu::new(rows, cols, limit);
+        e.feed("l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\nl9\r\nl10");
+        e
+    }
+
+    #[test]
+    fn spill_keeps_alacritty_history_empty() {
+        let e = ten_lines(3, 10, 100);
+        assert_eq!(e.history(), 7);
+        assert_eq!(e.marks.cold().len(), 7);
+        assert_eq!(e.term.grid().history_size(), 0);
+    }
+
+    #[test]
+    fn the_limit_drops_cold_rows_and_their_marks() {
+        let mut e = Emu::new(3, 10, 5);
+        for i in 1..=10 {
+            e.feed(&format!("\x01l{i}\r\n"));
+        }
+        assert_eq!(e.history(), 5);
+        assert_eq!(e.marked().len(), 7);
+        assert_eq!(e.marked()[0], "*l4");
+    }
+
+    #[test]
+    fn grow_pulls_rows_back() {
+        let mut e = ten_lines(3, 10, 100);
+        e.marks.resize(&mut e.term, Size(6, 10));
+        assert_eq!(e.history(), 4);
+        let all = lines(&e);
+        assert_eq!(&all[4..], ["l5", "l6", "l7", "l8", "l9", "l10"]);
+        assert_eq!(e.term.grid().cursor.point.line.0, 5);
+    }
+
+    #[test]
+    fn shrink_then_grow_roundtrip() {
+        let mut e = ten_lines(5, 10, 100);
+        let before = lines(&e);
+        e.marks.resize(&mut e.term, Size(2, 10));
+        assert_eq!((e.history(), lines(&e)), (8, before.clone()));
+        e.marks.resize(&mut e.term, Size(5, 10));
+        assert_eq!(lines(&e), before);
+    }
+
+    #[test]
+    fn width_change_moves_marks_with_cold_rows() {
+        let mut e = Emu::new(3, 10, 100);
+        e.feed("abcdefghijkl\x01mnopqrstu\r\nz1\r\nz2\r\nz3\r\nz4");
+        assert_eq!(e.marked(), ["*klmnopqrst"]);
+        assert!(e.marks.cold().len() > 0);
+        e.marks.resize(&mut e.term, Size(3, 7));
+        assert_eq!(e.marked().first().map(String::as_str), Some("*opqrstu"));
+        assert_eq!(e.term.grid().history_size(), 0);
+    }
+
+    #[test]
+    fn alt_screen_spills_nothing() {
+        let mut e = ten_lines(3, 10, 100);
+        let cold = e.marks.cold().len();
+        e.feed("\x1b[?1049hx\r\ny\r\nz\r\nw\r\nv");
+        assert_eq!(e.marks.cold().len(), cold);
+        assert_eq!(e.term.grid().history_size(), 0);
+    }
+
+    #[test]
+    fn scroll_up_10_with_slack() {
+        let mut e = Emu::new(12, 10, 100);
+        e.feed("a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\nj\r\nk\r\nl");
+        assert_eq!(e.history(), 0);
+        e.feed("\x1b[10S");
+        assert_eq!(e.history(), 10);
+        assert_eq!(e.term.grid().history_size(), 0);
     }
 }

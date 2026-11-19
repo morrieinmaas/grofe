@@ -72,7 +72,7 @@ impl<L: EventListener> Written<'_, L> {
         self.2.as_ref()?;
         let grid = self.0.grid();
         Some(Probe {
-            history: grid.history_size(),
+            history: self.1.history_len(self.0),
             line: grid.cursor.point.line.0.max(0) as u32,
             rows: grid.screen_lines() as u32,
             needs_wrap: grid.cursor.input_needs_wrap && self.0.mode().contains(TermMode::LINE_WRAP),
@@ -84,7 +84,7 @@ impl<L: EventListener> Written<'_, L> {
         if self.2.is_none() {
             return;
         }
-        let history = self.0.grid().history_size();
+        let history = self.1.history_len(self.0);
         if let (Some(store), Some(before)) = (self.2.as_deref_mut(), before) {
             store.scroll_op(kind, before, history);
         }
@@ -121,8 +121,7 @@ impl<L: EventListener> Written<'_, L> {
 
     /// The cursor's row, counted from the oldest row of the history.
     fn top(&self) -> usize {
-        let grid = self.0.grid();
-        grid.history_size() + grid.cursor.point.line.0.max(0) as usize
+        self.1.history_len(self.0) + self.0.grid().cursor.point.line.0.max(0) as usize
     }
 
     /// Whether clearing with the pen's background touches a line that has no
@@ -353,7 +352,7 @@ impl<L: EventListener> Handler for Written<'_, L> {
             ClearMode::Above => (0, col + 1),
             ClearMode::All | ClearMode::Saved => (0, cols),
         };
-        let history = self.0.grid().history_size();
+        let history = self.1.history_len(self.0);
         let rows = self.0.screen_lines();
         let top = self.top();
         let normal = !self.0.mode().contains(TermMode::ALT_SCREEN);
@@ -383,9 +382,10 @@ impl<L: EventListener> Handler for Written<'_, L> {
         if all && normal && !self.1.is_empty() {
             // The rows below the last used one are emptied, the rest
             // scrolled into the history with their marks.
-            let pushed = self.0.grid().history_size() - history;
+            let pushed = self.1.history_len(self.0) - history;
             self.1.erase_range(history + pushed, history + rows);
         } else if saved && normal {
+            self.1.cold_mut().clear();
             self.1.trim(history);
         }
         self.1.sync(&mut *self.0);
