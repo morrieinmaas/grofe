@@ -479,19 +479,22 @@ fn display(srv: &TestServer, target: &str, fmt: &str) -> String {
 
 /// Types into `a` at 60 Hz and reads both clients until `done` holds or
 /// `max` passes: the longest gap between two reads that brought a client
-/// output (TC.4's method), and how many there were.
+/// output (TC.4's method), and how many there were, with where the
+/// longest began (how long after the start, on which client) to tell a
+/// stall at the search's start or end from one anywhere in it.
 fn force_frames(
     a: &mut Harness,
     b: &mut Harness,
     max: Duration,
     mut done: impl FnMut() -> bool,
-) -> (Duration, usize) {
+) -> (Duration, usize, (Duration, usize)) {
     let start = Instant::now();
     let mut next_key = start;
     let mut typed = 0usize;
     let mut seen = [a.output().len(), b.output().len()];
     let mut last = [start, start];
     let mut longest = Duration::ZERO;
+    let mut began = (Duration::ZERO, 0);
     let mut frames = 0;
     loop {
         let now = Instant::now();
@@ -504,7 +507,10 @@ fn force_frames(
             let len = h.output().len();
             if len > seen[i] {
                 seen[i] = len;
-                longest = longest.max(now - last[i]);
+                if now - last[i] > longest {
+                    longest = now - last[i];
+                    began = (last[i] - start, i);
+                }
                 last[i] = now;
                 frames += 1;
             }
@@ -515,10 +521,13 @@ fn force_frames(
         sleep(Duration::from_millis(1));
     }
     let end = Instant::now();
-    for at in last {
-        longest = longest.max(end - at);
+    for (i, at) in last.into_iter().enumerate() {
+        if end - at > longest {
+            longest = end - at;
+            began = (at - start, i);
+        }
     }
-    (longest, frames)
+    (longest, frames, began)
 }
 
 /// Case 7: two clients attached to a session running `cat`, frames forced
@@ -571,7 +580,7 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
     }
     // As long as `tests/sources.rs` measures it, so the baseline sees the
     // host's own stalls.
-    let (baseline, _) = force_frames(&mut a, &mut b, Duration::from_secs(8), || false);
+    let (baseline, _, _) = force_frames(&mut a, &mut b, Duration::from_secs(8), || false);
 
     // About a second of searching in either build: a release one searches
     // the history some hundred times faster.
@@ -594,14 +603,16 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
             (out.status.success(), started.elapsed())
         })
     };
-    let (longest, frames) = force_frames(&mut a, &mut b, Duration::from_secs(60), || {
-        search.is_finished()
-    });
+    let (longest, frames, (began, client)) =
+        force_frames(&mut a, &mut b, Duration::from_secs(60), || {
+            search.is_finished()
+        });
     let (ok, took) = search.join().unwrap();
     assert!(ok, "the search failed");
     let bound = frame_bound(baseline);
     eprintln!(
-        "search took {took:?}; longest frame gap {longest:?}, baseline {baseline:?}, {frames} frame reads"
+        "search took {took:?}; longest frame gap {longest:?} from {began:?} in, on client {client}, \
+         baseline {baseline:?}, {frames} frame reads"
     );
     assert!(
         took > Duration::from_millis(100),
@@ -610,7 +621,8 @@ fn a_search_over_a_full_history_never_delays_a_frame() {
     assert!(frames > 5, "frames were not forced: {frames}");
     assert!(
         longest < bound,
-        "a frame waited {longest:?} (baseline {baseline:?}, bound {bound:?})"
+        "a frame waited {longest:?} from {began:?} into a {took:?} search, on client {client} \
+         (baseline {baseline:?}, bound {bound:?})"
     );
     // Nothing found: the cursor stays at the bottom.
     assert_eq!(
