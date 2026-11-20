@@ -238,8 +238,7 @@ pub(super) const BUILTINS: &[Builtin] = &[
             max: i32::MAX as i64,
         },
         scope: OptionScope::Session,
-        default: "50000",
-        tmux_default: Some("2000"),
+        default: "2000",
         ..Builtin::PLAIN
     },
     Builtin {
@@ -1853,4 +1852,15 @@ pub(crate) fn toml_ty_of(name: &str) -> Option<Ty> {
             _ => Ty::Str,
         })
     })
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::super::Options;
+
+    #[test]
+    fn show_g_history_limit_is_2000() {
+        let o = Options::new(false);
+        assert_eq!(o.lookup("history-limit", &[]), Some("2000"));
+    }
 }

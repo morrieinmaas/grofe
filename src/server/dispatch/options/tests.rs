@@ -394,7 +394,7 @@ fn tmux_identity_takes_tmux_s_defaults() {
         ("set-clipboard", "external", "external"),
         ("focus-events", "off", "on"),
         ("escape-time", "10", "25"),
-        ("history-limit", "2000", "50000"),
+        ("history-limit", "2000", "2000"),
         ("extended-keys", "off", "on"),
         ("renumber-windows", "off", "on"),
         ("mode-keys", "emacs", "vi"),
@@ -640,7 +640,7 @@ fn builtins_validate_and_reset_to_default() {
     assert!(o.set(Owner::Global, "history-limit", "-3", false).is_err());
     o.set(Owner::Global, "history-limit", "10", false).unwrap();
     o.unset(Owner::Global, "history-limit").unwrap();
-    assert_eq!(o.lookup("history-limit", &[]), Some("50000"));
+    assert_eq!(o.lookup("history-limit", &[]), Some("2000"));
 }
 
 #[test]

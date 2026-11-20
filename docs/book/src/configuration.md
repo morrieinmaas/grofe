@@ -32,7 +32,8 @@ Every option has a TOML key, listed in the
 [options reference](reference/options.md). Most are the tmux name; some live
 in a table (`status.right` is `right` under `[status]`) and durations say
 their unit (`escape-time-ms`). Booleans are `true` and `false`. A binding's
-`desc` shows in `list-keys` and the key menu (`prefix Space`).
+`desc` shows in `list-keys` and the key menu (`prefix Space`). The default
+`history-limit` is 2000 lines, as in tmux.
 
 ## Check, explain, reload
 

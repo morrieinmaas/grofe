@@ -7,10 +7,13 @@
 //! command, argv and cwd are sampled on demand ([`procinfo::Cache`]).
 
 mod capture_sgr;
+pub(crate) mod cold;
 pub mod io;
+pub(crate) mod looks;
 pub mod marks;
 mod pipe;
 pub mod procinfo;
+pub(crate) mod reflow;
 mod written;
 
 use std::ffi::OsString;
@@ -223,6 +226,13 @@ const REINIT: &[u8] = b"\x1b[?1049l\x1b[0m\x1b[?25h\x1b[?7h\x1b[4l\x1b[?6l\x1b[?
     \x1b[?2026l\x1b[r\x1b[?5W\x1b(B\x0f\x1b[<99u\x1b[=0;1u\x1b[H";
 
 impl Emu {
+    /// Frees the grid's cache of spare rows, which once a pane has scrolled
+    /// holds up to 1000 rows (`cols` x 24 B each) for nothing while it is
+    /// idle. The next scroll refills it.
+    pub(crate) fn trim_idle(&mut self) {
+        self.term.grid_mut().truncate();
+    }
+
     /// tmux's `screen_reinit`: the visible lines (and their marks), the
     /// cursor, modes, tab stops and hyperlinks are reset; the scrollback and
     /// the title stay.
@@ -240,17 +250,39 @@ impl Emu {
         *parser = Processor::new();
         parser.advance(&mut written::Written(term, marks, None), REINIT);
         images.reset();
-        let history = term.grid().history_size();
+        let history = marks.history_len(term);
         term.grid_mut().reset_region(..);
         marks.erase_from(history);
-        forget_hyperlinks(term);
+        forget_hyperlinks(term, marks);
     }
 }
 
 /// `screen_reset_hyperlinks`: no cell, and not the one being written, links
 /// anywhere any more.
-fn forget_hyperlinks(term: &mut Term<Listener>) {
+fn forget_hyperlinks(term: &mut Term<Listener>, marks: &mut Marks) {
     alacritty_terminal::vte::ansi::Handler::set_hyperlink(term, None);
+    let cols = term.grid().columns();
+    let cold = marks.cold_mut();
+    let mut cells = Vec::new();
+    let linked = (0..cold.len()).any(|i| {
+        cold.row(i, cols, &mut cells);
+        cells.iter().any(|c| c.hyperlink.is_some())
+    });
+    // ponytail: Cold has no in-place edit, so a scrollback with links is
+    // decoded whole and stored again; clear-history -H and resets are rare.
+    if linked {
+        let rows: Vec<_> = (0..cold.len())
+            .map(|i| {
+                let meta = cold.row(i, cols, &mut cells);
+                (cells.clone(), meta)
+            })
+            .collect();
+        cold.clear();
+        for (mut cells, meta) in rows {
+            cells.iter_mut().for_each(|c| c.hyperlink = None);
+            cold.push(&cells, meta.used, meta.wrapped);
+        }
+    }
     let grid = term.grid_mut();
     for line in -(grid.history_size() as i32)..grid.screen_lines() as i32 {
         for col in 0..grid.columns() {
@@ -790,9 +822,9 @@ impl PaneHandle {
             images,
             ..
         } = &mut *emu;
-        let before = term.grid().history_size();
+        let before = marks.history_len(term);
         marks.resize(term, size);
-        let after = term.grid().history_size();
+        let after = marks.history_len(term);
         images.resized(u32::from(size.cols), u32::from(size.rows), (before, after));
         size
     }
@@ -810,12 +842,13 @@ impl PaneHandle {
             images,
             ..
         } = &mut *emu;
-        let history = term.grid().history_size();
+        let history = marks.history_len(term);
         term.grid_mut().clear_history();
+        marks.cold_mut().clear();
         marks.trim(history);
         images.history_cleared();
         if hyperlinks {
-            forget_hyperlinks(term);
+            forget_hyperlinks(term, marks);
         }
         drop(emu);
         self.dirty.store(true, Ordering::Release);
@@ -993,8 +1026,10 @@ impl PaneHandle {
         let mut pen = capture_sgr::Pen::default();
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
-        let history = grid.history_size() as i32;
+        let history = emu.marks.history_len(&emu.term) as i32;
         let last = grid.screen_lines() as i32 - 1;
+        let cols = grid.columns();
+        let mut row = Vec::with_capacity(cols);
         let bound = |b: Option<CaptureBound>, default: i32| match b {
             None => default,
             Some(CaptureBound::Line(n)) => n.clamp(-history, last),
@@ -1006,18 +1041,15 @@ impl PaneHandle {
         // `-H`: the links already listed, across rows.
         let mut listed: Vec<(String, String)> = Vec::new();
         for line in start..=end {
-            let row = &grid[Line(line)];
-            let wrapped = row[Column(grid.columns() - 1)]
-                .flags
-                .contains(CellFlags::WRAPLINE);
+            let wrapped = read_row(&emu, line, cols, &mut row);
             let wraps = join && wrapped;
-            let linked = (0..grid.columns()).any(|c| row[Column(c)].hyperlink().is_some());
+            let linked = row.iter().any(|c| c.hyperlink.is_some());
             let mut prefix = String::new();
             let mut link_text = None;
             if extra.links {
                 let mut uris: Vec<String> = Vec::new();
-                for c in 0..grid.columns() {
-                    let Some(link) = row[Column(c)].hyperlink() else {
+                for cell in &row {
+                    let Some(link) = cell.hyperlink.as_ref() else {
                         continue;
                     };
                     let key = (link.id().to_string(), link.uri().to_string());
@@ -1061,20 +1093,19 @@ impl PaneHandle {
             }
             // Without a wrap, `-J` stops at the used width; a non-blank
             // cell the program did not write (`DECALN`) still counts.
-            let cols = grid.columns();
             let tab_stop = |col: usize| ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
             let used = || {
                 // A tab counts as far as the stop it moved to (tmux's
                 // `cellused`), a blank or not.
                 (0..cols)
-                    .map(|c| match row[Column(c)].c {
+                    .map(|c| match row[c].c {
                         ' ' => 0,
                         '\t' => tab_stop(c),
                         _ => c + 1,
                     })
                     .max()
                     .unwrap_or(0)
-                    .max(written::used(row))
+                    .max(used_cells(&row))
             };
             // `-J` leaves out the empty cells and the trimming; so do `-T`
             // and `-N` for their half.
@@ -1105,7 +1136,7 @@ impl PaneHandle {
                 }
             };
             for col in 0..end {
-                let cell = &row[Column(col)];
+                let cell = &row[col];
                 if cell.flags.intersects(CellFlags::WIDE_CHAR_SPACER) {
                     continue;
                 }
@@ -1113,7 +1144,7 @@ impl PaneHandle {
                     continue;
                 }
                 if opts.escapes {
-                    let now = capture_sgr::Pen::of(cell);
+                    let now = capture_sgr::Pen::of(&term_cell(cell));
                     let code = capture_sgr::code(&pen, &now, &mut has_link);
                     text.push_str(&esc(code));
                     pen = now;
@@ -1125,7 +1156,7 @@ impl PaneHandle {
                 if cell.c == '\t' {
                     let stop = tab_stop(col);
                     let intact = (col + 1..stop).all(|c| {
-                        let cell = &row[Column(c)];
+                        let cell = &row[c];
                         cell.c == ' ' && !cell.flags.contains(written::WRITTEN)
                     });
                     if intact {
@@ -1139,9 +1170,7 @@ impl PaneHandle {
                 } else {
                     text.push(cell.c);
                 }
-                if let Some(zw) = cell.zerowidth() {
-                    text.extend(zw);
-                }
+                text.extend(&cell.zerowidth);
             }
             if has_link {
                 text.push_str(&esc(capture_sgr::close_link()));
@@ -1251,14 +1280,15 @@ impl PaneHandle {
 
     /// Scrollback lines kept above the visible screen.
     pub fn history_size(&self) -> usize {
-        lock(&self.emu).term.grid().history_size()
+        let emu = lock(&self.emu);
+        emu.marks.history_len(&emu.term)
     }
 
     /// The pane's kitty placements in the rows [`Self::copy_grid`] gives:
     /// row 0 is the oldest history row (copy mode's view of its images).
     pub fn copy_images(&self) -> Option<PaneImages> {
         let emu = lock(&self.emu);
-        emu.images.copy_view(emu.term.grid().history_size())
+        emu.images.copy_view(emu.marks.history_len(&emu.term))
     }
 
     /// Every row of the grid, the oldest history row first and then the
@@ -1276,29 +1306,32 @@ impl PaneHandle {
     ) -> (usize, CursorState) {
         let emu = lock(&self.emu);
         let grid = emu.term.grid();
-        let history = grid.history_size();
+        let history = emu.marks.history_len(&emu.term);
         let cols = grid.columns();
         // The marks are the normal screen's.
         let marked = !emu.term.mode().contains(TermMode::ALT_SCREEN);
         let mut cells = Vec::with_capacity(cols);
         let mut covered = vec![false; cols];
         for r in -(history as i32)..grid.screen_lines() as i32 {
-            let line = &grid[Line(r)];
+            read_row(&emu, r, cols, &mut cells);
+            let line = &cells;
             covered.fill(false);
             for col in 0..cols {
-                if line[Column(col)].c != '\t' || covered[col] {
+                if line[col].c != '\t' || covered[col] {
                     continue;
                 }
                 let stop = ((col / TAB_STOP + 1) * TAB_STOP).min(cols);
                 let intact = (col + 1..stop).all(|c| {
-                    let cell = &line[Column(c)];
+                    let cell = &line[c];
                     cell.c == ' ' && !cell.flags.contains(written::WRITTEN)
                 });
                 if intact {
                     covered[col + 1..stop].fill(true);
                 }
             }
-            snap_row_into(&mut cells, line, cols);
+            for cell in &mut cells {
+                cell.flags.remove(written::WRITTEN);
+            }
             let bits = if marked {
                 emu.marks.get((r + history as i32) as usize)
             } else {
@@ -1467,6 +1500,47 @@ fn mouse_mode(mode: TermMode) -> MouseMode {
     }
 }
 
+/// Row `line` of the pane (negative lines are history, cold ones first)
+/// into `cells`, written marks kept; whether the row wraps.
+fn read_row(emu: &Emu, line: i32, cols: usize, cells: &mut Vec<SnapCell>) -> bool {
+    let cold = emu.marks.cold();
+    let index = line + emu.marks.history_len(&emu.term) as i32;
+    if index >= 0 && (index as usize) < cold.len() {
+        let meta = cold.row(index as usize, cols, cells);
+        if let Some(last) = cells.last_mut() {
+            last.flags.set(CellFlags::WRAPLINE, meta.wrapped);
+        }
+        return meta.wrapped;
+    }
+    let row = &emu.term.grid()[Line(line)];
+    fill_row(cells, row, cols, false);
+    cells
+        .last()
+        .is_some_and(|c| c.flags.contains(CellFlags::WRAPLINE))
+}
+
+/// [`written::used`] over snapshot cells.
+fn used_cells(cells: &[SnapCell]) -> usize {
+    cells
+        .iter()
+        .rposition(|c| c.flags.contains(written::WRITTEN))
+        .map_or(0, |c| c + 1)
+}
+
+/// The emulator's cell for a snapshot one, as far as the capture's pen reads.
+fn term_cell(cell: &SnapCell) -> term::cell::Cell {
+    let mut out = term::cell::Cell {
+        c: cell.c,
+        fg: cell.fg,
+        bg: cell.bg,
+        flags: cell.flags,
+        ..Default::default()
+    };
+    out.set_underline_color(cell.underline_color);
+    out.set_hyperlink(cell.hyperlink.clone());
+    out
+}
+
 fn snap_row(
     row: &alacritty_terminal::grid::Row<term::cell::Cell>,
     columns: usize,
@@ -1482,6 +1556,21 @@ fn snap_row_into(
     row: &alacritty_terminal::grid::Row<term::cell::Cell>,
     columns: usize,
 ) {
+    fill_row(cells, row, columns, true);
+}
+
+/// [`snap_row_into`], keeping the written mark unless `strip`.
+fn fill_row(
+    cells: &mut Vec<SnapCell>,
+    row: &alacritty_terminal::grid::Row<term::cell::Cell>,
+    columns: usize,
+    strip: bool,
+) {
+    let drop = if strip {
+        written::WRITTEN
+    } else {
+        CellFlags::empty()
+    };
     cells.clear();
     cells.extend((0..columns).map(|c| {
         let cell = &row[Column(c)];
@@ -1489,7 +1578,7 @@ fn snap_row_into(
             c: cell.c,
             fg: cell.fg,
             bg: cell.bg,
-            flags: cell.flags.difference(written::WRITTEN),
+            flags: cell.flags.difference(drop),
             zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
             underline_color: cell.underline_color(),
             hyperlink: cell.hyperlink(),
@@ -1774,7 +1863,76 @@ fn start_delayed(cmd: tokio::process::Command, slave: &OwnedFd) -> Option<tokio:
 
 #[cfg(test)]
 mod tests {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
     use super::*;
+
+    thread_local! {
+        static LIVE: Cell<isize> = const { Cell::new(0) };
+    }
+
+    /// Counts the live bytes of the thread that allocated them, so a test
+    /// can see what freeing a cache gives back.
+    struct Counting;
+
+    // SAFETY: forwards every call to `System`, only adding to a counter.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            LIVE.with(|n| n.set(n.get() + l.size() as isize));
+            unsafe { System.alloc(l) }
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            LIVE.with(|n| n.set(n.get() + l.size() as isize));
+            unsafe { System.alloc_zeroed(l) }
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            LIVE.with(|n| n.set(n.get() - l.size() as isize));
+            unsafe { System.dealloc(p, l) }
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+            LIVE.with(|n| n.set(n.get() + new as isize - l.size() as isize));
+            unsafe { System.realloc(p, l, new) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOC: Counting = Counting;
+
+    /// A pane that has scrolled keeps up to 1000 spare rows in its grid;
+    /// `trim_idle`, which the reader runs once the pty is drained, frees
+    /// them.
+    #[test]
+    fn trim_idle_frees_the_grids_spare_rows() {
+        use alacritty_terminal::term::test::TermSize;
+        let live = || LIVE.with(Cell::get);
+        let mut emu = Emu {
+            term: Term::new(
+                term::Config::default(),
+                &TermSize::new(200, 50),
+                Listener(Default::default()),
+            ),
+            parser: Processor::new(),
+            images: Store::new(200, 50, 100),
+            marks: Marks::new(100),
+            generation: 0,
+        };
+        let Emu {
+            term,
+            parser,
+            marks,
+            ..
+        } = &mut emu;
+        parser.advance(
+            &mut written::Written(term, marks, None),
+            "line\r\n".repeat(3000).as_bytes(),
+        );
+        let before = live();
+        emu.trim_idle();
+        let freed = before - live();
+        // 1000 rows of 200 cells at 24 B is 4.8 MB; allow for rounding.
+        assert!(freed > 1_000_000, "freed only {freed} bytes");
+    }
 
     /// `retry_pty` over scripted results: how many opens it made and what
     /// it returned.
@@ -1904,6 +2062,95 @@ mod tests {
             .expect("Exited in time")
             .expect("an event");
         assert_eq!(ev.kind, PaneEventKind::Exited(Some(1)));
+    }
+
+    /// A 20-row pane running `script`, once its output shows `END`.
+    async fn pane_after(script: &str, limit: usize) -> PaneHandle {
+        let (tx, rx) = mpsc::channel(64);
+        // Nothing reads the events; keep the channel open for the test.
+        std::mem::forget(rx);
+        let spec = PaneSpawn {
+            rows: 20,
+            history_limit: limit,
+            ..spec_for(&["sh", "-c", &format!("{script}; echo END; exec sleep 100")])
+        };
+        let handle = PaneHandle::spawn(spec, tx, Arc::new(Notify::new())).expect("spawn");
+        for _ in 0..1000 {
+            let text = handle.capture(&CaptureOpts {
+                start: None,
+                end: None,
+                escapes: false,
+            });
+            if text.contains("END") {
+                return handle;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the script did not finish");
+    }
+
+    const COLOURED: &str = "i=0; while [ $i -lt 300 ]; do \
+        printf '\\033[3%dm\\033[1mline %d\\ta\\tb \\344\\270\\226\\347\\225\\214 x\\033[0m\\n' \
+        $((i % 8)) $i; i=$((i+1)); done";
+
+    /// `capture-pane -p -S - -e -J` over 300 coloured lines with tabs and
+    /// wide characters, as it was before the scrollback went compact
+    /// (recorded from the commit before the change).
+    #[tokio::test]
+    async fn capture_s_minus_identical() {
+        let handle = pane_after(COLOURED, 1000).await;
+        let got = handle.capture_lines(
+            &CaptureOpts {
+                start: Some(CaptureBound::HistoryStart),
+                end: None,
+                escapes: true,
+            },
+            true,
+        );
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/capture/cold-history.txt"
+        );
+        if std::env::var_os("GROFE_RECORD_FIXTURE").is_some() {
+            std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+            std::fs::write(path, &got).unwrap();
+        }
+        assert_eq!(got, std::fs::read_to_string(path).expect("fixture"));
+    }
+
+    /// Copy mode's rows: the oldest history row first, then the screen.
+    #[tokio::test]
+    async fn copy_grid_rows_in_order() {
+        let handle = pane_after("seq 1 40", 100).await;
+        let mut texts = Vec::new();
+        let (history, _) = handle.copy_grid(|cells, _, _| {
+            texts.push(cells.iter().map(|c| c.c).collect::<String>());
+        });
+        assert_eq!(history, handle.history_size());
+        assert!(history >= 20, "{history}");
+        assert_eq!(texts.len(), history + 20);
+        assert!(texts[0].starts_with('1'), "{:?}", texts[0]);
+        for (i, text) in texts.iter().take(40).enumerate() {
+            assert_eq!(text.trim_end(), (i + 1).to_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_history_empties_cold() {
+        let handle = pane_after("seq 1 40", 100).await;
+        assert!(lock(&handle.emu).marks.cold().len() > 0);
+        handle.clear_history(false);
+        assert_eq!(lock(&handle.emu).marks.cold().len(), 0);
+        assert_eq!(handle.history_size(), 0);
+    }
+
+    /// `#{history_size}` and `#{history_bytes}` come from this count.
+    #[tokio::test]
+    async fn history_bytes_counts_cold() {
+        let handle = pane_after("seq 1 40", 100).await;
+        let cold = lock(&handle.emu).marks.cold().len();
+        assert!(cold > 0);
+        assert_eq!(handle.history_size(), cold);
     }
 
     /// T3.0's pane seams for the scrollback view (T3.2): lines scrolled off

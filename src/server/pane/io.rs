@@ -34,6 +34,13 @@ const WRITE_CHUNK: usize = 4096;
 /// After the child exits, the master counts as drained once it has been quiet
 /// this long, for when a background grandchild still holds the slave.
 const EXIT_GRACE: Duration = Duration::from_millis(200);
+/// Least time between two frees of the emulator's idle row cache, and the quiet
+/// time after which a pane that has stopped writing is trimmed once more. A
+/// trim at every would-block makes each scroll of a slow stream rebuild the
+/// cache (about 1000 rows).
+// ponytail: fixed 1 s; a stream that pauses longer than this between bursts
+// pays one cache rebuild per burst.
+const TRIM_QUIET: Duration = Duration::from_secs(1);
 
 /// See [`super::set_output_tap`].
 pub(crate) static OUTPUT_TAP: AtomicBool = AtomicBool::new(false);
@@ -175,11 +182,15 @@ fn unpack_colour(v: u32) -> Option<Rgb> {
 /// timeout, and report `Exited` once the child has exited and the master has
 /// drained (EOF/EIO, or `EXIT_GRACE` of quiet).
 pub(crate) async fn reader(mut r: Reader) {
-    let mut buf = vec![0u8; READ_CHUNK];
+    // Allocated for a burst of output, freed once the pty is drained.
+    let mut buf = Vec::new();
     // A pane whose program never ran has no output to drain.
     let mut drained = r.child.is_none();
     let mut exit: Option<Option<i32>> = None;
     let mut quiet_since = Instant::now();
+    // The last trim of the row cache, and when to trim after the output stops.
+    let mut last_trim: Option<Instant> = None;
+    let mut trim_at: Option<Instant> = None;
 
     while !(drained && exit.is_some()) {
         let mut tapped = None;
@@ -197,6 +208,7 @@ pub(crate) async fn reader(mut r: Reader) {
                     drained = true;
                     continue;
                 };
+                buf.resize(READ_CHUNK, 0);
                 match guard.try_io(|fd| {
                     nix::unistd::read(fd.get_ref(), &mut buf).map_err(std::io::Error::from)
                 }) {
@@ -204,6 +216,7 @@ pub(crate) async fn reader(mut r: Reader) {
                     Ok(Ok(n)) => {
                         (found, tapped) = r.take(&buf[..n]);
                         quiet_since = Instant::now();
+                        trim_at = Some(quiet_since + TRIM_QUIET);
                         read = true;
                     }
                     Ok(Err(e)) if e.raw_os_error() == Some(Errno::EINTR as i32) => {}
@@ -212,6 +225,12 @@ pub(crate) async fn reader(mut r: Reader) {
                     Err(_would_block) => {
                         if exit.is_some() {
                             r.slave = None;
+                        }
+                        // Drained: give back what a burst grew.
+                        buf = Vec::new();
+                        if last_trim.is_none_or(|t| t.elapsed() >= TRIM_QUIET) {
+                            r.trim_idle();
+                            last_trim = Some(Instant::now());
                         }
                     }
                 }
@@ -223,11 +242,13 @@ pub(crate) async fn reader(mut r: Reader) {
                 // held, so look now: if it is empty the slave can go, and
                 // EOF follows without waiting out the grace.
                 if !drained {
+                    buf.resize(READ_CHUNK, 0);
                     match nix::unistd::read(r.master.get_ref(), &mut buf) {
                         Ok(0) => drained = true,
                         Ok(n) => {
                             (found, tapped) = r.take(&buf[..n]);
                             quiet_since = Instant::now();
+                            trim_at = Some(quiet_since + TRIM_QUIET);
                             read = true;
                         }
                         Err(Errno::EAGAIN) => r.slave = None,
@@ -241,6 +262,11 @@ pub(crate) async fn reader(mut r: Reader) {
             }
             _ = tokio::time::sleep_until(grace), if exit.is_some() && !drained => {
                 drained = true;
+            }
+            _ = tokio::time::sleep_until(trim_at.unwrap_or(grace)), if trim_at.is_some() => {
+                trim_at = None;
+                r.trim_idle();
+                last_trim = Some(Instant::now());
             }
         }
         // With backpressure, like `Exited`: the actor gets every byte, in
@@ -297,6 +323,14 @@ impl Reader {
         let found = self.feed(bytes);
         let tapped = OUTPUT_TAP.load(Ordering::Relaxed).then(|| bytes.to_vec());
         (found, tapped)
+    }
+
+    /// The pty is drained: free the emulator's idle row cache.
+    fn trim_idle(&self) {
+        let mut emu = lock(&self.emu);
+        if emu.generation == self.generation {
+            emu.trim_idle();
+        }
     }
 
     /// End a pending synchronized update, if any, and handle its events.
@@ -443,7 +477,7 @@ impl Reader {
                     }
                 }
                 parser.advance(&mut Written(term, marks, Some(&mut *store)), &bytes[fed..]);
-                store.prune(term.grid().history_size());
+                store.prune(marks.history_len(term));
             }
         }
         self.after_parse();

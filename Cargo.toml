@@ -52,6 +52,11 @@ insta = "1.48.0"
 proptest = "1.11.0"
 tempfile = "3.27.0"
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
 # `cargo deb --target <triple>` and `cargo generate-rpm --target <triple>`
 # (see the justfile's deb and rpm recipes) read target/<triple>/release.
 [package.metadata.deb]

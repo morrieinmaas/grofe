@@ -325,7 +325,7 @@ fn a_bad_list_fails_the_whole_reload() {
     );
     assert_eq!(
         srv.cmd(&["show", "-g", "history-limit"]).unwrap(),
-        "history-limit 50000\n"
+        "history-limit 2000\n"
     );
     write_config(&srv, "[status]\nrows = \"x\"\n");
     ends(

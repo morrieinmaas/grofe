@@ -33,7 +33,7 @@ use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 /// [`Model::history_limit`].
 pub const BASE_INDEX: u32 = 1;
 pub const PANE_BASE_INDEX: u32 = 1;
-pub const HISTORY_LIMIT: usize = 50_000;
+pub const HISTORY_LIMIT: usize = 2_000;
 /// Size of a session created with no `-x`/`-y` and no client (tmux's
 /// `default-size`).
 pub const DEFAULT_SIZE: (u16, u16) = (80, 24);

@@ -713,9 +713,7 @@ How many lines of scrollback each new pane keeps.
 - **Scope**: session
 - **Values**: a whole number, at most 2147483647
 
-Default: `50000`
-
-Default under tmux identity: `2000`
+Default: `2000`
 
 ## initial-repeat-time
 
