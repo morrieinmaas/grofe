@@ -1,0 +1,107 @@
+//! `--config` and `$GROFE_CONFIG` on the binary's side: resolving the file
+//! once, and telling the user when the running server loaded another one.
+
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use grofe::config;
+use grofe::protocol::{ClientCtx, Dialect, Hello, Reply, encode_hello};
+
+use super::request_with;
+
+/// The `--config` file as an absolute path; unset without the flag.
+static FLAG: OnceLock<PathBuf> = OnceLock::new();
+
+/// Resolves `--config` (else `$GROFE_CONFIG`) to an absolute path and records
+/// it for this process's config reads. It is not exported as a variable: the
+/// environment this CLI forwards would carry it into every pane. A server
+/// this CLI starts gets it as an argument ([`server_args`]).
+pub fn apply(flag: Option<&str>) -> Result<(), String> {
+    let (path, source) = match flag {
+        Some(arg) => {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let path = config::resolve_config_path(arg, &cwd, home.as_deref());
+            (path, "--config")
+        }
+        None => match config::env_config_file() {
+            Some(path) => (path, "GROFE_CONFIG"),
+            None => return Ok(()),
+        },
+    };
+    if path.is_dir() {
+        return Err(format!("{source}: {} is a directory", path.display()));
+    }
+    if flag.is_some() {
+        let _ = FLAG.set(path.clone());
+    }
+    config::set_process_config(path);
+    Ok(())
+}
+
+/// The arguments that give a server this CLI starts its config file.
+pub fn server_args() -> Vec<std::ffi::OsString> {
+    match config::process_config() {
+        Some(file) => vec!["--config".into(), file.into()],
+        None => Vec::new(),
+    }
+}
+
+/// How long the server gets to answer [`warn_if_other`].
+const TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Tells the user when the server running on `socket` loaded other config
+/// files than the `--config` this CLI was given. Never starts a server and
+/// never fails the command.
+pub fn warn_if_other(socket: &Path) {
+    let Some(mine) = FLAG.get() else {
+        return;
+    };
+    let Ok(stream) = UnixStream::connect(socket) else {
+        return;
+    };
+    let Some(theirs) = ask_files(stream) else {
+        return;
+    };
+    if !theirs.iter().any(|f| same_file(f, mine)) {
+        let named: Vec<_> = theirs.iter().map(|f| f.display().to_string()).collect();
+        let named = if named.is_empty() {
+            "no config file".to_string()
+        } else {
+            named.join(", ")
+        };
+        eprintln!("grofe: server uses {named}");
+    }
+}
+
+/// The files the server loaded, asked in grofe's dialect whatever name this
+/// CLI runs as.
+fn ask_files(stream: UnixStream) -> Option<Vec<PathBuf>> {
+    stream.set_read_timeout(Some(TIMEOUT)).ok()?;
+    stream.set_write_timeout(Some(TIMEOUT)).ok()?;
+    let ctx = ClientCtx {
+        cwd: PathBuf::from("/"),
+        pane: None,
+        env: Vec::new(),
+        client: None,
+        dialect: Dialect::Grofe,
+        request: Default::default(),
+    };
+    let hello = encode_hello(&Hello::Control(ctx)).ok()?;
+    let _done = super::HangUp(stream.try_clone().ok());
+    match request_with(stream, &hello, &["config-file".to_string()]) {
+        Ok(Reply::Ok { out, .. }) => Some(out.lines().map(PathBuf::from).collect()),
+        _ => None,
+    }
+}
+
+/// Whether two paths name one file: compared resolved when both exist
+/// (`/tmp` is `/private/tmp` on macOS), else as given.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}

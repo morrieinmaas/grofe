@@ -6,10 +6,33 @@ pub(super) fn config_env() -> config::Env {
     if cfg!(test) {
         return config::Env {
             config_dir: None,
+            config_file: None,
             home: None,
         };
     }
     config::Env::from_process()
+}
+
+/// `config-file` (internal, asked by a client given `--config`): the files
+/// the config loads from, one per line: the config file, or under `tmux -f`
+/// those files that exist.
+pub fn config_files() -> String {
+    let files: Vec<PathBuf> = match crate::compat::start_config() {
+        None => config_env().config_file.into_iter().collect(),
+        Some(files) => files
+            .into_iter()
+            .filter(|f| f != Path::new("/dev/null") && f.exists())
+            .collect(),
+    };
+    files.iter().map(|f| format!("{}\n", f.display())).collect()
+}
+
+/// The `tmux -f` files that count: a missing file or `/dev/null` is none.
+fn start_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    files
+        .into_iter()
+        .filter(|f| f != Path::new("/dev/null") && f.exists() && !is_tmux_conf(f))
+        .collect()
 }
 
 /// The config chain (spec §5.1), or with `tmux -f <file>...` those files
@@ -24,11 +47,7 @@ pub(super) fn load_config() -> Result<Resolved, Vec<config::ConfigError>> {
                 config_dir: None,
                 ..env
             };
-            let files: Vec<PathBuf> = files
-                .into_iter()
-                .filter(|f| f != Path::new("/dev/null") && f.exists() && !is_tmux_conf(f))
-                .collect();
-            config::load_with_file(&only, &files)
+            config::load_with_file(&only, &start_files(files))
         }
     }
 }

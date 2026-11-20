@@ -163,13 +163,18 @@ fn t7_show_config_explain_names_the_custom_file() {
     let file = custom_dir(&srv, "x").join("a.toml");
     write(&file, "status.left = \"A\"\n");
     let f = file.to_str().expect("utf8");
+    // The file is under HOME, so `show-config` writes it with `~`.
+    let shown = format!(
+        "~/{}",
+        file.strip_prefix(&srv.home).expect("under home").display()
+    );
 
     let out = run(
         &srv,
         &["--config", f, "show-config", "--explain", "status.left"],
     );
     assert!(out.status.success(), "{out:?}");
-    assert!(out.stdout.contains(f), "flag: {out:?}");
+    assert!(out.stdout.contains(&shown), "flag: {out:?}");
 
     let out = run_env(
         &srv,
@@ -177,7 +182,7 @@ fn t7_show_config_explain_names_the_custom_file() {
         &["show-config", "--explain", "status.left"],
     );
     assert!(out.status.success(), "{out:?}");
-    assert!(out.stdout.contains(f), "env: {out:?}");
+    assert!(out.stdout.contains(&shown), "env: {out:?}");
 }
 
 #[test]
@@ -266,4 +271,146 @@ fn t5c_tilde_flag_resolves_against_home() {
     let out = run(&srv, &["--config", "~/t.toml", "new-session", "-d"]);
     assert!(out.status.success(), "{out:?}");
     assert_eq!(status_left(&srv), "T");
+}
+
+fn uses(out: &CmdOutput, file: &Path) -> bool {
+    out.stderr
+        .contains(&format!("grofe: server uses {}", file.display()))
+}
+
+#[test]
+fn t8b_the_notice_comes_with_attach_and_new_session_too() {
+    let srv = TestServer::unstarted();
+    let a = custom_dir(&srv, "a").join("a.toml");
+    let b = custom_dir(&srv, "b").join("b.toml");
+    start_with(&srv, &a);
+    let b = b.to_str().expect("utf8");
+    // No terminal here, so these fail after the notice, which is the point.
+    for args in [["attach-session", "-t", "0"], ["new-session", "-s", "n"]] {
+        let mut full = vec!["--config", b];
+        full.extend(args);
+        let out = run(&srv, &full);
+        assert!(uses(&out, &a), "{args:?}: {out:?}");
+    }
+}
+
+#[test]
+fn t8c_a_server_without_sessions_still_answers_the_notice() {
+    let srv = TestServer::unstarted();
+    let a = custom_dir(&srv, "a").join("a.toml");
+    let b = custom_dir(&srv, "b").join("b.toml");
+    let out = run(
+        &srv,
+        &["--config", a.to_str().expect("utf8"), "start-server"],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let out = run(
+        &srv,
+        &["--config", b.to_str().expect("utf8"), "list-sessions"],
+    );
+    assert!(uses(&out, &a), "{out:?}");
+}
+
+#[test]
+fn t8d_only_the_flag_warns_not_the_variable() {
+    let srv = TestServer::unstarted();
+    let a = custom_dir(&srv, "a").join("a.toml");
+    let b = custom_dir(&srv, "b").join("b.toml");
+    start_with(&srv, &a);
+    let out = run_env(&srv, Some(&b), &["list-sessions"]);
+    assert!(!out.stderr.contains("server uses"), "{out:?}");
+}
+
+#[test]
+fn t8e_the_same_file_by_another_spelling_is_no_notice() {
+    let srv = TestServer::unstarted();
+    let a = custom_dir(&srv, "a").join("a.toml");
+    write(&a, "");
+    start_with(&srv, &a);
+    let dotted = custom_dir(&srv, "a").join("..").join("a").join("a.toml");
+    let out = run(
+        &srv,
+        &["--config", dotted.to_str().expect("utf8"), "list-sessions"],
+    );
+    assert!(!out.stderr.contains("server uses"), "{out:?}");
+}
+
+#[test]
+fn t8f_under_tmux_f_the_notice_names_the_loaded_file() {
+    let srv = TestServer::unstarted();
+    let f = custom_dir(&srv, "f").join("f.toml");
+    let b = custom_dir(&srv, "b").join("b.toml");
+    write(&f, "status.left = \"F\"\n");
+    let bin = srv.home.join("bin");
+    fs::create_dir_all(&bin).expect("mkdir");
+    let link = bin.join("tmux");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grofe"), &link).expect("link");
+    let mut cmd = Command::new(&link);
+    cmd.current_dir(&srv.home)
+        .env_remove("GROFE_CONFIG")
+        .env_remove("TMUX")
+        .env("HOME", &srv.home)
+        .env("XDG_CONFIG_HOME", &srv.config_home)
+        .env("XDG_STATE_HOME", &srv.state_home)
+        .env("XDG_RUNTIME_DIR", &srv.runtime_dir)
+        .env("TMUX_TMPDIR", srv.home.join("tmuxtmp"))
+        .env("GROFE_RESTORE_ON_START", "0")
+        .args(["-S"])
+        .arg(&srv.socket)
+        .args(["-f"])
+        .arg(&f)
+        .args(["new-session", "-d"]);
+    std::fs::create_dir_all(srv.home.join("tmuxtmp")).expect("mkdir");
+    let out = run_bounded(cmd, CMD_TIMEOUT);
+    assert!(out.status.success(), "{out:?}");
+    let out = run(
+        &srv,
+        &["--config", b.to_str().expect("utf8"), "list-sessions"],
+    );
+    assert!(uses(&out, &f), "{out:?}");
+}
+
+#[test]
+fn t9_layouts_come_from_the_custom_folder() {
+    let srv = TestServer::unstarted();
+    let dir = custom_dir(&srv, "cust");
+    write(&dir.join("a.toml"), "");
+    write(&dir.join("layouts").join("xlayout.toml"), "");
+    let out = run(
+        &srv,
+        &[
+            "--config",
+            dir.join("a.toml").to_str().expect("utf8"),
+            "layout",
+            "list",
+        ],
+    );
+    assert!(out.stdout.contains("xlayout"), "{out:?}");
+}
+
+#[test]
+fn t10_the_flag_does_not_reach_the_panes() {
+    let srv = TestServer::unstarted();
+    let a = custom_dir(&srv, "a").join("a.toml");
+    write(&a, "");
+    let dump = srv.home.join("pane.env");
+    let out = run(
+        &srv,
+        &[
+            "--config",
+            a.to_str().expect("utf8"),
+            "new-session",
+            "-d",
+            &format!("env > {}", dump.display()),
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    for _ in 0..100 {
+        if fs::read_to_string(&dump).is_ok_and(|t| t.contains("HOME=")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let env = fs::read_to_string(&dump).expect("the pane ran");
+    assert!(!env.contains("GROFE_CONFIG"), "{env}");
 }

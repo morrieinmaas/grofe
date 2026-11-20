@@ -16,6 +16,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod config_glue;
 mod layout_glue;
 mod remote_cli;
 
@@ -163,7 +164,9 @@ fn main() -> ExitCode {
             }
         }
     };
-    if let Err(e) = apply_config(&globals) {
+    // The server is told its file by argument, over any variable it inherited.
+    let server = rest.first().is_some_and(|v| v == "__server");
+    if !server && let Err(e) = config_glue::apply(globals.config.as_deref()) {
         return fail(&format!("grofe: {e}"));
     }
     if let Some(code) = remote_route(&globals, &rest) {
@@ -182,6 +185,9 @@ fn main() -> ExitCode {
     };
     let rest = rest.as_slice();
     let verb = grofe::cmd::parse::canonical_name(&rest[0]);
+    if !matches!(verb, "__server" | "show-config" | "import-tmux" | "pack") {
+        config_glue::warn_if_other(&globals.socket());
+    }
 
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.
@@ -538,51 +544,6 @@ fn tmux_env_socket() -> Option<PathBuf> {
     grofe::compat::tmux_env_socket(std::env::var_os("TMUX").as_deref(), &dirs)
 }
 
-/// The config file this CLI was given (`--config`, then `$GROFE_CONFIG`) as
-/// an absolute path, once [`apply_config`] has run.
-static EXPLICIT_CONFIG: OnceLock<PathBuf> = OnceLock::new();
-
-/// Resolves `--config` (else `$GROFE_CONFIG`) to an absolute path and puts it
-/// in `$GROFE_CONFIG`: the server this CLI starts inherits it, and every
-/// config read here sees it.
-fn apply_config(globals: &Globals) -> Result<(), String> {
-    let (arg, source) = match &globals.config {
-        Some(a) => (a.clone(), "--config"),
-        None => match std::env::var("GROFE_CONFIG").ok().filter(|s| !s.is_empty()) {
-            Some(a) => (a, "GROFE_CONFIG"),
-            None => return Ok(()),
-        },
-    };
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let path = grofe::config::resolve_config_path(&arg, &cwd, home.as_deref());
-    if path.is_dir() {
-        return Err(format!("{source}: {} is a directory", path.display()));
-    }
-    // SAFETY: main has started no thread yet.
-    unsafe { std::env::set_var("GROFE_CONFIG", &path) };
-    let _ = EXPLICIT_CONFIG.set(path);
-    Ok(())
-}
-
-/// Tells the user when the running server on `socket` loaded another config
-/// file than this CLI was given.
-// ponytail: a second request per command, and only when a config was given.
-fn warn_if_other_config(socket: &Path) {
-    let Some(mine) = EXPLICIT_CONFIG.get() else {
-        return;
-    };
-    let argv = ["display-message", "-p", "#{config_file}"].map(String::from);
-    if let Ok(stream) = connect(socket)
-        && let Ok(Reply::Ok { out, .. }) = request(stream, socket, &argv)
-    {
-        let theirs = out.trim_end();
-        if !theirs.is_empty() && Path::new(theirs) != mine {
-            eprintln!("grofe: server uses {theirs}");
-        }
-    }
-}
-
 fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
     let mut globals = Globals {
         socket: None,
@@ -675,7 +636,7 @@ fn run_foreground(globals: &Globals) -> Option<ExitCode> {
 }
 
 /// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty] [--restore]
-/// [--identity tmux] [--file <path>]`: the detached server process.
+/// [--identity tmux] [--file <path>] [--config <path>]`: the detached server process.
 /// `--identity tmux` says the CLI that started it ran as `tmux` (spec
 /// D12); `--file` is that CLI's `tmux -f`.
 fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
@@ -698,6 +659,7 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
                 grofe::compat::set_started_as(grofe::compat::Identity::Tmux)
             }
             ("--file", Some(path)) => grofe::compat::set_start_config(PathBuf::from(path)),
+            ("--config", Some(path)) => grofe::config::set_process_config(PathBuf::from(path)),
             ("--ready-fd", Some(fd)) => match fd.parse() {
                 Ok(fd) => ready_fd = Some(fd),
                 Err(_) => return fail(&format!("bad --ready-fd: {fd}")),
@@ -936,7 +898,6 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         }
         Err(e) => return fail(&e),
     };
-    warn_if_other_config(socket);
     // A server that was exiting as this connected (an empty or unattached
     // one) closes the connection without answering. When no server is
     // there any more, say so as for any other command; the request is
@@ -1518,6 +1479,7 @@ fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
     for file in CONFIG_FILES.get().into_iter().flatten() {
         cmd.arg("--file").arg(file);
     }
+    cmd.args(config_glue::server_args());
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork
     // and exec. It detaches the server from our session and terminal.
     unsafe {

@@ -830,6 +830,7 @@ fn a_binding_reads_canopy_store_from_the_converted_environment() {
     assert_eq!(out.status.code(), Some(0), "stderr:\n{}", out.stderr);
     let env = grofe::config::Env {
         config_dir: None,
+        config_file: None,
         home: None,
     };
     let r = grofe::config::load_with_file(&env, std::slice::from_ref(&out_path))
