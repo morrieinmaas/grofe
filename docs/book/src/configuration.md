@@ -7,9 +7,23 @@ ones before:
 1. `config.toml`
 2. every `conf.d/*.toml`, in name order
 3. `user.toml`
+4. `settings.toml`
 
-Your own file always loads last, so tools and themes can add to your setup
-without overriding you.
+`user.toml` is your own file, so tools and themes can add to your setup
+without overriding you. `settings.toml` is the one grofe writes: it loads
+last and overrides everything above it, so a value saved there always wins.
+Do not expect to edit it by hand; grofe re-reads it before each save and
+keeps your comments and other keys, but its layout is its own. Resetting a
+setting removes its key, and the value from the layer below applies again.
+
+## Saving from customize-mode
+
+In customize-mode (`prefix C` in the tmux identity), `P` writes the selected
+option or key binding to `settings.toml` and reloads the config. `S` is not
+used for this: as in tmux, it sets the option globally. An option with no
+TOML key (a `@user` option or a list option) answers `not saveable`. If the
+reload fails, the file is put back as it was and the error is shown. A
+missing `settings.toml` or config folder is created on the first save.
 
 ## Another config file
 

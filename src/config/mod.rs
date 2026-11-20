@@ -15,6 +15,7 @@
 mod cli;
 mod load;
 pub mod provenance;
+pub mod write;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -98,6 +99,13 @@ pub fn toml_type_name(toml_key: &str) -> &'static str {
 /// The tmux option name for a TOML key.
 pub fn tmux_name(toml_key: &str) -> Option<&'static str> {
     option_names().find(|(t, _)| *t == toml_key).map(|(_, n)| n)
+}
+
+/// The TOML key of a tmux option name: the inverse of [`tmux_name`].
+pub fn toml_key(tmux_name: &str) -> Option<&'static str> {
+    option_names()
+        .find(|(_, n)| *n == tmux_name)
+        .map(|(t, _)| t)
 }
 
 /// Where the config lives. [`Env::from_process`] reads it from the

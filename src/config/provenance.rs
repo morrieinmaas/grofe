@@ -17,6 +17,8 @@ pub enum Layer {
     ConfD,
     /// `user.toml`, the user's final word.
     User,
+    /// `settings.toml`, written by grofe itself; the last word.
+    Settings,
 }
 
 /// Where a resolved value came from. An included file (`source-file`)

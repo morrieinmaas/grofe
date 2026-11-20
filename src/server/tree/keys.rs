@@ -543,6 +543,19 @@ pub(super) fn custom_change(
     })
 }
 
+/// `P`: saves the option or key on line `line` to settings.toml.
+fn custom_persist(state: &mut State, client: ClientId, v: &View, line: usize) -> Routed {
+    let entry = custom_tag(v, line).and_then(|t| custom_entry(state, client, t));
+    let Some((entry, _)) = entry else {
+        return Routed::Consumed;
+    };
+    match customize::persist(state, &entry) {
+        Ok(text) => clients::show_message(state, client, &text),
+        Err(e) => error_message(state, client, &e),
+    }
+    Routed::Consumed
+}
+
 /// customize-mode's own keys; `None` leaves the key to the chooser.
 pub(super) fn custom_key(
     state: &mut State,
@@ -570,6 +583,7 @@ pub(super) fn custom_key(
         }
         Some('w') => custom_enter(state, client, v, current, false, false),
         Some('S' | 'W') => custom_enter(state, client, v, current, true, false),
+        Some('P') => custom_persist(state, client, v, current),
         Some('d') => custom_change(state, client, v, current, true, false),
         Some('D') => custom_change(state, client, v, current, true, true),
         Some('u') => custom_change(state, client, v, current, false, false),
