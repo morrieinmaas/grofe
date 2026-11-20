@@ -652,10 +652,11 @@ struct Scanner<'a> {
 impl<'a> Scanner<'a> {
     fn new(gd: &'a Grid) -> Self {
         let spacer = CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER;
-        let plain = gd
-            .looks
-            .iter()
-            .map(|l| l.zerowidth.is_empty() && !l.flags.intersects(spacer))
+        let plain = (0..gd.looks.len() as u32)
+            .map(|id| {
+                let l = gd.looks.get(id);
+                l.zerowidth.is_empty() && !l.flags.intersects(spacer)
+            })
             .collect();
         Scanner {
             gd,
