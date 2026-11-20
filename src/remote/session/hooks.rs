@@ -130,7 +130,6 @@ pub struct Switch {
 pub struct HookCtx<'a> {
     pub(super) link: &'a Link,
     pub(super) conn: &'a Conn,
-    pub(super) host: &'a str,
     pub(super) hello: &'a str,
     pub(super) tty: &'a str,
     pub(super) prompt: &'a mut Option<Box<dyn Prompt>>,
@@ -150,11 +149,6 @@ impl HookCtx<'_> {
         self.link
     }
 
-    /// The remote host, for messages.
-    pub fn host(&self) -> &str {
-        self.host
-    }
-
     /// Which connection this is: it changes with every reconnect, when
     /// the server forgets this client and draws its screen anew.
     pub fn connection(&self) -> u64 {
@@ -164,11 +158,6 @@ impl HookCtx<'_> {
     /// The smoothed round trip time ([`Link::rtt`]).
     pub fn rtt(&self) -> Option<Duration> {
         self.link.rtt()
-    }
-
-    /// A control request on its own channel; its output or error.
-    pub fn request(&self, argv: &[String]) -> Result<String, String> {
-        self.link.request(self.hello, argv)
     }
 
     /// A control request on its own thread, so a slow link does not stall
@@ -203,14 +192,8 @@ impl HookCtx<'_> {
         replace_prompt(self.prompt, prompt);
     }
 
-    /// Takes the prompt down unanswered, if one is up, and redraws.
-    pub fn close_prompt(&mut self) {
-        if self.prompt.take().is_some() {
-            self.redraw();
-        }
-    }
-
-    /// [`HookCtx::close_prompt`], only when the prompt up is `tag`'s.
+    /// Takes the prompt down unanswered, only when the prompt up is `tag`'s,
+    /// and redraws.
     pub fn close_prompt_tagged(&mut self, tag: &str) {
         if take_tagged(self.prompt, tag) {
             self.redraw();

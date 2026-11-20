@@ -435,12 +435,7 @@ fn corpus_commands() -> Vec<Vec<String>> {
 /// Whether the table refuses the command on purpose: its row refuses it,
 /// for good or until a later milestone.
 fn unsupported(cmd: &[String]) -> bool {
-    tmux::row_for(cmd).is_some_and(|r| {
-        matches!(
-            r.target,
-            tmux::GrofeTarget::Unsupported(_) | tmux::GrofeTarget::Refuse(_)
-        )
-    })
+    tmux::row_for(cmd).is_some_and(|r| matches!(r.target, tmux::GrofeTarget::Unsupported(_)))
 }
 
 #[test]

@@ -44,9 +44,7 @@ pub use alacritty_terminal::term::cell::Hyperlink;
 
 use crate::server::imgstore::{PaneImages, Store};
 use crate::server::passthrough::Scanner;
-use crate::types::{
-    CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId, SessionId,
-};
+use crate::types::{CaptureBound, CaptureOpts, InputModes, MouseEncoding, MouseMode, PaneId};
 use io::{InputQueue, Listener};
 use marks::{HISTORY_SLACK, Marks};
 use pipe::Pipe;
@@ -108,8 +106,6 @@ pub enum PaneEventKind {
 #[derive(Debug, Clone)]
 pub struct PaneSpawn {
     pub id: PaneId,
-    /// The session the pane's window belongs to (for `TMUX`, TC.1).
-    pub session: SessionId,
     /// What to run, as tmux's `spawn_pane`: one word is a command string for
     /// `shell -c`, several are executed directly, none starts `shell`.
     pub argv: Option<Vec<String>>,
@@ -962,11 +958,6 @@ impl PaneHandle {
             self.dirty.store(true, Ordering::Release);
         }
         self.images_on.store(on, Ordering::Relaxed);
-    }
-
-    /// See [`Self::set_images`].
-    pub fn images(&self) -> bool {
-        self.images_on.load(Ordering::Relaxed)
     }
 
     /// See [`Self::set_graphics_ok`].
@@ -1986,7 +1977,6 @@ mod tests {
     fn spec_with_term(term: &'static str) -> PaneSpawn {
         PaneSpawn {
             id: PaneId(0),
-            session: SessionId(0),
             argv: None,
             shell: "/bin/sh".into(),
             login: true,

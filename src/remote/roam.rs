@@ -155,7 +155,7 @@ enum Attempt {
     Refused(String),
 }
 
-fn attempt(host: &str, dial: &str, b: &Bootstrap) -> Attempt {
+fn attempt(dial: &str, b: &Bootstrap) -> Attempt {
     let mut q = match quic::connect(dial, b) {
         Ok(q) => q,
         Err(e) if e.kind() == io::ErrorKind::TimedOut => {
@@ -168,7 +168,7 @@ fn attempt(host: &str, dial: &str, b: &Bootstrap) -> Attempt {
         Err(e) => return Attempt::Refused(e.to_string()),
     };
     // The link's end closes the QUIC connection; it owns the runtime too.
-    match Link::over(host, reader, writer, Some(Box::new(move || q.close()))) {
+    match Link::over(reader, writer, Some(Box::new(move || q.close()))) {
         Ok(link) => Attempt::Linked(link),
         Err(e) => Attempt::Refused(ssh::sanitize(&e.to_string())),
     }
@@ -251,7 +251,7 @@ impl Roaming {
                 silent: 0,
             }),
         };
-        let link = match attempt(target.host_name(), &roaming.dial, &boot) {
+        let link = match attempt(&roaming.dial, &boot) {
             Attempt::Linked(link) => link,
             Attempt::Silent(why) => {
                 // ponytail: the proxy that got no client stays until
@@ -314,7 +314,6 @@ impl Roaming {
     // Ruling: nothing is printed here; the attach owns the terminal and
     // its reconnect bar says what is happening.
     pub fn relink(&self) -> Result<Link, String> {
-        let host = self.target.host_name();
         let (boot, ssh_only) = {
             let s = self.state();
             (s.boot.clone(), s.ssh_only)
@@ -323,7 +322,7 @@ impl Roaming {
             return self.ssh(true);
         }
         if let Some(b) = boot
-            && let Attempt::Linked(link) = attempt(host, &self.dial, &b)
+            && let Attempt::Linked(link) = attempt(&self.dial, &b)
         {
             self.state().linked();
             return Ok(link);
@@ -337,7 +336,7 @@ impl Roaming {
             Err(e) => return Err(ssh::sanitize(&e.to_string())),
         };
         self.state().boot = Some(b.clone());
-        match attempt(host, &self.dial, &b) {
+        match attempt(&self.dial, &b) {
             Attempt::Linked(link) => {
                 self.state().linked();
                 Ok(link)

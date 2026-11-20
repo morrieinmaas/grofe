@@ -32,7 +32,7 @@ fn spawn_proxy(srv: &TestServer) -> (Child, Link) {
     let mut child = cmd.spawn().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stdin = child.stdin.take().unwrap();
-    let link = Link::over("host", stdout, stdin, None).unwrap();
+    let link = Link::over(stdout, stdin, None).unwrap();
     (child, link)
 }
 

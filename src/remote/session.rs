@@ -393,7 +393,6 @@ impl Loop {
         let mut cx = HookCtx {
             link: &link,
             conn: c,
-            host: &a.host,
             hello: &self.params.hello,
             tty: &c.tty,
             prompt: &mut self.overlay,

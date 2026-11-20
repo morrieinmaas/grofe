@@ -1173,12 +1173,8 @@ fn every_fe4_corpus_form_maps_or_is_refused_with_a_reason() {
         let got = tmux::dispatch_command(&cmd, &ctx())
             .map(|_| ())
             .map_err(|e| format!("{cmd:?}: {e}"));
-        let refused = tmux::row_for(&cmd).is_some_and(|r| {
-            matches!(
-                r.target,
-                tmux::GrofeTarget::Unsupported(_) | tmux::GrofeTarget::Refuse(_)
-            )
-        });
+        let refused = tmux::row_for(&cmd)
+            .is_some_and(|r| matches!(r.target, tmux::GrofeTarget::Unsupported(_)));
         let got = match got {
             Err(_) if refused => Err("refused".to_string()),
             other => other,

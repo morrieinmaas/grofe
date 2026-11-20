@@ -395,7 +395,6 @@ pub(crate) fn spawn_for(
 ) -> PaneSpawn {
     PaneSpawn {
         id: pane,
-        session,
         argv,
         shell,
         login: false,

@@ -42,7 +42,7 @@ pub fn local_link(socket: &Path) -> Result<Link, String> {
         let _ = child.wait();
         return Err("the local proxy has no stdio".to_string());
     };
-    Link::over(LOCAL, stdout, stdin, Some(kill_child(child))).map_err(|e| e.to_string())
+    Link::over(stdout, stdin, Some(kill_child(child))).map_err(|e| e.to_string())
 }
 
 /// A control link to saved machine `m`, over ssh, that never prompts.

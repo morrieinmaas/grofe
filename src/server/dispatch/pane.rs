@@ -511,7 +511,6 @@ pub(crate) fn respawn(
     let colours = clients::default_colours(model, (session, p.window));
     let spec = PaneSpawn {
         id: pane,
-        session,
         argv: argv.clone(),
         shell,
         login: true,

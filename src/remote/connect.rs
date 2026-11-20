@@ -9,7 +9,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
-use super::proxy_proto::{Channel, OpenSpec, PROXY_VERSION, ProxyConn, ProxyHello};
+use super::proxy_proto::{Channel, OpenSpec, PROXY_VERSION, ProxyConn};
 use super::ssh::{self, MISSING_MARKER, MISSING_STATUS, SshOpts, Target};
 use crate::protocol::{Reply, Request};
 
@@ -31,15 +31,6 @@ pub type End = Box<dyn FnOnce() + Send>;
 pub enum Transport {
     /// `ssh host -- <remote command>`, the proxy on ssh's stdio.
     Ssh(Target),
-}
-
-impl Transport {
-    /// The host, for messages.
-    pub fn host(&self) -> &str {
-        match self {
-            Transport::Ssh(t) => t.host_name(),
-        }
-    }
 }
 
 /// Why a link could not be made.
@@ -120,7 +111,6 @@ impl Shared {
 #[derive(Clone)]
 pub struct Link {
     shared: Arc<Shared>,
-    host: String,
     _owner: Arc<Owner>,
 }
 
@@ -145,12 +135,7 @@ impl Link {
     /// a pipe in tests, a QUIC stream pair). `end`, when given, runs once
     /// when the link drops or closes; it must end the stream (kill the
     /// process, close the socket) so blocked reads and writes fail.
-    pub fn over<R, W>(
-        host: &str,
-        reader: R,
-        writer: W,
-        end: Option<End>,
-    ) -> Result<Link, ConnectError>
+    pub fn over<R, W>(reader: R, writer: W, end: Option<End>) -> Result<Link, ConnectError>
     where
         R: Read + Send + 'static,
         W: Write + Send + 'static,
@@ -165,10 +150,10 @@ impl Link {
                 ConnectError::Failed(msg)
             }
         })?;
-        Ok(Link::start(host, conn, end))
+        Ok(Link::start(conn, end))
     }
 
-    fn start(host: &str, conn: ProxyConn, end: Option<End>) -> Link {
+    fn start(conn: ProxyConn, end: Option<End>) -> Link {
         let shared = Arc::new(Shared {
             conn,
             end: Mutex::new(end),
@@ -186,18 +171,7 @@ impl Link {
         Link {
             _owner: Arc::new(Owner(Arc::clone(&shared))),
             shared,
-            host: host.to_string(),
         }
-    }
-
-    /// The host, for messages.
-    pub fn host(&self) -> &str {
-        &self.host
-    }
-
-    /// The proxy's hello (version, os, arch, features).
-    pub fn peer(&self) -> &ProxyHello {
-        self.shared.conn.peer()
     }
 
     /// Opens a channel as `spec` asks.
@@ -228,21 +202,6 @@ impl Link {
     /// Why the link dropped, if it has.
     pub fn dropped(&self) -> Option<String> {
         lock(&self.shared.dropped).clone()
-    }
-
-    /// Blocks until the link drops; why.
-    pub fn wait_dropped(&self) -> String {
-        let mut d = lock(&self.shared.dropped);
-        loop {
-            if let Some(why) = d.as_ref() {
-                return why.clone();
-            }
-            d = self
-                .shared
-                .dropped_cv
-                .wait(d)
-                .unwrap_or_else(|p| p.into_inner());
-        }
     }
 
     /// Ends the link now.
@@ -373,7 +332,7 @@ fn hello_timeout() -> Duration {
 fn connect_ssh(target: &Target, opts: ConnectOpts) -> Result<Link, ConnectError> {
     let (mut child, stdin, stdout, said) = spawn_ssh(target, opts)?;
     let pid = nix::unistd::Pid::from_raw(child.id() as i32);
-    let hello = || Link::over(target.host_name(), stdout, stdin, None);
+    let hello = || Link::over(stdout, stdin, None);
     // Only an unattended connect is bounded: an interactive one may be
     // waiting on a password, a host key question or a security key touch.
     let (linked, timed_out) = if opts.batch {
@@ -553,7 +512,7 @@ impl Stderr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote::proxy_proto::{Mux, Role, encode_hello};
+    use crate::remote::proxy_proto::{Mux, ProxyHello, Role, encode_hello};
     use std::os::unix::net::UnixStream;
 
     /// A proxy end on a socketpair that answers pings (or not) and
@@ -590,7 +549,7 @@ mod tests {
         let every = Duration::from_millis(100);
         // Flowing: the peer answers no ping but keeps sending frames.
         let (a, b) = fake_proxy(&ProxyHello::current(&[]));
-        let link = Link::over("box", a.try_clone().unwrap(), a, None).unwrap();
+        let link = Link::over(a.try_clone().unwrap(), a, None).unwrap();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flowing = {
             let (stop, mut b) = (Arc::clone(&stop), b.try_clone().unwrap());
@@ -632,9 +591,7 @@ mod tests {
         let mut hello = ProxyHello::current(&[]);
         hello.proxy = 2;
         let (a, _b) = fake_proxy(&hello);
-        let err = Link::over("box", a.try_clone().unwrap(), a, None)
-            .err()
-            .unwrap();
+        let err = Link::over(a.try_clone().unwrap(), a, None).err().unwrap();
         match err {
             ConnectError::Incompatible(why) => {
                 assert!(why.contains("version 2"), "{why}");
@@ -647,13 +604,13 @@ mod tests {
     #[test]
     fn a_link_measures_rtt_and_drops_on_eof() {
         let (a, b) = fake_proxy(&ProxyHello::current(&[]));
-        let link = Link::over("box", a.try_clone().unwrap(), a, None).unwrap();
+        let link = Link::over(a.try_clone().unwrap(), a, None).unwrap();
         let mut br = BufReader::new(b.try_clone().unwrap());
         let mut line = String::new();
         br.read_line(&mut line).unwrap();
         let closer = b.try_clone().unwrap();
         let _proxy = Mux::start(br, b, Role::Proxy, |c, _| c.close("no"));
-        assert_eq!(link.peer().proxy, PROXY_VERSION);
+        assert_eq!(link.conn().peer().proxy, PROXY_VERSION);
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while link.rtt().is_none() {
             assert!(std::time::Instant::now() < deadline, "no rtt");
@@ -662,8 +619,8 @@ mod tests {
         assert!(link.dropped().is_none());
         closer.shutdown(std::net::Shutdown::Both).unwrap();
         // The proxy end closing is EOF on the link.
-        let why = link.wait_dropped();
-        assert!(!why.is_empty());
+        assert!(wait_dropped_within(&link, Duration::from_secs(10)));
+        assert!(!link.dropped().unwrap().is_empty());
     }
 
     #[test]

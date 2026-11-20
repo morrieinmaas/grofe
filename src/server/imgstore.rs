@@ -311,8 +311,6 @@ pub struct ViewSixel {
     pub row: i32,
     pub cells: (u32, u32),
     pub image: Arc<Sixel>,
-    /// The cell size the pane measured it in.
-    pub cell_px: (u32, u32),
 }
 
 impl PartialEq for ViewSixel {
@@ -633,7 +631,6 @@ impl Store {
                 row: r as i32,
                 cells: s.cells,
                 image: Arc::clone(&s.image),
-                cell_px: self.cell_px,
             });
         }
         (!out.is_empty()).then_some(out)
