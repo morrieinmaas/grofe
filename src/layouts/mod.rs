@@ -15,7 +15,7 @@ use schema::Plan;
 
 use crate::util::quote;
 
-pub use up::{UpOptions, UpReport, up, watch};
+pub use up::{UpOptions, up, watch};
 
 /// What the layout commands need from the running program and server.
 pub trait Server {

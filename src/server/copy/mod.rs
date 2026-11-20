@@ -26,7 +26,7 @@ pub mod search;
 pub mod select;
 pub mod view;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -38,6 +38,7 @@ use crate::server::dispatch::options;
 use crate::server::imgstore::PaneImages;
 use crate::server::input::{Input, InputHook, Key, KeyCode, ROOT_TABLE, Routed};
 use crate::server::model::Window;
+use crate::server::pane::looks::Looks;
 use crate::server::pane::{CellFlags, CursorShape, CursorState, PaneHandle, SnapCell, marks};
 use crate::server::render::{Overlay, OverlayCtx, Screen};
 use crate::server::screenimg::{self, ImageCaps, Place};
@@ -162,9 +163,7 @@ pub struct Grid {
     pub sy: usize,
     rows: Vec<Row>,
     /// Each distinct look, with `c` unused; 0 is the default blank.
-    looks: Vec<SnapCell>,
-    /// Interns [`Grid::looks`].
-    look_ids: HashMap<LookKey, u32>,
+    looks: Looks,
     /// The pane's kitty placements in the copy's rows (G3).
     images: Option<PaneImages>,
     /// View mode's colours, kept from one line of output to the next as
@@ -172,38 +171,8 @@ pub struct Grid {
     pen: view::Pen,
 }
 
-/// A look as a hashable key (the colours as numbers).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct LookKey {
-    fg: u32,
-    bg: u32,
-    flags: u16,
-    underline: Option<u32>,
-    zerowidth: Vec<char>,
-    hyperlink: Option<crate::server::pane::Hyperlink>,
-}
-
-fn colour_key(c: Color) -> u32 {
-    match c {
-        Color::Named(n) => 0x0100_0000 | n as u32,
-        Color::Indexed(i) => 0x0200_0000 | u32::from(i),
-        Color::Spec(rgb) => {
-            0x0300_0000 | u32::from(rgb.r) << 16 | u32::from(rgb.g) << 8 | u32::from(rgb.b)
-        }
-    }
-}
-
-fn look_key(cell: &SnapCell) -> LookKey {
-    LookKey {
-        fg: colour_key(cell.fg),
-        bg: colour_key(cell.bg),
-        flags: cell.flags.bits(),
-        underline: cell.underline_color.map(colour_key),
-        zerowidth: cell.zerowidth.clone(),
-        hyperlink: cell.hyperlink.clone(),
-    }
-}
-
+// ponytail: `Looks` is not `Clone`, so a copy re-interns the looks in order,
+// which gives them the same ids; derive `Clone` on it to drop this.
 /// What tmux's `grid_get_cell` tells a motion about one cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridCell {
@@ -230,15 +199,12 @@ fn blank() -> SnapCell {
 
 impl Grid {
     fn empty(sx: usize, hsize: usize, sy: usize) -> Grid {
-        let mut look_ids = HashMap::new();
-        look_ids.insert(look_key(&blank()), 0);
         Grid {
             sx,
             hsize,
             sy,
             rows: Vec::new(),
-            looks: vec![blank()],
-            look_ids,
+            looks: Looks::new(),
             images: None,
             pen: view::Pen::new(),
         }
@@ -255,7 +221,6 @@ impl Grid {
             }
         });
         grid.rows.shrink_to_fit();
-        grid.looks.shrink_to_fit();
         grid.hsize = hsize.min(grid.rows.len());
         grid.sy = grid.rows.len() - grid.hsize;
         grid.images = handle.copy_images();
@@ -308,24 +273,14 @@ impl Grid {
     }
 
     /// The copy's heap size, roughly: its cells, rows and looks.
+    // ponytail: looks count by length, not capacity or the intern map, so
+    // this undercounts slightly; add `Looks::heap_bytes` if a budget needs it.
     pub fn heap_bytes(&self) -> usize {
         use std::mem::size_of;
         let cells: usize = self.rows.iter().map(|r| r.cells.capacity()).sum();
         cells * size_of::<Cell>()
             + self.rows.capacity() * size_of::<Row>()
-            + self.looks.capacity() * size_of::<SnapCell>()
-            + self.look_ids.capacity() * (size_of::<LookKey>() + size_of::<u32>())
-    }
-
-    fn intern(&mut self, cell: &SnapCell) -> u32 {
-        let key = look_key(cell);
-        if let Some(&id) = self.look_ids.get(&key) {
-            return id;
-        }
-        let id = self.looks.len() as u32;
-        self.looks.push(cell.clone());
-        self.look_ids.insert(key, id);
-        id
+            + self.looks.len() * size_of::<SnapCell>()
     }
 
     /// Takes row `cells` (their characters and wrap flags are cleared).
@@ -361,7 +316,7 @@ impl Grid {
             let look = match last {
                 Some((prev, id)) if cells[prev] == cells[i] => id,
                 _ => {
-                    let id = self.intern(&cells[i]);
+                    let id = self.looks.intern(&cells[i]);
                     last = Some((i, id));
                     id
                 }
@@ -382,7 +337,7 @@ impl Grid {
 
     fn look(&self, x: usize, y: usize) -> Option<(char, &SnapCell)> {
         let cell = self.rows.get(y)?.cells.get(x)?;
-        Some((cell.c, &self.looks[cell.look as usize]))
+        Some((cell.c, self.looks.get(cell.look)))
     }
 
     /// A tab's width: itself and the padding after it.
@@ -1789,215 +1744,178 @@ pub fn run(mode: &mut Mode, args: &[String], ctx: &Ctx<'_>) -> Action {
     action.unwrap_or(Action::Nothing)
 }
 
+use Action::{Cancel, Nothing, Redraw};
+
+/// A command that takes no arguments: its mode, count and `word-separators`.
+type Plain = fn(&mut Mode, u32, &str) -> Action;
+
+/// Runs `f` `np` times.
+fn repeat(mode: &mut Mode, np: u32, f: impl Fn(&mut Mode)) -> Action {
+    (0..np).for_each(|_| f(mode));
+    Nothing
+}
+
+/// Puts the cursor at (`cx`, `cy`) on the view and moves the selection's end.
+fn jump(mode: &mut Mode, cx: usize, cy: usize) -> Action {
+    mode.cx = cx;
+    mode.cy = cy;
+    mode.update_selection();
+    Redraw
+}
+
+fn paged_down(mode: &mut Mode, np: u32, half: bool, cancel: bool) -> Action {
+    let exit = mode.scroll_exit || cancel;
+    if (0..np).any(|_| mode.pagedown(half, exit)) {
+        Cancel
+    } else {
+        Nothing
+    }
+}
+
+/// Runs `f` once.
+fn once(mode: &mut Mode, f: impl FnOnce(&mut Mode)) -> Action {
+    f(mode);
+    Nothing
+}
+
+/// Runs `f` on the mode, then asks for a redraw.
+fn redraw(mode: &mut Mode, f: impl FnOnce(&mut Mode)) -> Action {
+    f(mode);
+    Redraw
+}
+
+/// The commands that take no arguments and only call into the mode.
+const PLAIN: &[(&str, Plain)] = &[
+    ("cursor-up", |m, np, _| {
+        repeat(m, np, |m| m.cursor_up(false))
+    }),
+    ("cursor-down", |m, np, _| {
+        repeat(m, np, |m| m.cursor_down(false))
+    }),
+    ("cursor-left", |m, np, _| repeat(m, np, Mode::cursor_left)),
+    ("cursor-right", |m, np, _| {
+        let all = m.selecting && m.rect;
+        repeat(m, np, |m| m.cursor_right(all))
+    }),
+    ("start-of-line", |m, _, _| {
+        once(m, Mode::cursor_start_of_line)
+    }),
+    ("end-of-line", |m, _, _| once(m, Mode::cursor_end_of_line)),
+    ("back-to-indentation", |m, _, _| {
+        once(m, Mode::cursor_back_to_indentation)
+    }),
+    ("next-word", |m, np, s| {
+        repeat(m, np, |m| m.cursor_next_word(s))
+    }),
+    ("next-word-end", |m, np, s| {
+        repeat(m, np, |m| m.cursor_next_word_end(s))
+    }),
+    ("previous-word", |m, np, s| {
+        repeat(m, np, |m| m.cursor_previous_word(s, true))
+    }),
+    ("next-space", |m, np, _| {
+        repeat(m, np, |m| m.cursor_next_word(""))
+    }),
+    ("next-space-end", |m, np, _| {
+        repeat(m, np, |m| m.cursor_next_word_end(""))
+    }),
+    ("previous-space", |m, np, _| {
+        repeat(m, np, |m| m.cursor_previous_word("", true))
+    }),
+    ("top-line", |m, _, _| jump(m, 0, 0)),
+    ("middle-line", |m, _, _| jump(m, 0, (m.sy() - 1) / 2)),
+    ("bottom-line", |m, _, _| jump(m, 0, m.sy() - 1)),
+    ("history-top", |m, _, _| redraw(m, Mode::history_top)),
+    ("history-bottom", |m, _, _| redraw(m, Mode::history_bottom)),
+    ("scroll-up", |m, np, _| repeat(m, np, |m| m.cursor_up(true))),
+    ("scroll-down", |m, np, _| {
+        repeat(m, np, |m| m.cursor_down(true));
+        if m.scroll_exit && m.oy == 0 {
+            Cancel
+        } else {
+            Nothing
+        }
+    }),
+    ("scroll-down-and-cancel", |m, np, _| {
+        repeat(m, np, |m| m.cursor_down(true));
+        if m.oy == 0 { Cancel } else { Nothing }
+    }),
+    ("scroll-exit-on", |m, _, _| {
+        once(m, |m| m.scroll_exit = true)
+    }),
+    ("scroll-exit-off", |m, _, _| {
+        once(m, |m| m.scroll_exit = false)
+    }),
+    ("scroll-exit-toggle", |m, _, _| {
+        once(m, |m| m.scroll_exit = !m.scroll_exit)
+    }),
+    ("cursor-down-and-cancel", |m, np, _| {
+        let cy = m.cy;
+        repeat(m, np, |m| m.cursor_down(false));
+        if cy == m.cy && m.oy == 0 {
+            Cancel
+        } else {
+            Nothing
+        }
+    }),
+    ("cursor-centre-vertical", |m, _, _| {
+        redraw(m, |m| {
+            m.update_cursor(m.cx, m.sy() / 2);
+            m.update_selection();
+        })
+    }),
+    ("cursor-centre-horizontal", |m, _, _| {
+        redraw(m, |m| {
+            m.update_cursor(m.grid.sx / 2, m.cy);
+            m.update_selection();
+        })
+    }),
+    ("recentre-top-bottom", |m, _, _| {
+        redraw(m, Mode::recentre_top_bottom)
+    }),
+    ("scroll-middle", |m, _, _| {
+        redraw(m, |m| m.scroll_cursor_to((m.sy() - 1) / 2))
+    }),
+    ("scroll-top", |m, _, _| redraw(m, |m| m.scroll_cursor_to(0))),
+    ("scroll-bottom", |m, _, _| {
+        redraw(m, |m| m.scroll_cursor_to(m.sy() - 1))
+    }),
+    ("page-up", |m, np, _| repeat(m, np, |m| m.pageup(false))),
+    ("halfpage-up", |m, np, _| repeat(m, np, |m| m.pageup(true))),
+    ("page-down", |m, np, _| paged_down(m, np, false, false)),
+    ("halfpage-down", |m, np, _| paged_down(m, np, true, false)),
+    ("page-down-and-cancel", |m, np, _| {
+        paged_down(m, np, false, true)
+    }),
+    ("halfpage-down-and-cancel", |m, np, _| {
+        paged_down(m, np, true, true)
+    }),
+    ("next-paragraph", |m, np, _| {
+        repeat(m, np, Mode::next_paragraph)
+    }),
+    ("previous-paragraph", |m, np, _| {
+        repeat(m, np, Mode::previous_paragraph)
+    }),
+    ("next-matching-bracket", |m, np, s| {
+        once(m, |m| m.next_matching_bracket(np, s))
+    }),
+    ("previous-matching-bracket", |m, np, s| {
+        once(m, |m| m.previous_matching_bracket(np, s))
+    }),
+    ("set-mark", |m, _, _| redraw(m, Mode::set_mark)),
+    ("jump-to-mark", |m, _, _| redraw(m, Mode::jump_to_mark)),
+    ("toggle-position", |m, _, _| {
+        redraw(m, |m| m.hide_position = !m.hide_position)
+    }),
+    ("cancel", |_, _, _| Cancel),
+];
+
 fn command(mode: &mut Mode, name: &str, rest: &[String], ctx: &Ctx<'_>) -> Option<Action> {
-    use Action::{Cancel, Nothing, Redraw};
-    let np = mode.prefix;
-    let seps = ctx.separators;
-    let none = |rest| positionals(rest, 0, 0).map(|_| ());
+    if let Some((_, f)) = PLAIN.iter().find(|(n, _)| *n == name) {
+        positionals(rest, 0, 0)?;
+        return Some(f(mode, mode.prefix, ctx.separators));
+    }
     let action = match name {
-        "cursor-up" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_up(false));
-            Nothing
-        }
-        "cursor-down" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_down(false));
-            Nothing
-        }
-        "cursor-left" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_left());
-            Nothing
-        }
-        "cursor-right" => {
-            none(rest)?;
-            let all = mode.selecting && mode.rect;
-            (0..np).for_each(|_| mode.cursor_right(all));
-            Nothing
-        }
-        "start-of-line" => {
-            none(rest)?;
-            mode.cursor_start_of_line();
-            Nothing
-        }
-        "end-of-line" => {
-            none(rest)?;
-            mode.cursor_end_of_line();
-            Nothing
-        }
-        "back-to-indentation" => {
-            none(rest)?;
-            mode.cursor_back_to_indentation();
-            Nothing
-        }
-        "next-word" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_next_word(seps));
-            Nothing
-        }
-        "next-word-end" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_next_word_end(seps));
-            Nothing
-        }
-        "previous-word" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_previous_word(seps, true));
-            Nothing
-        }
-        "next-space" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_next_word(""));
-            Nothing
-        }
-        "next-space-end" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_next_word_end(""));
-            Nothing
-        }
-        "previous-space" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_previous_word("", true));
-            Nothing
-        }
-        "top-line" => {
-            none(rest)?;
-            mode.cx = 0;
-            mode.cy = 0;
-            mode.update_selection();
-            Redraw
-        }
-        "middle-line" => {
-            none(rest)?;
-            mode.cx = 0;
-            mode.cy = (mode.sy() - 1) / 2;
-            mode.update_selection();
-            Redraw
-        }
-        "bottom-line" => {
-            none(rest)?;
-            mode.cx = 0;
-            mode.cy = mode.sy() - 1;
-            mode.update_selection();
-            Redraw
-        }
-        "history-top" => {
-            none(rest)?;
-            mode.history_top();
-            Redraw
-        }
-        "history-bottom" => {
-            none(rest)?;
-            mode.history_bottom();
-            Redraw
-        }
-        "scroll-up" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_up(true));
-            Nothing
-        }
-        "scroll-down" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_down(true));
-            if mode.scroll_exit && mode.oy == 0 {
-                Cancel
-            } else {
-                Nothing
-            }
-        }
-        "scroll-down-and-cancel" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.cursor_down(true));
-            if mode.oy == 0 { Cancel } else { Nothing }
-        }
-        "scroll-exit-on" | "scroll-exit-off" | "scroll-exit-toggle" => {
-            none(rest)?;
-            mode.scroll_exit = match name {
-                "scroll-exit-on" => true,
-                "scroll-exit-off" => false,
-                _ => !mode.scroll_exit,
-            };
-            Nothing
-        }
-        "cursor-down-and-cancel" => {
-            none(rest)?;
-            let cy = mode.cy;
-            (0..np).for_each(|_| mode.cursor_down(false));
-            if cy == mode.cy && mode.oy == 0 {
-                Cancel
-            } else {
-                Nothing
-            }
-        }
-        "cursor-centre-vertical" => {
-            none(rest)?;
-            mode.update_cursor(mode.cx, mode.sy() / 2);
-            mode.update_selection();
-            Redraw
-        }
-        "cursor-centre-horizontal" => {
-            none(rest)?;
-            mode.update_cursor(mode.grid.sx / 2, mode.cy);
-            mode.update_selection();
-            Redraw
-        }
-        "recentre-top-bottom" => {
-            none(rest)?;
-            mode.recentre_top_bottom();
-            Redraw
-        }
-        "scroll-middle" => {
-            none(rest)?;
-            mode.scroll_cursor_to((mode.sy() - 1) / 2);
-            Redraw
-        }
-        "scroll-top" => {
-            none(rest)?;
-            mode.scroll_cursor_to(0);
-            Redraw
-        }
-        "scroll-bottom" => {
-            none(rest)?;
-            mode.scroll_cursor_to(mode.sy() - 1);
-            Redraw
-        }
-        "page-up" | "halfpage-up" => {
-            none(rest)?;
-            let half = name == "halfpage-up";
-            (0..np).for_each(|_| mode.pageup(half));
-            Nothing
-        }
-        "page-down" | "halfpage-down" | "page-down-and-cancel" | "halfpage-down-and-cancel" => {
-            none(rest)?;
-            let half = name.starts_with("halfpage");
-            let exit = mode.scroll_exit || name.ends_with("-and-cancel");
-            if (0..np).any(|_| mode.pagedown(half, exit)) {
-                Cancel
-            } else {
-                Nothing
-            }
-        }
-        "next-paragraph" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.next_paragraph());
-            Nothing
-        }
-        "previous-paragraph" => {
-            none(rest)?;
-            (0..np).for_each(|_| mode.previous_paragraph());
-            Nothing
-        }
-        "next-matching-bracket" => {
-            none(rest)?;
-            mode.next_matching_bracket(np, seps);
-            Nothing
-        }
-        "previous-matching-bracket" => {
-            none(rest)?;
-            mode.previous_matching_bracket(np, seps);
-            Nothing
-        }
         "next-prompt" | "previous-prompt" => {
             let (flags, _) = select::parse(rest, "o", 0)?;
             mode.cursor_prompt(name == "next-prompt", flags.contains('o'));
@@ -2009,25 +1927,6 @@ fn command(mode: &mut Mode, name: &str, rest: &[String], ctx: &Ctx<'_>) -> Optio
                 mode.goto_line(&line[0]);
             }
             Redraw
-        }
-        "set-mark" => {
-            none(rest)?;
-            mode.set_mark();
-            Redraw
-        }
-        "jump-to-mark" => {
-            none(rest)?;
-            mode.jump_to_mark();
-            Redraw
-        }
-        "toggle-position" => {
-            none(rest)?;
-            mode.hide_position = !mode.hide_position;
-            Redraw
-        }
-        "cancel" => {
-            none(rest)?;
-            Cancel
         }
         // As tmux's `window_copy_expand_search_string`: an empty string
         // searches for nothing; any other is kept for the search (TM.3).

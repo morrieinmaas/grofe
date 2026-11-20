@@ -28,6 +28,27 @@ use super::{
 };
 use crate::types::{CaptureBound, CaptureOpts, Dir, Edge, PaneId, SplitSize, WINDOW_MAXIMUM};
 
+/// `ParseError::Other` from any message.
+fn perr(msg: impl Into<String>) -> ParseError {
+    ParseError::Other(msg.into())
+}
+
+fn missing_arg(cmd: &str) -> ParseError {
+    ParseError::MissingArgument(cmd.to_string())
+}
+
+fn missing_value(cmd: &str, flag: char) -> ParseError {
+    ParseError::MissingValue(cmd.to_string(), flag)
+}
+
+fn too_many(cmd: &str, max: usize) -> ParseError {
+    ParseError::TooManyArguments(cmd.to_string(), max)
+}
+
+fn too_few(cmd: &str, min: usize) -> ParseError {
+    ParseError::TooFewArguments(cmd.to_string(), min)
+}
+
 /// Whether a short/long flag takes a value, and if so whether it's
 /// required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,9 +156,7 @@ fn scan(
                         let attached: String = chars[ci + 1..].iter().collect();
                         if attached.is_empty() {
                             i += 1;
-                            let value = argv
-                                .get(i)
-                                .ok_or_else(|| ParseError::MissingValue(cmd_name.to_string(), c))?;
+                            let value = argv.get(i).ok_or_else(|| missing_value(cmd_name, c))?;
                             flags.values.insert(c, value.clone());
                             flags.repeated.push((c, value.clone()));
                         } else {
@@ -207,21 +226,15 @@ fn target_or_current(values: &BTreeMap<char, String>, key: char) -> Result<Targe
     }
 }
 
-fn parse_u8(s: &str, what: &str) -> Result<u8, ParseError> {
-    s.parse()
-        .map_err(|_| ParseError::Other(format!("invalid {what}: {s}")))
-}
-
-fn parse_u16(s: &str, what: &str) -> Result<u16, ParseError> {
-    s.parse()
-        .map_err(|_| ParseError::Other(format!("invalid {what}: {s}")))
+fn parse_num<T: std::str::FromStr>(s: &str, what: &str) -> Result<T, ParseError> {
+    s.parse().map_err(|_| perr(format!("invalid {what}: {s}")))
 }
 
 /// `new-session -x/-y`, as tmux 3.7b reads them: `strtonum(1, USHRT_MAX)`
 /// with its `too small` / `too large` / `invalid` wording, then capped at
 /// [`WINDOW_MAXIMUM`].
 fn parse_window_size(s: &str, what: &str) -> Result<u16, ParseError> {
-    let err = |why: &str| ParseError::Other(format!("{what} {why}"));
+    let err = |why: &str| perr(format!("{what} {why}"));
     let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Err(err("invalid"));
@@ -241,7 +254,7 @@ fn no_extra_positionals(flags: &ParsedFlags, cmd_name: &str, max: usize) -> Resu
     if flags.positionals.len() <= max {
         Ok(())
     } else {
-        Err(ParseError::TooManyArguments(cmd_name.to_string(), max))
+        Err(too_many(cmd_name, max))
     }
 }
 
@@ -257,17 +270,18 @@ fn env_values(flags: &ParsedFlags) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The `-x`/`-y` window size `key` names, when given.
+fn window_extent(flags: &ParsedFlags, key: char, what: &str) -> Result<Option<u16>, ParseError> {
+    flags
+        .values
+        .get(&key)
+        .map(|s| parse_window_size(s, what))
+        .transpose()
+}
+
 pub(super) fn parse_new_session(flags: &Args) -> Result<Command, ParseError> {
-    let width = flags
-        .values
-        .get(&'x')
-        .map(|s| parse_window_size(s, "width"))
-        .transpose()?;
-    let height = flags
-        .values
-        .get(&'y')
-        .map(|s| parse_window_size(s, "height"))
-        .transpose()?;
+    let width = window_extent(flags, 'x', "width")?;
+    let height = window_extent(flags, 'y', "height")?;
     let env = env_values(flags);
     Ok(Command::NewSession(NewSession {
         detached: flags.on('d'),
@@ -354,11 +368,7 @@ pub(super) fn parse_split_window(flags: &Args) -> Result<Command, ParseError> {
 /// The `split-window` the parsed flags mean (`new-pane -L` shares them).
 fn split_window_of(flags: &ParsedFlags) -> Result<SplitWindow, ParseError> {
     let dir = match (flags.on('h'), flags.on('v')) {
-        (true, true) => {
-            return Err(ParseError::Other(
-                "only one of -h or -v allowed".to_string(),
-            ));
-        }
+        (true, true) => return Err(perr("only one of -h or -v allowed")),
         (true, false) => Dir::Horizontal,
         // tmux's own default (neither flag given) is a vertical split.
         (false, true) | (false, false) => Dir::Vertical,
@@ -366,7 +376,7 @@ fn split_window_of(flags: &ParsedFlags) -> Result<SplitWindow, ParseError> {
     let percent = flags
         .values
         .get(&'p')
-        .map(|s| parse_u8(s, "percent"))
+        .map(|s| parse_num::<u8>(s, "percent"))
         .transpose()?;
     // tmux's `-l N%` (FE.1): a percent of the target pane, 1 to 100
     // (recorded: `101%` and `x%` are `size or position invalid tiled
@@ -377,19 +387,15 @@ fn split_window_of(flags: &ParsedFlags) -> Result<SplitWindow, ParseError> {
                 .parse::<u8>()
                 .ok()
                 .filter(|p| (1..=100).contains(p))
-                .ok_or_else(|| {
-                    ParseError::Other("size or position invalid tiled geometry".to_string())
-                })?;
+                .ok_or_else(|| perr("size or position invalid tiled geometry"))?;
             (None, Some(p))
         }
-        Some(s) => (Some(parse_u16(s, "size")?), None),
+        Some(s) => (Some(parse_num::<u16>(s, "size")?), None),
         None => (None, None),
     };
     let size = match (percent, cells, l_percent) {
         (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
-            return Err(ParseError::Other(
-                "only one of -p or -l allowed".to_string(),
-            ));
+            return Err(perr("only one of -p or -l allowed"));
         }
         (Some(p), None, None) | (None, None, Some(p)) => SplitSize::Percent(p),
         (None, Some(c), _) => SplitSize::Cells(c),
@@ -413,8 +419,9 @@ fn split_window_of(flags: &ParsedFlags) -> Result<SplitWindow, ParseError> {
     })
 }
 
-pub(super) fn parse_select_pane(flags: &Args) -> Result<Command, ParseError> {
-    let edges: Vec<Edge> = [
+/// The `-L -R -U -D` flags given, in that order.
+fn edge_flags(flags: &ParsedFlags) -> Vec<Edge> {
+    [
         ('L', Edge::Left),
         ('R', Edge::Right),
         ('U', Edge::Up),
@@ -423,11 +430,13 @@ pub(super) fn parse_select_pane(flags: &Args) -> Result<Command, ParseError> {
     .into_iter()
     .filter(|(c, _)| flags.present.contains(c))
     .map(|(_, edge)| edge)
-    .collect();
+    .collect()
+}
+
+pub(super) fn parse_select_pane(flags: &Args) -> Result<Command, ParseError> {
+    let edges = edge_flags(flags);
     if edges.len() > 1 {
-        return Err(ParseError::Other(
-            "select-pane: only one direction allowed".to_string(),
-        ));
+        return Err(perr("select-pane: only one direction allowed"));
     }
     Ok(Command::SelectPane(SelectPane {
         edge: edges.into_iter().next(),
@@ -448,34 +457,21 @@ pub(super) fn parse_select_pane(flags: &Args) -> Result<Command, ParseError> {
 }
 
 pub(super) fn parse_resize_pane(flags: &Args) -> Result<Command, ParseError> {
-    let edges: Vec<Edge> = [
-        ('L', Edge::Left),
-        ('R', Edge::Right),
-        ('U', Edge::Up),
-        ('D', Edge::Down),
-    ]
-    .into_iter()
-    .filter(|(c, _)| flags.present.contains(c))
-    .map(|(_, edge)| edge)
-    .collect();
+    let edges = edge_flags(flags);
     let width = extent_value(flags, 'x', 0, SizeWords::Trio("width"))?;
     let height = extent_value(flags, 'y', 0, SizeWords::Trio("height"))?;
     let zoom = flags.on('Z');
     if zoom && !edges.is_empty() {
-        return Err(ParseError::Other(
-            "resize-pane: -Z can't combine with a direction".to_string(),
-        ));
+        return Err(perr("resize-pane: -Z can't combine with a direction"));
     }
     let action = if zoom {
         ResizeAction::ToggleZoom
     } else {
         if edges.is_empty() && width.is_none() && height.is_none() {
-            return Err(ParseError::Other(
-                "resize-pane: expected one of -L -R -U -D -Z".to_string(),
-            ));
+            return Err(perr("resize-pane: expected one of -L -R -U -D -Z"));
         }
         let amount = match flags.positionals.first() {
-            Some(s) => parse_u16(s, "resize amount")?,
+            Some(s) => parse_num::<u16>(s, "resize amount")?,
             None => 1,
         };
         ResizeAction::Edges(edges, amount)
@@ -505,9 +501,7 @@ pub(super) fn parse_send_keys(flags: &Args) -> Result<Command, ParseError> {
     // `-X`: the words are a copy-mode command and its arguments.
     let command = flags.on('X');
     if literal && hex {
-        return Err(ParseError::Other(
-            "send-keys: only one of -l or -H allowed".to_string(),
-        ));
+        return Err(perr("send-keys: only one of -l or -H allowed"));
     }
     let mut items = Vec::with_capacity(flags.positionals.len());
     for arg in &flags.positionals {
@@ -515,7 +509,7 @@ pub(super) fn parse_send_keys(flags: &Args) -> Result<Command, ParseError> {
             SendKeysItem::Literal(arg.clone())
         } else if hex {
             let byte = u8::from_str_radix(arg, 16)
-                .map_err(|_| ParseError::Other(format!("invalid hex byte: {arg}")))?;
+                .map_err(|_| perr(format!("invalid hex byte: {arg}")))?;
             SendKeysItem::Hex(byte)
         } else if literal || !keys::is_key_name(arg) {
             SendKeysItem::Literal(arg.clone())
@@ -539,7 +533,7 @@ pub(super) fn parse_send_keys(flags: &Args) -> Result<Command, ParseError> {
 fn parse_capture_line(s: &str) -> Result<CaptureBound, ParseError> {
     s.parse::<i32>()
         .map(CaptureBound::Line)
-        .map_err(|_| ParseError::Other(format!("invalid capture-pane bound: {s}")))
+        .map_err(|_| perr(format!("invalid capture-pane bound: {s}")))
 }
 
 pub(super) fn parse_capture_pane(flags: &Args) -> Result<Command, ParseError> {
@@ -617,10 +611,10 @@ pub(super) fn parse_set_option(flags: &Args) -> Result<Command, ParseError> {
     let name = positionals
         .next()
         .cloned()
-        .ok_or_else(|| ParseError::MissingArgument("set-option".to_string()))?;
+        .ok_or_else(|| missing_arg("set-option"))?;
     let value = positionals.next().cloned();
     if positionals.next().is_some() {
-        return Err(ParseError::TooManyArguments("set-option".to_string(), 2));
+        return Err(too_many("set-option", 2));
     }
     Ok(Command::SetOption(SetOption {
         scope,
@@ -644,7 +638,7 @@ pub(super) fn parse_show_options(flags: &Args) -> Result<Command, ParseError> {
     let mut positionals = flags.positionals.iter();
     let name = positionals.next().cloned();
     if positionals.next().is_some() {
-        return Err(ParseError::TooManyArguments("show-options".to_string(), 1));
+        return Err(too_many("show-options", 1));
     }
     Ok(Command::ShowOptions(ShowOptions {
         scope,
@@ -664,10 +658,7 @@ pub(super) fn parse_display_message(flags: &Args) -> Result<Command, ParseError>
         .or_else(|| flags.values.get(&'F'))
         .cloned();
     if positionals.next().is_some() {
-        return Err(ParseError::TooManyArguments(
-            "display-message".to_string(),
-            1,
-        ));
+        return Err(too_many("display-message", 1));
     }
     Ok(Command::DisplayMessage(DisplayMessage {
         print: flags.on('p'),
@@ -683,9 +674,7 @@ pub(super) fn parse_display_message(flags: &Args) -> Result<Command, ParseError>
 }
 
 pub(super) fn parse_plugin_restart(flags: &Args) -> Result<Command, ParseError> {
-    let name = flags
-        .first()
-        .ok_or_else(|| ParseError::TooFewArguments("plugin-restart".to_string(), 1))?;
+    let name = flags.first().ok_or_else(|| too_few("plugin-restart", 1))?;
     Ok(Command::PluginRestart(PluginRestart { name }))
 }
 
@@ -709,7 +698,7 @@ pub(super) fn pane_set_resume(flags: &Args) -> Result<Command, ParseError> {
         if tok == "--expect" {
             let reason = argv
                 .get(i + 1)
-                .ok_or_else(|| ParseError::Other(format!("{NAME}: --expect needs a reason")))?;
+                .ok_or_else(|| perr(format!("{NAME}: --expect needs a reason")))?;
             expect = Some(reason.clone());
             i += 2;
             continue;
@@ -737,14 +726,12 @@ pub(super) fn pane_set_resume(flags: &Args) -> Result<Command, ParseError> {
         .filter(|&&g| g)
         .count();
     if given != 1 {
-        return Err(ParseError::Other(format!(
+        return Err(perr(format!(
             "{NAME}: give one of an argv after --, -u or --expect <reason>"
         )));
     }
     if expect.as_deref() == Some("") {
-        return Err(ParseError::Other(format!(
-            "{NAME}: --expect needs a reason"
-        )));
+        return Err(perr(format!("{NAME}: --expect needs a reason")));
     }
     Ok(Command::PaneSetResume(PaneSetResume {
         target: flags.target('t')?,
@@ -760,7 +747,7 @@ pub(super) fn agent(flags: &Args) -> Result<Command, ParseError> {
     let (sub, rest) = flags
         .argv
         .split_first()
-        .ok_or_else(|| ParseError::Other("agent: subcommand required".into()))?;
+        .ok_or_else(|| perr("agent: subcommand required"))?;
     match sub.as_str() {
         "report" => parse_agent_report(rest),
         "list" => {
@@ -780,7 +767,7 @@ pub(super) fn agent(flags: &Args) -> Result<Command, ParseError> {
             no_extra_positionals(&flags, "agent seen", 0)?;
             let all = flags.on('a');
             if all && flags.values.contains_key(&'t') {
-                return Err(ParseError::Other("agent seen: -a and -t conflict".into()));
+                return Err(perr("agent seen: -a and -t conflict"));
             }
             Ok(Command::Agent(AgentCmd::Seen {
                 target: flags.target('t')?,
@@ -800,15 +787,13 @@ pub(super) fn agent(flags: &Args) -> Result<Command, ParseError> {
                 positionals.insert(0, k);
             }
             if positionals.len() > 1 {
-                return Err(ParseError::TooManyArguments("agent new".into(), 1));
+                return Err(too_many("agent new", 1));
             }
             let kind = positionals
                 .pop()
-                .ok_or_else(|| ParseError::Other("agent new: kind required".into()))?;
+                .ok_or_else(|| perr("agent new: kind required"))?;
             let worktree = match (flags.on('w'), flags.on('W')) {
-                (true, true) => {
-                    return Err(ParseError::Other("agent new: -w and -W conflict".into()));
-                }
+                (true, true) => return Err(perr("agent new: -w and -W conflict")),
                 (true, false) => Some(true),
                 (false, true) => Some(false),
                 (false, false) => None,
@@ -823,9 +808,7 @@ pub(super) fn agent(flags: &Args) -> Result<Command, ParseError> {
                 detached: flags.on('d'),
             })))
         }
-        other => Err(ParseError::Other(format!(
-            "agent: unknown subcommand {other}"
-        ))),
+        other => Err(perr(format!("agent: unknown subcommand {other}"))),
     }
 }
 
@@ -834,7 +817,7 @@ pub(super) fn notify(flags: &Args) -> Result<Command, ParseError> {
     let (sub, rest) = flags
         .argv
         .split_first()
-        .ok_or_else(|| ParseError::Other("notify: subcommand required".into()))?;
+        .ok_or_else(|| perr("notify: subcommand required"))?;
     let name = format!("notify {sub}");
     let flags = flags_for(rest, "", &name)?;
     let cmd = match sub.as_str() {
@@ -850,7 +833,7 @@ pub(super) fn notify(flags: &Args) -> Result<Command, ParseError> {
             let id = one_positional(&flags, &name)?;
             NotifyCmd::Dismiss(
                 id.parse()
-                    .map_err(|_| ParseError::Other(format!("notify dismiss: bad id {id}")))?,
+                    .map_err(|_| perr(format!("notify dismiss: bad id {id}")))?,
             )
         }
         "mute" => {
@@ -858,18 +841,14 @@ pub(super) fn notify(flags: &Args) -> Result<Command, ParseError> {
             let until = flags.positionals.first().map(|d| parse_mute_duration(d));
             NotifyCmd::Mute(until.transpose()?)
         }
-        other => {
-            return Err(ParseError::Other(format!(
-                "notify: unknown subcommand {other}"
-            )));
-        }
+        other => return Err(perr(format!("notify: unknown subcommand {other}"))),
     };
     Ok(Command::Notify(cmd))
 }
 
 /// `30s`, `10m`, `2h`: a positive whole number and a unit.
 fn parse_mute_duration(s: &str) -> Result<std::time::Duration, ParseError> {
-    let bad = || ParseError::Other(format!("notify mute: bad duration {s}"));
+    let bad = || perr(format!("notify mute: bad duration {s}"));
     let split = s.find(|c: char| !c.is_ascii_digit()).ok_or_else(bad)?;
     let n: u64 = s[..split].parse().ok().filter(|n| *n > 0).ok_or_else(bad)?;
     let unit = match &s[split..] {
@@ -893,21 +872,21 @@ fn parse_agent_report(argv: &[String]) -> Result<Command, ParseError> {
         let tok = argv[i].as_str();
         if !tok.starts_with('-') || tok == "-" {
             if state.replace(tok.to_string()).is_some() {
-                return Err(ParseError::TooManyArguments(NAME.to_string(), 1));
+                return Err(too_many(NAME, 1));
             }
             i += 1;
             continue;
         }
         let value = argv
             .get(i + 1)
-            .ok_or_else(|| ParseError::Other(format!("{NAME}: {tok} needs a value")))?;
+            .ok_or_else(|| perr(format!("{NAME}: {tok} needs a value")))?;
         match tok {
             "-t" => target = parse_target(value)?,
             "--kind" => kind = Some(value.clone()),
             "--msg" => msg = Some(value.clone()),
             "--blocked" => {
                 if !matches!(value.as_str(), "permission" | "question" | "auth") {
-                    return Err(ParseError::Other(format!(
+                    return Err(perr(format!(
                         "{NAME}: --blocked must be permission, question or auth"
                     )));
                 }
@@ -918,14 +897,14 @@ fn parse_agent_report(argv: &[String]) -> Result<Command, ParseError> {
                 ts = Some(
                     value
                         .parse()
-                        .map_err(|_| ParseError::Other(format!("invalid --ts: {value}")))?,
+                        .map_err(|_| perr(format!("invalid --ts: {value}")))?,
                 )
             }
-            _ => return Err(ParseError::Other(format!("{NAME}: unknown flag {tok}"))),
+            _ => return Err(perr(format!("{NAME}: unknown flag {tok}"))),
         }
         i += 2;
     }
-    let state = state.ok_or_else(|| ParseError::Other(format!("{NAME}: state required")))?;
+    let state = state.ok_or_else(|| perr(format!("{NAME}: state required")))?;
     Ok(Command::Agent(AgentCmd::Report(AgentReport {
         state,
         target,
@@ -940,10 +919,7 @@ fn parse_agent_report(argv: &[String]) -> Result<Command, ParseError> {
 /// `reboot-check [--json]` (T4.5, spec §6).
 pub(super) fn reboot_check(flags: &Args) -> Result<Command, ParseError> {
     if let Some(word) = flags.positionals.first() {
-        return Err(ParseError::Other(format!(
-            "{}: unexpected argument {word}",
-            flags.name
-        )));
+        return Err(perr(format!("{}: unexpected argument {word}", flags.name)));
     }
     Ok(Command::RebootCheck(RebootCheck {
         json: flags.long_present.contains("json"),
@@ -961,12 +937,12 @@ pub(super) fn parse_subscribe(flags: &Args) -> Result<Command, ParseError> {
         if word == "-t" {
             let value = words
                 .next()
-                .ok_or_else(|| ParseError::MissingValue("subscribe".to_string(), 't'))?;
+                .ok_or_else(|| missing_value("subscribe", 't'))?;
             target = Some(parse_target(&value)?);
         } else if word == "-c" {
             let value = words
                 .next()
-                .ok_or_else(|| ParseError::MissingValue("subscribe".to_string(), 'c'))?;
+                .ok_or_else(|| missing_value("subscribe", 'c'))?;
             client = Some(value);
         } else {
             events.push(word);
@@ -1034,9 +1010,7 @@ pub(super) fn window_step(flags: &Args) -> Result<WindowStep, ParseError> {
 }
 
 pub(super) fn rename(flags: &Args) -> Result<Rename, ParseError> {
-    let name = flags
-        .first()
-        .ok_or_else(|| ParseError::MissingArgument(flags.name.to_string()))?;
+    let name = flags.first().ok_or_else(|| missing_arg(flags.name))?;
     Ok(Rename {
         target: flags.target('t')?,
         name,
@@ -1079,7 +1053,7 @@ pub(super) fn parse_bind_key(flags: &Args) -> Result<Command, ParseError> {
     let (key, command) = flags
         .positionals
         .split_first()
-        .ok_or_else(|| ParseError::MissingArgument("bind-key".to_string()))?;
+        .ok_or_else(|| missing_arg("bind-key"))?;
     Ok(Command::BindKey(BindKey {
         table: key_table(flags),
         repeat: flags.on('r'),
@@ -1097,8 +1071,8 @@ pub(super) fn parse_unbind_key(flags: &Args) -> Result<Command, ParseError> {
     // tmux's wording; `-q` keeps it quiet and does nothing.
     match (all, &key) {
         (true, Some(_)) | (false, None) if quiet => (all, key) = (false, None),
-        (true, Some(_)) => return Err(ParseError::Other("key given with -a".to_string())),
-        (false, None) => return Err(ParseError::Other("missing key".to_string())),
+        (true, Some(_)) => return Err(perr("key given with -a")),
+        (false, None) => return Err(perr("missing key")),
         _ => {}
     }
     Ok(Command::UnbindKey(UnbindKey {
@@ -1124,15 +1098,13 @@ pub(super) fn parse_list_keys(flags: &Args) -> Result<Command, ParseError> {
 
 /// The `missing argument` of the verb `flags` was parsed for.
 pub(super) fn missing(flags: &Args) -> ParseError {
-    ParseError::MissingArgument(flags.name.to_string())
+    missing_arg(flags.name)
 }
 
 /// The single required positional of `cmd_name`.
 fn one_positional(flags: &ParsedFlags, cmd_name: &str) -> Result<String, ParseError> {
     no_extra_positionals(flags, cmd_name, 1)?;
-    flags
-        .first()
-        .ok_or_else(|| ParseError::MissingArgument(cmd_name.to_string()))
+    flags.first().ok_or_else(|| missing_arg(cmd_name))
 }
 
 pub(super) fn parse_source_file(flags: &Args) -> Result<Command, ParseError> {
@@ -1185,7 +1157,7 @@ pub(super) fn parse_run_shell(flags: &Args) -> Result<Command, ParseError> {
                 .ok()
                 .filter(|d| d.is_finite() && *d >= 0.0)
                 .and_then(|d| std::time::Duration::try_from_secs_f64(d).ok())
-                .ok_or_else(|| ParseError::Other(format!("invalid delay time: {s}")))?,
+                .ok_or_else(|| perr(format!("invalid delay time: {s}")))?,
         ),
         None => None,
     };
@@ -1269,7 +1241,7 @@ enum SizeWords {
 /// is the handler's check.
 fn parse_extent(s: &str, min: i64, words: SizeWords) -> Result<SplitSize, ParseError> {
     let fail = |why: &str| {
-        ParseError::Other(match words {
+        perr(match words {
             SizeWords::Trio(what) => format!("{what} {why}"),
             SizeWords::Fixed(text) => text.to_string(),
         })
@@ -1310,7 +1282,7 @@ const NEW_PANE_WORDS: SizeWords = SizeWords::Trio("size or position");
 /// A `new-pane -X`/`-Y` position: signed cells or `N%` (tmux 3.7b takes
 /// `-X -1` and `-X 50%`).
 fn offset_value(flags: &ParsedFlags, key: char) -> Result<Option<Offset>, ParseError> {
-    let fail = |why: &str| ParseError::Other(format!("size or position {why}"));
+    let fail = |why: &str| perr(format!("size or position {why}"));
     let Some(s) = flags.values.get(&key) else {
         return Ok(None);
     };
@@ -1352,7 +1324,7 @@ fn flags_for(argv: &[String], spec: &str, cmd_name: &str) -> Result<ParsedFlags,
 /// hidden one (in the args template, not the usage): a percentage, which
 /// `-l` overrides when both are given (`layout_get_tiled_cell`).
 pub(super) fn join_pane(flags: &Args) -> Result<JoinPane, ParseError> {
-    let invalid = || ParseError::Other("size or position invalid tiled geometry".to_string());
+    let invalid = || perr("size or position invalid tiled geometry");
     let size = match (flags.values.get(&'l'), flags.values.get(&'p')) {
         (Some(_), _) | (None, None) => extent_value(
             flags,
@@ -1417,33 +1389,17 @@ pub(super) fn parse_resize_window(flags: &Args) -> Result<Command, ParseError> {
             .parse::<u32>()
             .ok()
             .filter(|n| (1..=i32::MAX as u32).contains(n))
-            .ok_or_else(|| ParseError::Other(format!("adjustment {}", adjustment_why(s))))?,
+            .ok_or_else(|| perr(format!("adjustment {}", adjustment_why(s))))?,
         None => 1,
     };
     // tmux tries -L, -R, -U, then -D.
-    let direction = [
-        ('L', Edge::Left),
-        ('R', Edge::Right),
-        ('U', Edge::Up),
-        ('D', Edge::Down),
-    ]
-    .into_iter()
-    .find(|(c, _)| flags.present.contains(c))
-    .map(|(_, e)| e);
+    let direction = edge_flags(flags).into_iter().next();
     Ok(Command::ResizeWindow(ResizeWindow {
         direction,
         adjust,
         target: flags.target('t')?,
-        width: flags
-            .values
-            .get(&'x')
-            .map(|s| parse_window_size(s, "width"))
-            .transpose()?,
-        height: flags
-            .values
-            .get(&'y')
-            .map(|s| parse_window_size(s, "height"))
-            .transpose()?,
+        width: window_extent(flags, 'x', "width")?,
+        height: window_extent(flags, 'y', "height")?,
         largest: flags.on('A'),
         smallest: flags.on('a'),
     }))
@@ -1657,13 +1613,7 @@ pub(super) fn parse_display_popup(flags: &Args) -> Result<Command, ParseError> {
         border: flags.val('b'),
         client: flags.val('c'),
         cwd: flags.val('d'),
-        env: flags
-            .repeated
-            .iter()
-            .filter(|(c, _)| *c == 'e')
-            .filter_map(|(_, v)| v.split_once('='))
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
+        env: env_values(flags),
         title: flags.val('T'),
         style: flags.val('s'),
         border_style: flags.val('S'),
@@ -1735,16 +1685,13 @@ pub(super) fn parse_new_scratchpad(flags: &Args) -> Result<Command, ParseError> 
 }
 
 pub(super) fn parse_open_url(flags: &Args) -> Result<Command, ParseError> {
-    let url = flags
-        .positionals
-        .first()
-        .ok_or_else(|| ParseError::MissingArgument("open-url".to_string()))?;
-    Ok(Command::OpenUrl(super::OpenUrl { url: url.clone() }))
+    let url = flags.first().ok_or_else(|| missing_arg("open-url"))?;
+    Ok(Command::OpenUrl(super::OpenUrl { url }))
 }
 
 pub(super) fn parse_set_client_info(flags: &Args) -> Result<Command, ParseError> {
     let [key, value] = flags.positionals.as_slice() else {
-        return Err(ParseError::MissingArgument("set-client-info".to_string()));
+        return Err(missing_arg("set-client-info"));
     };
     Ok(Command::SetClientInfo(super::SetClientInfo {
         client: flags.val('t'),
@@ -1755,12 +1702,11 @@ pub(super) fn parse_set_client_info(flags: &Args) -> Result<Command, ParseError>
 
 pub(super) fn parse_show_scratchpad(flags: &Args) -> Result<Command, ParseError> {
     let word = flags
-        .positionals
         .first()
-        .ok_or_else(|| ParseError::MissingArgument("show-scratchpad".to_string()))?;
+        .ok_or_else(|| missing_arg("show-scratchpad"))?;
     let pane = word
         .parse::<PaneId>()
-        .map_err(|_| ParseError::Other(format!("invalid pane id: {word}")))?;
+        .map_err(|_| perr(format!("invalid pane id: {word}")))?;
     Ok(Command::ShowScratchpad(ShowScratchpad {
         target: flags.target('t')?,
         pane,
@@ -1769,7 +1715,7 @@ pub(super) fn parse_show_scratchpad(flags: &Args) -> Result<Command, ParseError>
 
 pub(super) fn lua(flags: &Args) -> Result<Command, ParseError> {
     if flags.argv.is_empty() {
-        return Err(ParseError::MissingArgument("lua".to_string()));
+        return Err(missing_arg("lua"));
     }
     Ok(Command::Lua {
         src: flags.argv.join(" "),
@@ -1778,17 +1724,17 @@ pub(super) fn lua(flags: &Args) -> Result<Command, ParseError> {
 
 pub(super) fn lua_call(flags: &Args) -> Result<Command, ParseError> {
     let [id] = flags.argv else {
-        return Err(ParseError::Other("lua-call needs one id".to_string()));
+        return Err(perr("lua-call needs one id"));
     };
     let id = id
         .parse()
-        .map_err(|_| ParseError::Other(format!("lua-call: not a number: {id}")))?;
+        .map_err(|_| perr(format!("lua-call: not a number: {id}")))?;
     Ok(Command::LuaCall { id })
 }
 
 pub(super) fn parse_drag_pane(flags: &Args) -> Result<Command, ParseError> {
     if !flags.on('M') {
-        return Err(ParseError::Other("drag-pane needs -M".to_string()));
+        return Err(perr("drag-pane needs -M"));
     }
     Ok(Command::DragPane(DragPane))
 }
@@ -1814,7 +1760,7 @@ fn menu_entries(args: &[String]) -> Result<Vec<MenuEntry>, ParseError> {
             continue;
         }
         let [key, command, tail @ ..] = tail else {
-            return Err(ParseError::Other("not enough arguments".to_string()));
+            return Err(perr("not enough arguments"));
         };
         items.push(MenuEntry::Item {
             name: name.clone(),
@@ -2052,7 +1998,7 @@ fn split_commands(
             '{' if fresh && l.words.is_empty() => return Err(syntax_error()),
             '{' if fresh => {
                 if stack.len() >= MAX_LIST_DEPTH {
-                    return Err(ParseError::Other("yacc stack overflow".to_string()));
+                    return Err(perr("yacc stack overflow"));
                 }
                 stack.push(Level::default());
             }
@@ -2136,7 +2082,7 @@ fn split_commands(
     Ok(stack.pop().map(|l| l.finish().0).unwrap_or_default())
 }
 
-/// One line of a tmux config file ([`split_config_file`]): the line it
+/// One line of a tmux config file ([`split_config_file_with`]): the line it
 /// starts on and its commands, which run as one group.
 pub type ConfigLine = (usize, Vec<Vec<String>>);
 
@@ -2152,8 +2098,10 @@ pub trait ConfigHost {
 }
 
 /// A host that expands nothing and sets nothing: a condition is its text.
+#[cfg(test)]
 struct Plain;
 
+#[cfg(test)]
 impl ConfigHost for Plain {
     fn condition(&mut self, format: &str) -> bool {
         !format.is_empty() && format != "0"
@@ -2163,6 +2111,7 @@ impl ConfigHost for Plain {
 
 /// [`split_config_file_with`] on a host that expands no format and sets no
 /// variable.
+#[cfg(test)]
 pub fn split_config_file(text: &str) -> Result<Vec<ConfigLine>, (usize, ParseError)> {
     split_config_file_with(text, &mut Plain)
 }
@@ -2610,8 +2559,8 @@ fn read_escape(
     chars: &mut std::iter::Peekable<std::str::Chars>,
     out: &mut String,
 ) -> Result<(), ParseError> {
-    let invalid = |t: char| ParseError::Other(format!("invalid \\{t} argument"));
-    let octal = || ParseError::Other("invalid octal escape".to_string());
+    let invalid = |t: char| perr(format!("invalid \\{t} argument"));
+    let octal = || perr("invalid octal escape");
     let Some(c) = chars.next() else {
         out.push('\\');
         return Ok(());
@@ -2702,7 +2651,7 @@ pub fn env_var(name: &str) -> String {
 }
 
 fn syntax_error() -> ParseError {
-    ParseError::Other("syntax error".to_string())
+    perr("syntax error")
 }
 
 /// After a `$`: `${NAME}` or `NAME` (letters, digits, `_`), expanded into
@@ -2723,11 +2672,7 @@ fn expand_var(
                 match chars.next() {
                     Some('}') => break,
                     Some(c) if is_name(&c) => name.push(c),
-                    _ => {
-                        return Err(ParseError::Other(
-                            "invalid environment variable".to_string(),
-                        ));
-                    }
+                    _ => return Err(perr("invalid environment variable")),
                 }
             }
         }
@@ -2835,10 +2780,10 @@ fn build(row: &Row, rest: &[String]) -> Result<Command, ParseError> {
     };
     let given = flags.positionals.len();
     if !rest.is_empty() && given < row.min {
-        return Err(ParseError::TooFewArguments(row.name.to_string(), row.min));
+        return Err(too_few(row.name, row.min));
     }
     if given > row.max {
-        return Err(ParseError::TooManyArguments(row.name.to_string(), row.max));
+        return Err(too_many(row.name, row.max));
     }
     (row.build)(&Args {
         name: row.name,
@@ -2863,16 +2808,8 @@ pub(super) fn agent_sidebar(flags: &Args) -> Result<Command, ParseError> {
         Some("off") => SidebarOp::Off,
         Some("toggle") => SidebarOp::Toggle,
         Some("focus") => SidebarOp::Focus,
-        Some(other) => {
-            return Err(ParseError::Other(format!(
-                "agent-sidebar: unknown operation {other}"
-            )));
-        }
-        None => {
-            return Err(ParseError::Other(
-                "agent-sidebar: on, off, toggle or focus required".into(),
-            ));
-        }
+        Some(other) => return Err(perr(format!("agent-sidebar: unknown operation {other}"))),
+        None => return Err(perr("agent-sidebar: on, off, toggle or focus required")),
     };
     Ok(Command::AgentSidebar(op))
 }

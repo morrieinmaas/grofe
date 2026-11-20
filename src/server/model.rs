@@ -1477,7 +1477,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         let spec = PaneSpawn {
             id,
-            session: SessionId(0),
             argv: Some(vec!["sleep".to_string(), "30".to_string()]),
             shell: "/bin/sh".to_string(),
             login: true,
