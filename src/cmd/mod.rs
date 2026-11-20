@@ -19,11 +19,8 @@ pub use format::{
     FormatVars, Inner, LoopItem, LoopKind, LoopSort, NameKind, NoVars, SortOrder, all_variables,
     expand, expand_time, expand_traced,
 };
-pub use keys::{is_key_name, key_bytes};
-pub use parse::{
-    ConfigHost, parse, parse_sequence, split_command_string, split_config_file,
-    split_config_file_with,
-};
+pub use keys::key_bytes;
+pub use parse::{ConfigHost, parse, parse_sequence, split_command_string, split_config_file_with};
 pub use target::{PanePart, PaneRef, Resolve, SessionRef, Target, WindowRef};
 
 use crate::types::{CaptureOpts, Dir, Edge, PaneId, SplitSize};
