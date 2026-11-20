@@ -2071,7 +2071,9 @@ mod tests {
                 end: None,
                 escapes: false,
             });
-            if text.contains("END") {
+            // `END` can land before its newline; wait for the cursor to wrap
+            // too, or a capture taken now misses the row below it.
+            if text.contains("END") && handle.cursor().col == 0 {
                 return handle;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
