@@ -37,7 +37,7 @@ side and let grofe keep track of them.
 > compatibility suite, but expect rough edges and keep real tmux installed
 > while you try it.
 
-**[Read the docs](https://termage.github.io/grofe/docs/)** for the full
+**[Website](https://termage.github.io/grofe/)** · **[Read the docs](https://termage.github.io/grofe/docs/)** for the full
 guide and the [options reference](https://termage.github.io/grofe/docs/reference/options.html).
 
 ## Install
