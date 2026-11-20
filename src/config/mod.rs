@@ -18,7 +18,7 @@ pub mod provenance;
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use cli::show_config;
 pub use load::agents::{
@@ -112,11 +112,17 @@ pub struct Env {
 }
 
 impl Env {
+    /// `$GROFE_CONFIG` (set by the CLI from `--config`) moves the config
+    /// dir to that file's folder.
     pub fn from_process() -> Env {
-        Env::from_vars(
+        let mut env = Env::from_vars(
             std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
             std::env::var("HOME").ok().as_deref(),
-        )
+        );
+        if let Some(file) = env_config_file(env.home.as_deref()) {
+            env.config_dir = file.parent().map(Path::to_path_buf);
+        }
+        env
     }
 
     /// From the two variables' values; an empty value counts as unset.
@@ -128,6 +134,34 @@ impl Env {
             .map(|d| d.join("grofe"));
         Env { config_dir, home }
     }
+}
+
+/// An absolute config file path: `~/` against `home`, anything else
+/// against `cwd` (spec 2026-11-20 AC1.5).
+pub fn resolve_config_path(arg: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
+    match (arg.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => cwd.join(arg),
+    }
+}
+
+/// `$GROFE_CONFIG` as an absolute path, when set and not empty.
+fn env_config_file(home: Option<&Path>) -> Option<PathBuf> {
+    let arg = std::env::var("GROFE_CONFIG")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    Some(resolve_config_path(&arg, &cwd, home))
+}
+
+/// The file that replaces `config.toml` for `env`: `$GROFE_CONFIG` when
+/// `env` is that file's folder, else `<config_dir>/config.toml`. `None`
+/// without a config dir.
+pub fn config_file(env: &Env) -> Option<PathBuf> {
+    let dir = env.config_dir.as_deref()?;
+    env_config_file(env.home.as_deref())
+        .filter(|f| f.parent() == Some(dir))
+        .or_else(|| Some(dir.join("config.toml")))
 }
 
 /// One config mistake. `Display` is `<file>:<line>: <key>: <message>`,
