@@ -25,10 +25,7 @@ use std::time::{Duration, Instant};
 use crate::event::Event;
 use crate::types::PaneId;
 
-pub use exec::{
-    LinkCell, Opener, Upload, check_files, is_slow, opener, run_local, run_slow, upload,
-    upload_dir, upload_files,
-};
+pub use exec::{LinkCell, Opener, is_slow, opener, run_local, run_slow, upload_files};
 pub use hook::ForwardHook;
 pub use ports::{Forward, Forwarder, format_forwards, forwards_dir, list_forwards};
 pub use settings::{ForwardMode, Settings, UploadMode};

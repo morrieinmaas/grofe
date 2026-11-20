@@ -583,7 +583,6 @@ pub(crate) fn spawn_pane_delayed(
     let colours = clients::default_colours(&state.model, (session, window));
     let spec = PaneSpawn {
         id,
-        session,
         argv: argv.clone(),
         shell: shell.clone(),
         login: true,

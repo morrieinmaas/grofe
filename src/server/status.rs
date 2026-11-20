@@ -315,18 +315,6 @@ pub fn blank_row(style: &str, vars: &dyn FormatVars, width: u16) -> StatusRow {
     draw("", base_style(style, vars), width)
 }
 
-/// A status-line message over a row, in `message-style` (tmux 3.7b's
-/// default `message-format`, `#[<message-style>]#{message}`). Styles in
-/// `text` are drawn; pass it through [`escape_hashes`] to show it as it
-/// is, as tmux does for a command's error.
-pub fn message_row(text: &str, style: &str, vars: &dyn FormatVars, width: u16) -> StatusRow {
-    draw(
-        &format!("#[{}]{}", expand(style, vars), text),
-        Style::default(),
-        width,
-    )
-}
-
 /// `#` doubled, so [`draw`] shows it as text (tmux's
 /// `status_prompt_escape`).
 pub fn escape_hashes(text: &str) -> String {

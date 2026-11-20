@@ -296,13 +296,8 @@ pub fn miss_log_path(env: &Env) -> PathBuf {
 /// front end does not know) to `compat-miss.log`, on a tmux-identity
 /// server only (spec D12). The path is the one [`server_started`] fixed,
 /// so nothing but a started tmux-identity server ever writes it. Best
-/// effort: a log that cannot be written never fails the request.
-pub fn miss_log(_state: &State, what: &str) {
-    note_miss(what);
-}
-
-/// [`miss_log`] for code that has no `State`: the tmux front end notes a
-/// cosmetic flag it ignores while it translates (spec §4.5).
+/// effort: a log that cannot be written never fails the request. The tmux
+/// front end notes a cosmetic flag it ignores while it translates (spec §4.5).
 pub fn note_miss(what: &str) {
     if QUIET.get() {
         return;

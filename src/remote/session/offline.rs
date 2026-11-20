@@ -237,7 +237,7 @@ mod tests {
         let (a, b) = UnixStream::pair().unwrap();
         (&b).write_all(encode_hello(&ProxyHello::current(&[])).as_bytes())
             .unwrap();
-        let link = Link::over("box", a.try_clone().unwrap(), a, None).unwrap();
+        let link = Link::over(a.try_clone().unwrap(), a, None).unwrap();
         let mut r = BufReader::new(b.try_clone().unwrap());
         let mut line = String::new();
         r.read_line(&mut line).unwrap();

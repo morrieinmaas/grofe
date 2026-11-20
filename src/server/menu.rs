@@ -1,5 +1,5 @@
 //! Menus (TC.7, spec §4.5 "Overlays"): `display-menu` at a caller's
-//! position, nested menus and `display-panes`, drawn over one client's
+//! position and `display-panes`, drawn over one client's
 //! frame ([`MenuOverlay`]) and taking its keys while open ([`MenuHook`]).
 //! `confirm-before` is a one-key prompt (`server::prompt`), as in tmux.
 //!
@@ -197,12 +197,6 @@ pub enum MenuItem {
         command: String,
     },
     Separator,
-    /// Opens `menu` in this menu's place when chosen.
-    Menu {
-        label: String,
-        key: Option<Key>,
-        menu: Menu,
-    },
 }
 
 /// Where a menu goes on one axis, in client cells, as tmux's `-x`/`-y`
@@ -242,7 +236,7 @@ struct Shown {
     choice: Option<usize>,
     /// What the chosen command runs in: the opener's.
     dialect: Dialect,
-    /// The opener's context, for a nested menu's formats.
+    /// The opener's context.
     ctx: ClientCtx,
     look: Look,
     /// `MENU_NOMOUSE`: no mouse event opened the menu and `-M` was not given.
@@ -262,7 +256,6 @@ struct Row {
 
 enum Action {
     Run(String),
-    Open(Menu),
 }
 
 impl Row {
@@ -676,9 +669,6 @@ pub fn open(state: &mut State, ctx: &ClientCtx, id: ClientId, menu: Menu) -> boo
                 key,
                 Some(Action::Run(expand(&command))),
             ),
-            MenuItem::Menu { label, key, menu } => {
-                (Some(expand(&label)), key, Some(Action::Open(menu)))
-            }
         })
         .collect();
     let (rows, width) = lay_out(title.as_deref(), items, size.0);
@@ -1107,7 +1097,7 @@ fn replace_template(template: &str, answer: &str) -> String {
 }
 
 /// Row `i` of client `id`'s menu was chosen: the menu closes, then the
-/// row's command runs or its nested menu opens.
+/// row's command runs.
 fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
     let Some(Open::Menu(mut shown)) = state.menus.close(id) else {
         return Routed::Consumed;
@@ -1115,9 +1105,8 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
     let Some(Some(row)) = shown.rows.get_mut(i).map(Option::take) else {
         return Routed::Consumed;
     };
-    if let Action::Run(key) = &row.action
-        && shown.look.internal != Internal::No
-    {
+    let Action::Run(key) = &row.action;
+    if shown.look.internal != Internal::No {
         return match shown.look.internal {
             Internal::Popup => {
                 popup::menu_done(state, id, key);
@@ -1175,10 +1164,6 @@ fn choose(state: &mut State, id: ClientId, i: usize) -> Routed {
                 Routed::Consumed
             }
         },
-        Action::Open(menu) => {
-            open(state, &shown.ctx, id, menu);
-            Routed::Consumed
-        }
     }
 }
 

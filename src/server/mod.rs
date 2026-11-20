@@ -8,7 +8,7 @@
 //!
 //! One actor task owns all server state ([`State`]); connection tasks turn
 //! control-mode requests into [`ServerMsg::Control`] and write the reply
-//! back. Commands run through the single [`dispatch`] seam.
+//! back. Commands run through the single [`dispatch::run`] seam.
 
 pub mod adopt;
 pub mod agents;
@@ -359,14 +359,6 @@ fn intern(s: &str) -> &'static str {
     let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
     seen.push(leaked);
     leaked
-}
-
-/// The dispatch seam: runs one command (`argv[0]` is the verb) against the
-/// actor's state, returning the command's stdout or its error message.
-///
-/// The work happens in [`dispatch::run`].
-pub fn dispatch(state: &mut State, ctx: &ClientCtx, argv: &[String]) -> Result<String, String> {
-    dispatch::run(state, ctx, argv)
 }
 
 /// Adds an overlay drawn over every client's frame. Overlays draw in

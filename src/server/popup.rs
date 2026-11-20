@@ -1276,7 +1276,7 @@ mod tests {
     /// command's status: success for 0, that exit status otherwise.
     #[tokio::test]
     async fn no_client_opens_nothing_and_the_answer_carries_the_status() {
-        use crate::types::{PaneId, SessionId};
+        use crate::types::PaneId;
         let mut state = crate::server::test_state();
         let id = ClientId(1);
         // No client: nothing opens.
@@ -1293,7 +1293,6 @@ mod tests {
         };
         let spawn = PaneSpawn {
             id: PaneId(0),
-            session: SessionId(0),
             argv: Some(vec!["exit 3".into()]),
             shell: "/bin/sh".into(),
             login: false,

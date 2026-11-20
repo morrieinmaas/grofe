@@ -217,14 +217,6 @@ fn remove(kind: &Kind, mut settings: Value) -> Value {
     settings
 }
 
-pub fn merge_claude(settings: Value, grofe: &str) -> Value {
-    merge(&CLAUDE, settings, grofe)
-}
-
-pub fn remove_claude(settings: Value) -> Value {
-    remove(&CLAUDE, settings)
-}
-
 /// Every grofe command in the settings, as "event: command".
 fn ours(kind: &Kind, settings: &Value) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
@@ -603,7 +595,7 @@ mod tests {
 
     #[test]
     fn example_stop_command() {
-        let v = merge_claude(json!({}), G);
+        let v = merge(&CLAUDE, json!({}), G);
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["command"],
             "'/b/grofe' agent report done --hook claude"
@@ -669,8 +661,8 @@ mod tests {
 
     #[test]
     fn idempotent() {
-        let once = merge_claude(json!({"a": 1}), G);
-        assert_eq!(merge_claude(once.clone(), G), once);
+        let once = merge(&CLAUDE, json!({"a": 1}), G);
+        assert_eq!(merge(&CLAUDE, once.clone(), G), once);
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
         go(&p, &yes());
@@ -683,18 +675,18 @@ mod tests {
     fn remove_exact() {
         let foreign = json!({"matcher": "x", "hooks": [{"type": "command", "command": "/other agent report done"}]});
         let start = json!({"theme": "dark", "hooks": {"Stop": [foreign]}});
-        let merged = merge_claude(start.clone(), G);
-        assert_eq!(remove_claude(merged), start);
+        let merged = merge(&CLAUDE, start.clone(), G);
+        assert_eq!(remove(&CLAUDE, merged), start);
         // a foreign hook sharing a group with ours survives
-        let mut shared = merge_claude(json!({}), G);
+        let mut shared = merge(&CLAUDE, json!({}), G);
         shared["hooks"]["Stop"][0]["hooks"]
             .as_array_mut()
             .unwrap()
             .push(json!({"type": "command", "command": "echo hi"}));
-        let left = remove_claude(shared);
+        let left = remove(&CLAUDE, shared);
         assert_eq!(left["hooks"]["Stop"][0]["hooks"][0]["command"], "echo hi");
         assert!(left["hooks"].get("SessionEnd").is_none());
-        assert_eq!(remove_claude(json!({"a": 1})), json!({"a": 1}));
+        assert_eq!(remove(&CLAUDE, json!({"a": 1})), json!({"a": 1}));
     }
 
     fn commands(v: &Value, event: &str) -> Vec<String> {
@@ -709,12 +701,12 @@ mod tests {
 
     #[test]
     fn path_is_shell_quoted() {
-        let v = merge_claude(json!({}), "/my bin/grofe");
+        let v = merge(&CLAUDE, json!({}), "/my bin/grofe");
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["command"],
             "'/my bin/grofe' agent report done --hook claude"
         );
-        let v = merge_claude(json!({}), "/it's/grofe");
+        let v = merge(&CLAUDE, json!({}), "/it's/grofe");
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["command"],
             "'/it'\\''s/grofe' agent report done --hook claude"
@@ -730,7 +722,7 @@ mod tests {
         std::fs::write(&exe, "#!/bin/sh\necho \"$@\"\n").unwrap();
         std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
-        let v = merge_claude(json!({}), &exe.to_string_lossy());
+        let v = merge(&CLAUDE, json!({}), &exe.to_string_lossy());
         let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
@@ -746,13 +738,14 @@ mod tests {
 
     #[test]
     fn rerun_with_new_path_replaces_in_place() {
-        let old = merge_claude(
+        let old = merge(
+            &CLAUDE,
             json!({"hooks": {"Stop": [
                 {"hooks": [{"type": "command", "command": "/old/grofe agent report done --hook claude"}]}
             ]}}),
             "/older/grofe",
         );
-        let moved = merge_claude(old, "/new bin/grofe");
+        let moved = merge(&CLAUDE, old, "/new bin/grofe");
         for (event, ..) in CLAUDE.hooks {
             let n = CLAUDE.hooks.iter().filter(|(e, ..)| e == event).count();
             let cmds = commands(&moved, event);
@@ -763,20 +756,20 @@ mod tests {
             );
         }
         // idempotent after the move, and a doubled install from the old bug collapses
-        assert_eq!(merge_claude(moved.clone(), "/new bin/grofe"), moved);
+        assert_eq!(merge(&CLAUDE, moved.clone(), "/new bin/grofe"), moved);
         let mut doubled = moved.clone();
         doubled["hooks"]["Stop"].as_array_mut().unwrap().push(
             json!({"hooks": [{"type": "command", "command": "/old/grofe agent report done --hook claude"}]}),
         );
-        assert_eq!(merge_claude(doubled, "/new bin/grofe"), moved);
+        assert_eq!(merge(&CLAUDE, doubled, "/new bin/grofe"), moved);
     }
 
     #[test]
     fn remove_after_move_removes_old_entries() {
-        let installed = merge_claude(json!({"theme": "dark"}), "/old/grofe");
-        assert_eq!(remove_claude(installed), json!({"theme": "dark"}));
-        let quoted = merge_claude(json!({}), "/it's/grofe");
-        assert_eq!(remove_claude(quoted), json!({}));
+        let installed = merge(&CLAUDE, json!({"theme": "dark"}), "/old/grofe");
+        assert_eq!(remove(&CLAUDE, installed), json!({"theme": "dark"}));
+        let quoted = merge(&CLAUDE, json!({}), "/it's/grofe");
+        assert_eq!(remove(&CLAUDE, quoted), json!({}));
     }
 
     #[test]

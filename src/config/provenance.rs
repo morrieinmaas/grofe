@@ -72,10 +72,6 @@ impl Provenance {
     pub fn set(&mut self, toml_key: &str, source: Source) {
         self.options.insert(toml_key.to_string(), source);
     }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &Source)> {
-        self.options.iter().map(|(k, s)| (k.as_str(), s))
-    }
 }
 
 #[cfg(test)]

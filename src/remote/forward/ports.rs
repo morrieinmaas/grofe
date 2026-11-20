@@ -31,7 +31,6 @@ struct Running {
 /// The port forwards of one client: a listener on 127.0.0.1 per remote port,
 /// each connection bridged to a `tcp` channel.
 pub struct Forwarder {
-    host: String,
     open: Opener,
     /// This client's state file, for [`list_forwards`].
     state: Option<PathBuf>,
@@ -42,7 +41,6 @@ impl Forwarder {
     pub fn new(host: &str, open: Opener, state_dir: Option<PathBuf>) -> Forwarder {
         let state = state_dir.map(|d| d.join(host_key(host)).join(std::process::id().to_string()));
         Forwarder {
-            host: host.to_string(),
             open,
             state,
             running: BTreeMap::new(),
@@ -103,10 +101,6 @@ impl Forwarder {
             .map(|f| format!("{} {}\n", f.remote, f.local))
             .collect();
         let _ = write_state(path, &text);
-    }
-
-    pub fn host(&self) -> &str {
-        &self.host
     }
 }
 
