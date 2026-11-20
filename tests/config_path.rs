@@ -62,7 +62,7 @@ fn start_with(srv: &TestServer, file: &Path) {
 fn t1_config_flag_loads_the_file() {
     let srv = TestServer::unstarted();
     let file = custom_dir(&srv, "x").join("a.toml");
-    write(&file, "status-left = \"A\"\n");
+    write(&file, "status.left = \"A\"\n");
     start_with(&srv, &file);
     assert_eq!(status_left(&srv), "A");
 }
@@ -72,8 +72,8 @@ fn t2_flag_beats_env() {
     let srv = TestServer::unstarted();
     let b = custom_dir(&srv, "b").join("b.toml");
     let c = custom_dir(&srv, "c").join("c.toml");
-    write(&b, "status-left = \"B\"\n");
-    write(&c, "status-left = \"C\"\n");
+    write(&b, "status.left = \"B\"\n");
+    write(&c, "status.left = \"C\"\n");
     let out = run_env(
         &srv,
         Some(&b),
@@ -87,10 +87,10 @@ fn t2_flag_beats_env() {
 fn t2b_env_beats_xdg_default() {
     let srv = TestServer::unstarted();
     let b = custom_dir(&srv, "b").join("b.toml");
-    write(&b, "status-left = \"B\"\n");
+    write(&b, "status.left = \"B\"\n");
     write(
         &srv.config_home.join("grofe").join("config.toml"),
-        "status-left = \"X\"\n",
+        "status.left = \"X\"\n",
     );
     let out = run_env(&srv, Some(&b), &["new-session", "-d"]);
     assert!(out.status.success(), "{out:?}");
@@ -104,11 +104,11 @@ fn t3_conf_d_comes_from_the_custom_folder() {
     write(&dir.join("config.toml"), "");
     write(
         &dir.join("conf.d").join("10.toml"),
-        "status-right = \"D\"\n",
+        "status.right = \"D\"\n",
     );
     write(
         &srv.config_home.join("grofe").join("conf.d").join("20.toml"),
-        "status-right = \"WRONG\"\n",
+        "status.right = \"WRONG\"\n",
     );
     start_with(&srv, &dir.join("config.toml"));
     assert_eq!(fmt(&srv, "#{status-right}"), "D");
@@ -119,10 +119,10 @@ fn t3b_user_toml_comes_from_the_custom_folder() {
     let srv = TestServer::unstarted();
     let dir = custom_dir(&srv, "cust");
     write(&dir.join("config.toml"), "");
-    write(&dir.join("user.toml"), "status-left = \"U\"\n");
+    write(&dir.join("user.toml"), "status.left = \"U\"\n");
     write(
         &srv.config_home.join("grofe").join("user.toml"),
-        "status-left = \"WRONG\"\n",
+        "status.left = \"WRONG\"\n",
     );
     start_with(&srv, &dir.join("config.toml"));
     assert_eq!(status_left(&srv), "U");
@@ -146,11 +146,11 @@ fn t4_missing_file_loads_defaults() {
 fn t6_reload_rereads_the_custom_file() {
     let srv = TestServer::unstarted();
     let file = custom_dir(&srv, "x").join("a.toml");
-    write(&file, "status-left = \"one\"\n");
+    write(&file, "status.left = \"one\"\n");
     start_with(&srv, &file);
     assert_eq!(status_left(&srv), "one");
 
-    write(&file, "status-left = \"two\"\n");
+    write(&file, "status.left = \"two\"\n");
     // The reload client carries no --config: the server remembers its file.
     let out = run(&srv, &["reload"]);
     assert!(out.status.success(), "{out:?}");
@@ -161,12 +161,12 @@ fn t6_reload_rereads_the_custom_file() {
 fn t7_show_config_explain_names_the_custom_file() {
     let srv = TestServer::unstarted();
     let file = custom_dir(&srv, "x").join("a.toml");
-    write(&file, "status-left = \"A\"\n");
+    write(&file, "status.left = \"A\"\n");
     let f = file.to_str().expect("utf8");
 
     let out = run(
         &srv,
-        &["--config", f, "show-config", "--explain", "status-left"],
+        &["--config", f, "show-config", "--explain", "status.left"],
     );
     assert!(out.status.success(), "{out:?}");
     assert!(out.stdout.contains(f), "flag: {out:?}");
@@ -174,7 +174,7 @@ fn t7_show_config_explain_names_the_custom_file() {
     let out = run_env(
         &srv,
         Some(&file),
-        &["show-config", "--explain", "status-left"],
+        &["show-config", "--explain", "status.left"],
     );
     assert!(out.status.success(), "{out:?}");
     assert!(out.stdout.contains(f), "env: {out:?}");
@@ -185,8 +185,8 @@ fn t8_client_with_another_config_gets_a_notice() {
     let srv = TestServer::unstarted();
     let a = custom_dir(&srv, "a").join("a.toml");
     let b = custom_dir(&srv, "b").join("b.toml");
-    write(&a, "status-left = \"A\"\n");
-    write(&b, "status-left = \"B\"\n");
+    write(&a, "status.left = \"A\"\n");
+    write(&b, "status.left = \"B\"\n");
     start_with(&srv, &a);
 
     let out = run(
@@ -232,14 +232,14 @@ fn t33_config_naming_a_directory_is_refused() {
 fn t35_path_with_spaces_and_umlaut_loads() {
     let srv = TestServer::unstarted();
     let file = custom_dir(&srv, "my cfg ü").join("kon fig.toml");
-    write(&file, "status-left = \"ü ok\"\n");
+    write(&file, "status.left = \"ü ok\"\n");
     write(
         &file
             .parent()
             .expect("parent")
             .join("conf.d")
             .join("10.toml"),
-        "status-right = \"ö\"\n",
+        "status.right = \"ö\"\n",
     );
     start_with(&srv, &file);
     assert_eq!(status_left(&srv), "ü ok");
@@ -251,7 +251,7 @@ fn t5b_relative_flag_resolves_against_client_cwd() {
     let srv = TestServer::unstarted();
     write(
         &srv.home.join("cfg").join("a.toml"),
-        "status-left = \"R\"\n",
+        "status.left = \"R\"\n",
     );
     // The harness runs the client in `home`.
     let out = run(&srv, &["--config", "cfg/a.toml", "new-session", "-d"]);
@@ -262,7 +262,7 @@ fn t5b_relative_flag_resolves_against_client_cwd() {
 #[test]
 fn t5c_tilde_flag_resolves_against_home() {
     let srv = TestServer::unstarted();
-    write(&srv.home.join("t.toml"), "status-left = \"T\"\n");
+    write(&srv.home.join("t.toml"), "status.left = \"T\"\n");
     let out = run(&srv, &["--config", "~/t.toml", "new-session", "-d"]);
     assert!(out.status.success(), "{out:?}");
     assert_eq!(status_left(&srv), "T");
