@@ -273,6 +273,8 @@ impl Grid {
     }
 
     /// The copy's heap size, roughly: its cells, rows and looks.
+    // ponytail: looks count by length, not capacity or the intern map, so
+    // this undercounts slightly; add `Looks::heap_bytes` if a budget needs it.
     pub fn heap_bytes(&self) -> usize {
         use std::mem::size_of;
         let cells: usize = self.rows.iter().map(|r| r.cells.capacity()).sum();
