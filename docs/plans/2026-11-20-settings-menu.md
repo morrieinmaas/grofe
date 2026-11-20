@@ -34,7 +34,7 @@ flowchart LR
 - **Tests:** T10-T15, T32, T34.
 
 ### T3 customize save
-- **Owns:** src/server/customize/mod.rs, src/server/tree/keys.rs (the `S` key).
+- **Owns:** src/server/customize/mod.rs, src/server/tree/keys.rs (the `P` key).
 - **Consumes:** T2's writer; makes `customize::value_of` and the option-to-TOML-key mapping shared for T5.
 - **Tests:** T16-T18.
 

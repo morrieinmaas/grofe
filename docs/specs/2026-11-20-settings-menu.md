@@ -42,8 +42,8 @@
 - AC2.5 A missing settings.toml or config folder is created on the first save.
 - AC2.6 The write is atomic (temp file plus rename). When the reload after it fails, the old bytes are restored and the error is shown.
 - AC2.7 Resetting a key removes it from settings.toml, and the lower layer's value applies again after the reload.
-- AC2.8 In customize-mode, `S` saves the selected option or key to settings.toml.
-- AC2.9 An option with no TOML key is shown as not saveable and `S` says so.
+- AC2.8 In customize-mode, `P` (persist; `S` is tmux's set-global) saves the selected option or key to settings.toml.
+- AC2.9 An option with no TOML key is shown as not saveable and `P` says so.
 
 ### PR 3: settings menu
 
@@ -88,8 +88,8 @@
 - T14 (unit) save into a missing dir: the dir and file are created. AC2.5
 - T15 (unit) a reload that fails after a write: the file bytes equal the old bytes and the error is returned. AC2.6
 - T16 (e2e) set over user.toml, then reset: the key is gone from settings.toml and the user.toml value shows. AC2.7
-- T17 (e2e) customize-mode: change `status`, press `S`: settings.toml has `status = false`. AC2.8
-- T18 (unit) `S` on an option with no TOML key returns `not saveable`. AC2.9
+- T17 (e2e) customize-mode: change `status`, press `P`: settings.toml has `status.lines = 3`. AC2.8
+- T18 (unit) `P` on an option with no TOML key returns `not saveable`. AC2.9
 - T19 (e2e) `prefix C` in grofe identity opens the menu; in tmux identity it opens customize-mode. AC3.1
 - T20 (e2e) `grofe settings` with no server running starts one and the menu is drawn. AC3.2
 - T21 (unit) every option in the table maps to exactly one section. AC3.3
