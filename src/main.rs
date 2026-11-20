@@ -29,16 +29,19 @@ use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
-const USAGE: &str = "usage: grofe [-L socket-name] [-S socket-path] <command> [args...]";
+const USAGE: &str =
+    "usage: grofe [-L socket-name] [-S socket-path] [--config file] <command> [args...]";
 
 /// `grofe --help`: the global options and the commands most sessions use.
 /// Every other tmux command name works too.
 const HELP: &str = "\
-usage: grofe [-L socket-name] [-S socket-path] <command> [args...]
+usage: grofe [-L socket-name] [-S socket-path] [--config file] <command> [args...]
 
 Options:
   -L socket-name   use the named server socket in grofe's socket directory
   -S socket-path   use the server socket at this path
+  --config file    load this config file instead of ~/.config/grofe/config.toml
+                   (also $GROFE_CONFIG); conf.d, user.toml and layouts come from its folder
   -r host          run the command on host over ssh (default: new-session -A -s main)
   --install        install grofe on the remote host if it has none (--no-install: never)
   --install-from p install the local binary p there instead of downloading a release
@@ -113,6 +116,7 @@ fn main() -> ExitCode {
                 let globals = Globals {
                     socket: cli.socket,
                     name: cli.name,
+                    config: None,
                     version: false,
                     help: false,
                     remote: RemoteFlags::default(),
@@ -159,6 +163,9 @@ fn main() -> ExitCode {
             }
         }
     };
+    if let Err(e) = apply_config(&globals) {
+        return fail(&format!("grofe: {e}"));
+    }
     if let Some(code) = remote_route(&globals, &rest) {
         return code;
     }
@@ -480,6 +487,8 @@ fn create_report(log: &Path, unix_ms: u128) -> io::Result<(File, PathBuf)> {
 struct Globals {
     socket: Option<PathBuf>,
     name: Option<String>,
+    /// `--config <file>`, as given.
+    config: Option<String>,
     /// `-V` / `--version` among the global options.
     version: bool,
     /// `-h` / `--help` among the global options.
@@ -529,10 +538,56 @@ fn tmux_env_socket() -> Option<PathBuf> {
     grofe::compat::tmux_env_socket(std::env::var_os("TMUX").as_deref(), &dirs)
 }
 
+/// The config file this CLI was given (`--config`, then `$GROFE_CONFIG`) as
+/// an absolute path, once [`apply_config`] has run.
+static EXPLICIT_CONFIG: OnceLock<PathBuf> = OnceLock::new();
+
+/// Resolves `--config` (else `$GROFE_CONFIG`) to an absolute path and puts it
+/// in `$GROFE_CONFIG`: the server this CLI starts inherits it, and every
+/// config read here sees it.
+fn apply_config(globals: &Globals) -> Result<(), String> {
+    let (arg, source) = match &globals.config {
+        Some(a) => (a.clone(), "--config"),
+        None => match std::env::var("GROFE_CONFIG").ok().filter(|s| !s.is_empty()) {
+            Some(a) => (a, "GROFE_CONFIG"),
+            None => return Ok(()),
+        },
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let path = grofe::config::resolve_config_path(&arg, &cwd, home.as_deref());
+    if path.is_dir() {
+        return Err(format!("{source}: {} is a directory", path.display()));
+    }
+    // SAFETY: main has started no thread yet.
+    unsafe { std::env::set_var("GROFE_CONFIG", &path) };
+    let _ = EXPLICIT_CONFIG.set(path);
+    Ok(())
+}
+
+/// Tells the user when the running server on `socket` loaded another config
+/// file than this CLI was given.
+// ponytail: a second request per command, and only when a config was given.
+fn warn_if_other_config(socket: &Path) {
+    let Some(mine) = EXPLICIT_CONFIG.get() else {
+        return;
+    };
+    let argv = ["display-message", "-p", "#{config_file}"].map(String::from);
+    if let Ok(stream) = connect(socket)
+        && let Ok(Reply::Ok { out, .. }) = request(stream, socket, &argv)
+    {
+        let theirs = out.trim_end();
+        if !theirs.is_empty() && Path::new(theirs) != mine {
+            eprintln!("grofe: server uses {theirs}");
+        }
+    }
+}
+
 fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
     let mut globals = Globals {
         socket: None,
         name: None,
+        config: None,
         version: false,
         help: false,
         remote: RemoteFlags::default(),
@@ -549,6 +604,13 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
                 } else {
                     globals.name = Some(value.clone());
                 }
+                i += 2;
+            }
+            "--config" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "option --config requires an argument".to_string())?;
+                globals.config = Some(value.clone());
                 i += 2;
             }
             s if remote_cli::REMOTE_FLAGS.contains(&s) => {
@@ -874,6 +936,7 @@ fn one_shot(socket: &Path, own_dir: bool, argv: &[String]) -> ExitCode {
         }
         Err(e) => return fail(&e),
     };
+    warn_if_other_config(socket);
     // A server that was exiting as this connected (an empty or unattached
     // one) closes the connection without answering. When no server is
     // there any more, say so as for any other command; the request is

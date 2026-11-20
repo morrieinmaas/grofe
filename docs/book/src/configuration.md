@@ -11,6 +11,18 @@ ones before:
 Your own file always loads last, so tools and themes can add to your setup
 without overriding you.
 
+## Another config file
+
+`grofe --config <file>` loads `<file>` in place of `config.toml`, and
+`GROFE_CONFIG=<file>` does the same; the flag wins over the variable, which
+wins over the default. `conf.d/`, `user.toml` and `layouts/` are then read
+from the file's folder, not `~/.config/grofe/`. A relative path is taken from
+the current directory and `~/` from `$HOME`. A file that does not exist loads
+as empty. `reload` re-reads the same file, and `show-config` honours both. A
+folder is refused. Only the command that starts the server picks the file: a
+later command with another `--config` prints `grofe: server uses <path>` and
+carries on.
+
 ## A small config
 
 ```toml

@@ -72,7 +72,11 @@ fn run(args: &[String]) -> Result<String, String> {
     for w in &r.warnings {
         eprintln!("grofe: warning: {w}");
     }
-    let home = env.home.as_deref();
+    // A file named with --config or GROFE_CONFIG is shown as named, not as `~/..`.
+    let home = env
+        .home
+        .as_deref()
+        .filter(|_| std::env::var_os("GROFE_CONFIG").is_none_or(|v| v.is_empty()));
     let mut out = String::new();
     let option = |out: &mut String, k: &str| {
         let value = r.get(k).unwrap_or_default();
