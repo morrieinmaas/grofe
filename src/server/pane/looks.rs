@@ -40,7 +40,7 @@ fn look_key(cell: &SnapCell) -> LookKey {
 
 /// Each distinct look once; id 0 is the default blank.
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Looks {
     looks: Vec<SnapCell>,
     ids: HashMap<LookKey, u32>,

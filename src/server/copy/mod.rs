@@ -156,7 +156,7 @@ struct Row {
 
 /// A copy of a pane's history and screen (tmux's backing screen): `hsize`
 /// history rows, then `sy` screen rows, `sx` columns.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Grid {
     pub sx: usize,
     pub hsize: usize,
@@ -173,24 +173,6 @@ pub struct Grid {
 
 // ponytail: `Looks` is not `Clone`, so a copy re-interns the looks in order,
 // which gives them the same ids; derive `Clone` on it to drop this.
-impl Clone for Grid {
-    fn clone(&self) -> Grid {
-        let mut looks = Looks::new();
-        for id in 1..self.looks.len() as u32 {
-            looks.intern(self.looks.get(id));
-        }
-        Grid {
-            sx: self.sx,
-            hsize: self.hsize,
-            sy: self.sy,
-            rows: self.rows.clone(),
-            looks,
-            images: self.images.clone(),
-            pen: self.pen.clone(),
-        }
-    }
-}
-
 /// What tmux's `grid_get_cell` tells a motion about one cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridCell {
