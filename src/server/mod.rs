@@ -55,6 +55,7 @@ pub mod screenimg;
 pub mod shell_jobs;
 pub(crate) mod sidebar;
 pub mod sixel;
+pub mod settings;
 pub mod snapshot;
 pub mod sources;
 pub mod spawn;
