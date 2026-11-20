@@ -56,7 +56,11 @@ fn explain_names_settings_toml() {
     for d in [&run, &state] {
         fs::create_dir_all(d).expect("mkdir");
     }
-    fs::write(dir.join("user.toml"), "history-limit = 111\nmouse = false\n").expect("user");
+    fs::write(
+        dir.join("user.toml"),
+        "history-limit = 111\nmouse = false\n",
+    )
+    .expect("user");
     fs::write(dir.join("settings.toml"), "history-limit = 222\n").expect("settings");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_grofe"));
     cmd.arg("-S")

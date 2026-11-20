@@ -63,7 +63,7 @@ fn a_long_hand_written_file_keeps_every_byte() {
     let file = tmp.path().join("settings.toml");
     let mut text = String::new();
     for i in 0..100 {
-        text.push_str(&format!("# note {i}  世界\n@user-{i} = \"v{i}\"\n"));
+        text.push_str(&format!("# note {i}  世界\n\"@user-{i}\" = \"v{i}\"\n"));
     }
     fs::write(&file, &text).expect("fixture");
     write::set(tmp.path(), "mouse", value(false)).expect("set");
@@ -102,7 +102,10 @@ fn rebinding_a_key_replaces_the_line() {
     write::set_binding(tmp.path(), "prefix", "C-t", "split-window").expect("rebind");
     let got = read(&tmp.path().join("settings.toml"));
     let v: toml::Table = got.parse().expect("valid toml (no duplicate key)");
-    assert_eq!(v["keys"]["prefix"]["C-t"]["cmd"].as_str(), Some("split-window"));
+    assert_eq!(
+        v["keys"]["prefix"]["C-t"]["cmd"].as_str(),
+        Some("split-window")
+    );
 }
 
 /// T14: a missing config dir and file are created.
@@ -163,7 +166,10 @@ fn rollback_after_a_bad_value_gives_a_loadable_file() {
         config_dir: Some(d.to_path_buf()),
         home: None,
     };
-    assert!(config::load(&env(tmp.path())).is_err(), "bad value must not load");
+    assert!(
+        config::load(&env(tmp.path())).is_err(),
+        "bad value must not load"
+    );
     saved.rollback().expect("rollback");
     assert_eq!(read(&file), "history-limit = 10\n");
     assert!(config::load(&env(tmp.path())).is_ok());
@@ -220,7 +226,11 @@ fn an_empty_file_takes_a_set_and_a_broken_file_is_refused() {
     assert!(read(&file).contains("mouse = false"));
     fs::write(&file, "mouse = = oops\n").expect("broken");
     assert!(write::set(tmp.path(), "history-limit", value(1)).is_err());
-    assert_eq!(read(&file), "mouse = = oops\n", "a refused write keeps the bytes");
+    assert_eq!(
+        read(&file),
+        "mouse = = oops\n",
+        "a refused write keeps the bytes"
+    );
 }
 
 /// Edge: the write re-reads the file, so a hand edit between two saves survives.

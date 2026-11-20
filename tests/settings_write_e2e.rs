@@ -21,8 +21,18 @@ const WAIT: Duration = Duration::from_secs(10);
 #[test]
 fn s_in_customize_mode_saves_the_selected_option() {
     let srv = TestServer::start();
-    srv.cmd(&["new-session", "-d", "-s", "s", "-x", "70", "-y", "20", "cat"])
-        .expect("new-session");
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "s",
+        "-x",
+        "70",
+        "-y",
+        "20",
+        "cat",
+    ])
+    .expect("new-session");
     srv.cmd(&["set", "-g", "status", "3"]).expect("set");
     let mut h = Harness::spawn_attach_with_env(srv.command(), "s", &[], 70, 20);
     // The filter keeps only the `status` option.
@@ -36,7 +46,9 @@ fn s_in_customize_mode_saves_the_selected_option() {
     ])
     .expect("bind-key");
     h.send("\x02C");
-    h.wait_until("customize-mode open", WAIT, |t| t.contains("Session Options"));
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
     h.send("j");
     h.send("l");
     h.wait_until("status listed", WAIT, |t| t.contains("status:"));
@@ -60,6 +72,9 @@ fn s_in_customize_mode_saves_the_selected_option() {
         h.text()
     );
     // Nothing else is saved.
-    let t: toml::Table = fs::read_to_string(&file).expect("read").parse().expect("toml");
+    let t: toml::Table = fs::read_to_string(&file)
+        .expect("read")
+        .parse()
+        .expect("toml");
     assert_eq!(t.len(), 1, "{t:?}");
 }
