@@ -76,19 +76,19 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Shared {
-    /// Marks the link dropped (once) and ends the transport, so every
-    /// channel and blocked write fails at once.
+    /// Ends the transport, so every channel and blocked write fails at
+    /// once, then marks the link dropped (once). The end runs first: who
+    /// sees the link dropped finds the ssh child killed and reaped.
     fn drop_with(&self, why: &str) {
-        {
-            let mut d = lock(&self.dropped);
-            if d.is_some() {
-                return;
-            }
-            *d = Some(why.to_string());
+        let mut end = lock(&self.end);
+        if lock(&self.dropped).is_some() {
+            return;
         }
-        if let Some(end) = lock(&self.end).take() {
+        if let Some(end) = end.take() {
             end();
         }
+        *lock(&self.dropped) = Some(why.to_string());
+        drop(end);
         self.dropped_cv.notify_all();
     }
 
@@ -621,6 +621,31 @@ mod tests {
         // The proxy end closing is EOF on the link.
         assert!(wait_dropped_within(&link, Duration::from_secs(10)));
         assert!(!link.dropped().unwrap().is_empty());
+    }
+
+    /// A link shows as dropped only once its end ran: whoever sees
+    /// `dropped` (and then waits for children) finds the ssh child reaped.
+    #[test]
+    fn a_dropped_link_has_ended_its_transport() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (a, b) = fake_proxy(&ProxyHello::current(&[]));
+        let ended = Arc::new(AtomicBool::new(false));
+        let end: End = {
+            let ended = Arc::clone(&ended);
+            // A slow reap, so a drop shown before it is seen.
+            Box::new(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                ended.store(true, Ordering::SeqCst);
+            })
+        };
+        let link = Link::over(a.try_clone().unwrap(), a, Some(end)).unwrap();
+        b.shutdown(std::net::Shutdown::Both).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while link.dropped().is_none() {
+            assert!(std::time::Instant::now() < deadline, "never dropped");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(ended.load(Ordering::SeqCst), "dropped before the end ran");
     }
 
     #[test]
