@@ -16,6 +16,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod config_glue;
 mod layout_glue;
 mod remote_cli;
 
@@ -29,16 +30,21 @@ use grofe::types::PaneId;
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg, fcntl};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
-const USAGE: &str = "usage: grofe [-L socket-name] [-S socket-path] <command> [args...]";
+const USAGE: &str =
+    "usage: grofe [-L socket-name] [-S socket-path] [--config file] <command> [args...]";
 
 /// `grofe --help`: the global options and the commands most sessions use.
 /// Every other tmux command name works too.
 const HELP: &str = "\
-usage: grofe [-L socket-name] [-S socket-path] <command> [args...]
+usage: grofe [-L socket-name] [-S socket-path] [--config file] <command> [args...]
 
 Options:
   -L socket-name   use the named server socket in grofe's socket directory
   -S socket-path   use the server socket at this path
+  --config file    load this config file instead of ~/.config/grofe/config.toml
+                   (also $GROFE_CONFIG); its folder becomes the config dir: conf.d/,
+                   user.toml, layouts/, packs (pack-lock.toml),
+                   init.luau and machines.toml are read from there
   -r host          run the command on host over ssh (default: new-session -A -s main)
   --install        install grofe on the remote host if it has none (--no-install: never)
   --install-from p install the local binary p there instead of downloading a release
@@ -113,6 +119,7 @@ fn main() -> ExitCode {
                 let globals = Globals {
                     socket: cli.socket,
                     name: cli.name,
+                    config: None,
                     version: false,
                     help: false,
                     remote: RemoteFlags::default(),
@@ -159,6 +166,11 @@ fn main() -> ExitCode {
             }
         }
     };
+    // The server is told its file by argument, over any variable it inherited.
+    let server = rest.first().is_some_and(|v| v == "__server");
+    if !server && let Err(e) = config_glue::apply(globals.config.as_deref()) {
+        return fail(&format!("grofe: {e}"));
+    }
     if let Some(code) = remote_route(&globals, &rest) {
         return code;
     }
@@ -175,6 +187,7 @@ fn main() -> ExitCode {
     };
     let rest = rest.as_slice();
     let verb = grofe::cmd::parse::canonical_name(&rest[0]);
+    config_glue::warn_for(verb, &globals.socket());
 
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.
@@ -480,6 +493,8 @@ fn create_report(log: &Path, unix_ms: u128) -> io::Result<(File, PathBuf)> {
 struct Globals {
     socket: Option<PathBuf>,
     name: Option<String>,
+    /// `--config <file>`, as given.
+    config: Option<String>,
     /// `-V` / `--version` among the global options.
     version: bool,
     /// `-h` / `--help` among the global options.
@@ -533,6 +548,7 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
     let mut globals = Globals {
         socket: None,
         name: None,
+        config: None,
         version: false,
         help: false,
         remote: RemoteFlags::default(),
@@ -549,6 +565,13 @@ fn parse_globals(args: &[String]) -> Result<(Globals, &[String]), String> {
                 } else {
                     globals.name = Some(value.clone());
                 }
+                i += 2;
+            }
+            "--config" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "option --config requires an argument".to_string())?;
+                globals.config = Some(value.clone());
                 i += 2;
             }
             s if remote_cli::REMOTE_FLAGS.contains(&s) => {
@@ -613,7 +636,7 @@ fn run_foreground(globals: &Globals) -> Option<ExitCode> {
 }
 
 /// `grofe __server -S <sock> --ready-fd <n> [--exit-when-empty] [--restore]
-/// [--identity tmux] [--file <path>]`: the detached server process.
+/// [--identity tmux] [--file <path>] [--config <path>]`: the detached server process.
 /// `--identity tmux` says the CLI that started it ran as `tmux` (spec
 /// D12); `--file` is that CLI's `tmux -f`.
 fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
@@ -636,6 +659,7 @@ fn run_server(globals: &Globals, args: &[String]) -> ExitCode {
                 grofe::compat::set_started_as(grofe::compat::Identity::Tmux)
             }
             ("--file", Some(path)) => grofe::compat::set_start_config(PathBuf::from(path)),
+            ("--config", Some(path)) => grofe::config::set_process_config(PathBuf::from(path)),
             ("--ready-fd", Some(fd)) => match fd.parse() {
                 Ok(fd) => ready_fd = Some(fd),
                 Err(_) => return fail(&format!("bad --ready-fd: {fd}")),
@@ -1455,6 +1479,7 @@ fn start_server(socket: &Path, exit_when_empty: bool) -> Result<(), String> {
     for file in CONFIG_FILES.get().into_iter().flatten() {
         cmd.arg("--file").arg(file);
     }
+    cmd.args(config_glue::server_args());
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork
     // and exec. It detaches the server from our session and terminal.
     unsafe {
