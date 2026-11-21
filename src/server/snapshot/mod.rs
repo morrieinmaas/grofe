@@ -21,9 +21,9 @@
 //!   file. The signal is seen in its handler
 //!   ([`terminating`](signals::terminating)), before the runtime delivers
 //!   it. A pane exit it caused can still reach the actor before the
-//!   handler runs (another thread runs first), so a pane that died of a
-//!   signal is kept for [`LOSS_HOLD`](hold::LOSS_HOLD), and a signal in
-//!   that time writes the last state built with it put back;
+//!   handler runs (another thread runs first), so the state from before
+//!   a pane died of a signal is kept for [`LOSS_HOLD`](hold::LOSS_HOLD),
+//!   and a signal in that time writes it;
 //! - an empty state is written only once the model had sessions and lost
 //!   them with no termination signal seen (the last pane exiting, or the
 //!   last session killed): an empty server that never had a session never

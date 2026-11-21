@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, SystemTime};
 
-use super::hold::{LOSS_HOLD, Lost};
+use super::hold::{Hold, LOSS_HOLD};
 use super::signals::{spawn_signals, terminating, wait_terminating, watch_termination};
 use super::{PaneSnap, Snapshot, build, read, rfc3339, write_atomic};
 use crate::paths::{self, Env};
@@ -25,8 +25,8 @@ pub(super) struct Io {
     pub(super) disk: Mutex<Disk>,
     /// The last state built that may be written, for a signal.
     pub(super) latest: Mutex<Option<Snapshot>>,
-    /// The panes that died of a signal, by `uid`, for [`LOSS_HOLD`].
-    pub(super) lost: Mutex<HashMap<String, Lost>>,
+    /// The state from before a signal death, for [`LOSS_HOLD`].
+    pub(super) hold: Mutex<Option<Hold>>,
 }
 
 #[derive(Default)]
@@ -100,9 +100,9 @@ pub(crate) struct Writer {
     /// The model had a session at some look: from then on an empty model
     /// is a state the user chose, and is written.
     had_sessions: bool,
-    /// The panes whose process died of a signal since the last build
+    /// A pane's process died of a signal since the last build
     /// ([`pane_killed`]).
-    killed: HashSet<String>,
+    killed: bool,
     thread: mpsc::Sender<Snapshot>,
 }
 
@@ -114,7 +114,7 @@ impl Writer {
             frozen: AtomicBool::new(false),
             disk: Mutex::new(Disk::default()),
             latest: Mutex::new(None),
-            lost: Mutex::new(HashMap::new()),
+            hold: Mutex::new(None),
         });
         let (tx, rx) = mpsc::channel::<Snapshot>();
         let thread_io = Arc::clone(&io);
@@ -140,7 +140,7 @@ impl Writer {
             io,
             cwds: HashMap::new(),
             had_sessions: false,
-            killed: HashSet::new(),
+            killed: false,
             thread: tx,
         }
     }
@@ -151,8 +151,8 @@ impl Writer {
         let snap = build(model, &self.cwds);
         let writable = !snap.sessions.is_empty() || self.had_sessions;
         let snap = writable.then_some(snap);
-        self.io.keep(snap.clone(), &self.killed);
-        self.killed.clear();
+        self.io.keep(snap.clone(), self.killed);
+        self.killed = false;
         snap
     }
 }
@@ -223,7 +223,7 @@ pub fn track(state: &mut State, output: bool) {
         // hold to show. kill-session and `exit` go at once.
         // ponytail: a server signal more than LOSS_HOLD after the last
         // signal death misses it, and the empty state is written.
-        let signal_death = !w.killed.is_empty();
+        let signal_death = w.killed;
         let snap = w.build(&state.model);
         if state.model.sessions.is_empty() && signal_death && wait_terminating(LOSS_HOLD) {
             w.io.write_final(w.io.pre_signal().as_ref());
@@ -237,11 +237,11 @@ pub fn track(state: &mut State, output: bool) {
     }
 }
 
-/// The process of the pane `uid` died of a signal (its exit has no
-/// code): the build that sees the pane gone holds it, see [`track`].
-pub fn pane_killed(state: &mut State, uid: &str) {
+/// A pane's process died of a signal (its exit has no code): the next
+/// build arms the hold, see [`track`].
+pub fn pane_killed(state: &mut State) {
     if let Some(w) = state.snapshot_writer.as_mut() {
-        w.killed.insert(uid.to_string());
+        w.killed = true;
     }
 }
 
@@ -299,7 +299,7 @@ mod tests {
             frozen: AtomicBool::new(false),
             disk: Mutex::new(Disk::default()),
             latest: Mutex::new(None),
-            lost: Mutex::new(HashMap::new()),
+            hold: Mutex::new(None),
         };
         let mut snap = sample();
         snap.written_at.clear();

@@ -1,8 +1,7 @@
 //! The loss hold (#57): a pane that dies of a termination signal can
-//! reach the server before the signal does. The server keeps such panes
-//! for `LOSS_HOLD` (500 ms) and writes them back if it is signalled in
-//! that time; nothing closed on purpose comes back, and every other change
-//! stays current.
+//! reach the server before the signal does. The server keeps the state
+//! from before it for `LOSS_HOLD` (500 ms) and writes that state if it is
+//! signalled in that time; a close with no signal death is never undone.
 
 mod common;
 
@@ -57,28 +56,20 @@ fn snap_uids(snap: &Snapshot) -> BTreeSet<String> {
 struct Pane {
     uid: String,
     pid: i32,
-    /// The `%N` target.
-    id: String,
 }
 
 fn pane_list(srv: &TestServer) -> Vec<Pane> {
-    srv.cmd(&[
-        "list-panes",
-        "-a",
-        "-F",
-        "#{pane_uid} #{pane_pid} #{pane_id}",
-    ])
-    .expect("list-panes")
-    .lines()
-    .map(|l| {
-        let f: Vec<&str> = l.split(' ').collect();
-        Pane {
-            uid: f[0].to_string(),
-            pid: f[1].parse().expect("pane pid"),
-            id: f[2].to_string(),
-        }
-    })
-    .collect()
+    srv.cmd(&["list-panes", "-a", "-F", "#{pane_uid} #{pane_pid}"])
+        .expect("list-panes")
+        .lines()
+        .map(|l| {
+            let (uid, pid) = l.split_once(' ').expect("uid pid");
+            Pane {
+                uid: uid.to_string(),
+                pid: pid.parse().expect("pane pid"),
+            }
+        })
+        .collect()
 }
 
 /// Kills `pane` with SIGTERM and waits until the server has dropped it.
@@ -86,15 +77,6 @@ fn signal_death(srv: &TestServer, pane: &Pane) {
     kill(Pid::from_raw(pane.pid), Signal::SIGTERM).expect("signal the pane");
     srv.wait_for(|| !uids(srv).contains(&pane.uid), Duration::from_secs(5))
         .expect("the server drops the signalled pane");
-}
-
-/// SIGTERM to the server alone; waits until it has gone.
-fn terminate(srv: &TestServer, server: i32) {
-    kill(Pid::from_raw(server), Signal::SIGTERM).expect("signal the server");
-    srv.wait_for(|| !srv.is_running(), Duration::from_secs(10))
-        .expect("the server goes after SIGTERM");
-    // Negative wait: nothing may land after the server exits.
-    common::quiet_period(Duration::from_millis(500));
 }
 
 /// Whether `pid` is gone and reaped (no zombie left).
@@ -211,22 +193,6 @@ fn one_window(srv: &TestServer, n: usize) -> (Vec<Pane>, i32) {
     (panes, server)
 }
 
-/// A pane dies of a signal, then another is closed with kill-pane inside
-/// the hold: the signal writes the one that died of it, not the closed one.
-#[test]
-fn a_kill_pane_inside_the_hold_stays_closed() {
-    let srv = TestServer::start();
-    let (panes, server) = one_window(&srv, 3);
-    let (died, closed, kept) = (&panes[0], &panes[1], &panes[2]);
-    signal_death(&srv, died);
-    srv.cmd(&["kill-pane", "-t", &closed.id])
-        .expect("kill-pane");
-    terminate(&srv, server);
-    let snap = snapshot(&srv).expect("a snapshot");
-    let want: BTreeSet<String> = [died.uid.clone(), kept.uid.clone()].into();
-    assert_eq!(snap_uids(&snap), want);
-}
-
 /// kill-session of the last session just after a signal death is the
 /// user's choice: the server goes at once and saves the empty state.
 #[test]
@@ -247,32 +213,4 @@ fn killing_the_last_session_inside_the_hold_does_not_wait() {
     common::quiet_period(Duration::from_millis(700));
     let snap = snapshot(&srv).expect("a snapshot");
     assert!(snap.sessions.is_empty(), "{snap:#?}");
-}
-
-/// A window made inside the hold is current state: the signal writes it,
-/// along with the pane that died of the signal.
-#[test]
-fn a_window_made_inside_the_hold_is_written() {
-    let srv = TestServer::start();
-    let (panes, server) = one_window(&srv, 2);
-    signal_death(&srv, &panes[0]);
-    let new = srv
-        .cmd(&[
-            "new-window",
-            "-d",
-            "-P",
-            "-F",
-            "#{pane_uid}",
-            "-t",
-            "main",
-            "sleep 600",
-        ])
-        .expect("new-window")
-        .trim_end()
-        .to_string();
-    terminate(&srv, server);
-    let snap = snapshot(&srv).expect("a snapshot");
-    let want: BTreeSet<String> = [panes[0].uid.clone(), panes[1].uid.clone(), new].into();
-    assert_eq!(snap_uids(&snap), want);
-    assert_eq!(snap.sessions[0].windows.len(), 2);
 }

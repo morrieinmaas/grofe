@@ -58,12 +58,12 @@ its last pane) before stopping the server. To always start empty, set
 `restore-on-start = false` in `config.toml`.
 
 A reboot or logout signals the server and its panes together, and the panes
-can die first. So a pane killed by a signal is remembered for half a second:
-if the server is signalled in that time, the pane is saved with everything
-else as it stands. When the last pane goes that way, the server waits that
-half second before it exits. A pane, window or session you close yourself
-(`kill-pane`, `kill-session`, or `exit` in it) stays closed, and the server
-goes at once.
+can die first. So when a pane dies of a signal, the server keeps the state
+from just before it for half a second, and saves that state if it is
+signalled in that time. When the last pane goes that way, the server waits
+that half second before it exits. Anything you close yourself (`kill-pane`,
+`kill-session`, or `exit` in a pane) stays closed, unless the server is
+signalled within half a second of a pane dying of a signal.
 
 Panes come back in the same layout and directory. A pane that knows how to
 resume comes back running its program; the others come back as a shell.
