@@ -5,9 +5,10 @@
 //! temp file plus rename.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value, value};
 
 /// The file name inside the config folder.
 pub const FILE: &str = "settings.toml";
@@ -43,7 +44,7 @@ pub fn set(dir: &Path, key: &str, item: Item) -> Result<Saved, String> {
     edit(dir, |doc| {
         let parts: Vec<&str> = key.split('.').collect();
         let (last, parents) = parts.split_last().ok_or("empty key")?;
-        let mut table = doc.as_table_mut();
+        let mut table: &mut dyn TableLike = doc.as_table_mut();
         for p in parents {
             if !table.contains_key(p) {
                 let mut t = Table::new();
@@ -52,7 +53,7 @@ pub fn set(dir: &Path, key: &str, item: Item) -> Result<Saved, String> {
             }
             table = table
                 .get_mut(p)
-                .and_then(Item::as_table_mut)
+                .and_then(Item::as_table_like_mut)
                 .ok_or_else(|| format!("{key}: {p} in settings.toml is not a table"))?;
         }
         put(table, last, item);
@@ -69,32 +70,86 @@ pub fn unset(dir: &Path, key: &str) -> Result<Saved, String> {
     })
 }
 
+/// The fields of a binding besides its command, for [`set_binding`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BindingFields<'a> {
+    pub desc: Option<&'a str>,
+    pub repeat: bool,
+    pub group: Option<&'a str>,
+    pub name: Option<&'a str>,
+}
+
 /// Binds `key` in `[keys.<table>]` to `cmd`; an empty `cmd` unbinds it
-/// (`key = ""`).
-pub fn set_binding(dir: &Path, table: &str, key: &str, cmd: &str) -> Result<Saved, String> {
+/// (`key = ""`). An entry already there keeps its place and comments, and
+/// its fields become `fields`: one that is `None` (or a `false` repeat
+/// flag) is removed.
+pub fn set_binding(
+    dir: &Path,
+    table: &str,
+    key: &str,
+    cmd: &str,
+    fields: &BindingFields,
+) -> Result<Saved, String> {
     edit(dir, |doc| {
         let root = doc.as_table_mut();
         let keys = sub_table(root, "keys", true)?;
         let t = sub_table(keys, table, false)?;
-        let item = if cmd.is_empty() {
-            value("")
-        } else {
-            let mut inline = toml_edit::InlineTable::new();
-            inline.insert("cmd", cmd.into());
-            value(inline)
-        };
-        put(t, key, item);
+        if cmd.is_empty() {
+            put(t, key, value(""));
+            return Ok(true);
+        }
+        let texts = [
+            ("desc", fields.desc),
+            ("group", fields.group),
+            ("name", fields.name),
+        ];
+        if let Some(entry) = t.get_mut(key).and_then(Item::as_table_like_mut) {
+            put(entry, "cmd", value(cmd));
+            for (field, text) in texts {
+                match text {
+                    Some(text) => put(entry, field, value(text)),
+                    None => {
+                        entry.remove(field);
+                    }
+                }
+            }
+            if fields.repeat {
+                put(entry, "repeat", value(true));
+            } else {
+                entry.remove("repeat");
+            }
+            return Ok(true);
+        }
+        let mut inline = InlineTable::new();
+        inline.insert("cmd", cmd.into());
+        for (field, text) in texts {
+            if let Some(text) = text {
+                inline.insert(field, text.into());
+            }
+        }
+        if fields.repeat {
+            inline.insert("repeat", Value::from(true));
+        }
+        put(t, key, value(inline));
         Ok(true)
+    })
+}
+
+/// Removes `key` of `[keys.<table>]` from settings.toml, so the lower layers
+/// bind it again. A key that is not there is not an error.
+pub fn unset_binding(dir: &Path, table: &str, key: &str) -> Result<Saved, String> {
+    edit(dir, |doc| {
+        Ok(remove(doc.as_table_mut(), &["keys", table, key]))
     })
 }
 
 /// The table `name` of `parent`, created when missing; `implicit` leaves out
 /// its own `[header]` line.
 fn sub_table<'a>(
-    parent: &'a mut Table,
+    parent: &'a mut dyn TableLike,
     name: &str,
     implicit: bool,
-) -> Result<&'a mut Table, String> {
+) -> Result<&'a mut dyn TableLike, String> {
     if !parent.contains_key(name) {
         let mut t = Table::new();
         t.set_implicit(implicit);
@@ -102,13 +157,13 @@ fn sub_table<'a>(
     }
     parent
         .get_mut(name)
-        .and_then(Item::as_table_mut)
+        .and_then(Item::as_table_like_mut)
         .ok_or_else(|| format!("{name} in settings.toml is not a table"))
 }
 
 /// Replaces or adds `key`, keeping the old key's comments above it and the
 /// old value's spacing and trailing comment.
-fn put(table: &mut Table, key: &str, mut item: Item) {
+fn put(table: &mut dyn TableLike, key: &str, mut item: Item) {
     let Some(old) = table.get_mut(key) else {
         table.insert(key, item);
         return;
@@ -119,23 +174,48 @@ fn put(table: &mut Table, key: &str, mut item: Item) {
     *old = item;
 }
 
-/// Removes the key at `path`; empty tables this leaves behind that were
-/// dotted or implicit go too. Whether anything was removed.
-fn remove(table: &mut Table, path: &[&str]) -> bool {
+/// Removes the key at `path`; tables this leaves empty that were dotted,
+/// implicit or inline go too. Whether anything was removed.
+fn remove(table: &mut dyn TableLike, path: &[&str]) -> bool {
     let Some((first, rest)) = path.split_first() else {
         return false;
     };
     if rest.is_empty() {
         return table.remove(first).is_some();
     }
-    let Some(child) = table.get_mut(first).and_then(Item::as_table_mut) else {
+    let Some(item) = table.get_mut(first) else {
+        return false;
+    };
+    let droppable = match item {
+        Item::Table(t) => t.is_dotted() || t.is_implicit(),
+        _ => true,
+    };
+    let Some(child) = item.as_table_like_mut() else {
         return false;
     };
     let removed = remove(child, rest);
-    if removed && child.is_empty() && (child.is_dotted() || child.is_implicit()) {
+    if removed && droppable && child.is_empty() {
         table.remove(first);
     }
     removed
+}
+
+/// Where a write to `path` lands: its target when it is a symlink, also a
+/// dangling one, which the write then creates and a rollback removes, so the
+/// link itself is never replaced.
+fn resolve(path: &Path) -> PathBuf {
+    let mut p = path.to_path_buf();
+    for _ in 0..40 {
+        if let Ok(c) = fs::canonicalize(&p) {
+            return c;
+        }
+        let is_link = fs::symlink_metadata(&p).is_ok_and(|m| m.is_symlink());
+        let Some(target) = is_link.then(|| fs::read_link(&p).ok()).flatten() else {
+            break;
+        };
+        p = p.parent().unwrap_or(Path::new("")).join(target);
+    }
+    p
 }
 
 /// Reads the file, applies `f`, and writes when `f` says it changed
@@ -144,7 +224,7 @@ fn edit(
     dir: &Path,
     f: impl FnOnce(&mut DocumentMut) -> Result<bool, String>,
 ) -> Result<Saved, String> {
-    let path = dir.join(FILE);
+    let path = resolve(&dir.join(FILE));
     let old = match fs::read(&path) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -169,15 +249,28 @@ fn edit(
     Ok(Saved { path, old })
 }
 
-/// Temp file in the same folder, then rename over the target.
+/// Temp file in the same folder, then rename over the target. A symlinked
+/// settings.toml is written through to its target and the target keeps its
+/// permissions; the temp file is flushed to disk before the rename and is
+/// removed again when anything fails.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    if let Some(dir) = path.parent() {
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(dir) = target.parent() {
         fs::create_dir_all(dir).map_err(err)?;
     }
-    let tmp = path.with_extension(format!("toml.tmp{}", std::process::id()));
-    fs::write(&tmp, bytes).map_err(err)?;
-    fs::rename(&tmp, path).map_err(|e| {
+    let tmp = target.with_extension(format!("toml.tmp{}", std::process::id()));
+    let perms = fs::metadata(&target).ok().map(|m| m.permissions());
+    let write = || -> std::io::Result<()> {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        if let Some(p) = perms {
+            f.set_permissions(p)?;
+        }
+        f.sync_all()?;
+        fs::rename(&tmp, &target)
+    };
+    write().map_err(|e| {
         let _ = fs::remove_file(&tmp);
         err(e)
     })

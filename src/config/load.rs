@@ -10,6 +10,7 @@ use toml::Spanned;
 use toml::de::{DeString, DeTable, DeValue};
 
 use super::provenance::tilde;
+use super::write;
 use super::{
     ConfigCommand, ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer,
     Provenance, Resolved, Source, Ty, closest, option_names, tmux_name, toml_type,
@@ -54,8 +55,8 @@ fn load_layers(env: &Env, files: Option<&[PathBuf]>) -> Result<Resolved, Vec<Con
     let dir = env.config_dir.as_deref();
     match files {
         None => {
-            if let Some(file) = super::config_file(env) {
-                l.load_path(&file, Layer::Config, true);
+            if let Some(file) = &env.config_file {
+                l.load_path(file, Layer::Config, true);
             }
         }
         Some(files) => {
@@ -77,7 +78,7 @@ fn load_layers(env: &Env, files: Option<&[PathBuf]>) -> Result<Resolved, Vec<Con
             l.load_path(&f, Layer::ConfD, false);
         }
         l.load_path(&dir.join("user.toml"), Layer::User, true);
-        l.load_path(&dir.join("settings.toml"), Layer::Settings, true);
+        l.load_path(&dir.join(write::FILE), Layer::Settings, true);
     }
     l.check_names();
     let missing = l.plugins.missing_cmds();

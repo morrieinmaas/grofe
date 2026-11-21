@@ -13,7 +13,12 @@
 // line of a key are not here; hooks are not listed, as tmux does not list
 // them either.
 
+mod save;
 mod table;
+
+// `toml_item` is the settings menu's too (PR 3).
+#[allow(unused_imports)]
+pub(crate) use save::{persist, reset, toml_item};
 
 use std::collections::BTreeMap;
 
@@ -192,65 +197,6 @@ pub(crate) fn value_of(
     None
 }
 
-/// The settings.toml key and value of option `name` as `scope` shows it, or
-/// why it cannot be saved: a user option, an array element and a list
-/// option have no scalar TOML key.
-// ponytail: list options (`status-format` and the like) are not saved;
-// writing them back as a TOML array is not done yet.
-pub(crate) fn toml_item(
-    state: &State,
-    scope: Scope,
-    name: &str,
-    idx: Option<u32>,
-) -> Result<(&'static str, toml_edit::Item), String> {
-    let key = crate::config::toml_key(name)
-        .filter(|_| idx.is_none())
-        .ok_or_else(|| format!("{name}: not saveable, it has no TOML key"))?;
-    let value = value_of(state, scope, name, None).ok_or_else(|| format!("{name} is not set"))?;
-    let literal = crate::config::literal(key, &value);
-    let v: toml_edit::Value = literal
-        .parse()
-        .map_err(|e| format!("{name}: {value}: {e}"))?;
-    Ok((key, toml_edit::Item::Value(v)))
-}
-
-/// `P` in customize-mode: writes `entry` to settings.toml, then reloads the
-/// config. When the reload fails the file is put back and the error
-/// returned. On success, what was saved.
-pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String> {
-    use crate::config::write;
-    let dir = crate::config::Env::from_process()
-        .config_dir
-        .ok_or("no config folder to save to")?;
-    let (saved, what) = match entry {
-        Entry::Option { scope, name, idx } => {
-            let (key, item) = toml_item(state, *scope, name, *idx)?;
-            (write::set(&dir, key, item)?, name.clone())
-        }
-        Entry::Key { table, key } | Entry::Field { table, key, .. } => {
-            let cmd = key_command_text(state, table, key);
-            let name = key.to_string();
-            (write::set_binding(&dir, table, &name, &cmd)?, name)
-        }
-        Entry::Group => return Err("nothing to save here".to_string()),
-    };
-    let ctx = crate::protocol::ClientCtx {
-        cwd: std::path::PathBuf::from("/"),
-        pane: None,
-        env: Vec::new(),
-        client: None,
-        dialect: crate::protocol::Dialect::Tmux,
-        request: Default::default(),
-    };
-    match options::reload(state, &ctx, crate::cmd::Reload) {
-        Ok(_) => Ok(format!("Saved {what} to settings.toml")),
-        Err(e) => {
-            saved.rollback()?;
-            Err(e)
-        }
-    }
-}
-
 /// The elements of array option `name` at `scope`.
 fn array_of(state: &State, scope: Scope, name: &str) -> BTreeMap<u32, String> {
     let owner = owner_of(scope);
@@ -276,7 +222,7 @@ fn owner_of(scope: Scope) -> Owner {
     }
 }
 
-fn is_global(scope: Scope) -> bool {
+pub(crate) fn is_global(scope: Scope) -> bool {
     matches!(
         scope,
         Scope::Server | Scope::GlobalSession | Scope::GlobalWindow
@@ -839,6 +785,17 @@ fn draw_option(
     if !page.text(&format!("This is a {kind_text} option."), false, None) {
         return;
     }
+    // Only the missing TOML key is marked: a local value's preview stays
+    // tmux's own.
+    if save::key_of(name, idx).is_none()
+        && !page.text(
+            "Not saveable to settings.toml: it has no TOML key.",
+            false,
+            None,
+        )
+    {
+        return;
+    }
     let array = info.is_some_and(|i| i.flags & ARRAY != 0);
     if array {
         let ok = match idx {
@@ -1192,11 +1149,6 @@ pub fn toggle_key_repeat(state: &mut State, table: &str, key: &Key) {
 
 pub fn unbind_key(state: &mut State, table: &str, key: &Key) {
     state.registry.key_tables.unbind_runtime(table, key);
-}
-
-/// `window_customize_reset_key`: the key's default binding back, or none.
-pub fn reset_key(state: &mut State, table: &str, key: &Key) {
-    state.registry.key_tables.reset_to_default(table, key);
 }
 
 /// Whether resetting `key` leaves it bound.

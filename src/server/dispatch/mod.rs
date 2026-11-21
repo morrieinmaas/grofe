@@ -395,6 +395,7 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             server::sources::prune_unreferenced(state);
             out
         }
+        Command::ConfigFile => Ok(options::config_files()),
         Command::CommandPrompt(c) => prompt::command_prompt(state, ctx, c),
         Command::RunShell(c) => prompt::run_shell(state, ctx, c),
         Command::SelectLayout(c) => window::select_layout(state, ctx, c),
