@@ -69,7 +69,7 @@ fn apply_default_layout(server: &mut Host, id: &str) {
                 eprintln!("grofe: warning: {w}");
             }
         }
-        Err(e) => eprintln!("grofe: warning: default-layout: {e}"),
+        Err(e) => eprintln!("grofe: default-layout: {e}"),
     }
 }
 

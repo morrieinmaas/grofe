@@ -219,4 +219,4 @@ settings menu's Layouts section sets the option with Enter.
 
 The layout is built by the `grofe` command that ran `new-session -d` (or
 `new-session`, which then attaches), so a `new-session` run inside the server,
-from a key binding or the command prompt, makes a plain session.
+from a key binding or the command prompt, makes a plain session. So do `-P` and `-A`.

@@ -5,7 +5,6 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::time::Duration;
 
 use common::TestServer;
 use grofe::server::settings::{layouts::preview, section_of};
@@ -27,14 +26,24 @@ fn every_option_maps_to_exactly_one_section() {
         "expected the full table, got {}",
         names.len()
     );
+    const SECTIONS: [&str; 8] = [
+        "Appearance",
+        "StatusLine",
+        "Keys",
+        "Layouts",
+        "Agents",
+        "Sessions",
+        "Remote",
+        "Other",
+    ];
     let mut used = BTreeSet::new();
     for n in &names {
-        // section_of is a function, so one answer per name; it must agree
-        // with itself and must not depend on anything but the name.
-        let a = format!("{:?}", section_of(n));
-        let b = format!("{:?}", section_of(n));
-        assert_eq!(a, b, "{n}");
-        used.insert(a);
+        let section = format!("{:?}", section_of(n));
+        assert!(
+            SECTIONS.contains(&section.as_str()),
+            "{n} maps to {section}, not one of the eight sections"
+        );
+        used.insert(section);
     }
     assert!(used.len() <= 8, "more than eight sections: {used:?}");
     assert!(
@@ -49,7 +58,6 @@ fn every_option_maps_to_exactly_one_section() {
         format!("{:?}", section_of("status-left")),
         format!("{:?}", section_of("history-limit"))
     );
-    let _ = Duration::from_secs(0);
 }
 
 const TWO_SIDE_BY_SIDE: &str = r#"

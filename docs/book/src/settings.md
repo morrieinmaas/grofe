@@ -67,4 +67,5 @@ drawing of the first window's panes beside the list. `Enter` sets
 With `default-layout` set, `new-session` without a command builds that
 layout. An unknown name makes a plain session and logs
 `default-layout: no layout <name>`. The `grofe` command line builds the layout, not the server, so a session the
-server makes by itself, such as from a key binding, stays plain.
+server makes by itself, such as from a key binding, stays plain. `-P` and `-A`
+also make a plain session.

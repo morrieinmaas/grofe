@@ -118,13 +118,17 @@ pub fn find(dirs: &Dirs, name: &str) -> Option<PathBuf> {
 
 /// `default-layout`: builds that layout's first session into the session
 /// `sid` just made, whose one window it replaces. Does nothing when the
-/// option is empty or names no file (the server logs that). The layout's
+/// option is empty; a name with no file is an error (the server also logs it). The layout's
 /// `before` and `on_stop` hooks do not run: the session already exists.
 pub fn build_default(server: &mut dyn Server, dirs: &Dirs, sid: &str) -> Result<UpReport, String> {
     let mut report = UpReport::default();
     let name = server.run(&words(&["show-options", "-gv", "default-layout"]))?;
-    let Some(path) = find(dirs, name.trim()) else {
+    let name = name.trim();
+    if name.is_empty() {
         return Ok(report);
+    }
+    let Some(path) = find(dirs, name) else {
+        return Err(format!("no layout {name}"));
     };
     let Some(mut plan) = load(&path, dirs)?.sessions.into_iter().next() else {
         return Ok(report);
