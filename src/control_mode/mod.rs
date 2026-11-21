@@ -25,13 +25,18 @@ mod command;
 mod conn;
 mod flow;
 mod notify;
+mod subscribe;
 
-use command::{Outcome, session_target};
+use command::session_target;
 use conn::{ctx, exchange, subscribe};
 use flow::{Flow, PaneState};
+use subscribe::Subs;
 
 pub use flow::escape_output;
-pub use notify::{PANES_FORMAT, SESSIONS_FORMAT, Snapshot, WINDOWS_FORMAT, WindowInfo, diff};
+pub use notify::{
+    BUFFERS_FORMAT, CLIENTS_FORMAT, PANES_FORMAT, SESSIONS_FORMAT, Snapshot, WINDOWS_FORMAT,
+    WindowInfo, diff, pairs,
+};
 
 /// How often the bridge looks at the server when nothing woke it, for
 /// changes no event announces (an automatic rename).
@@ -81,6 +86,8 @@ struct Bridge<'a, W: Write> {
     snap: Snapshot,
     /// Notification lines a command asks for, written after its block.
     after: Vec<String>,
+    /// `refresh-client -B`.
+    subs: Subs,
 }
 
 impl<W: Write> Bridge<'_, W> {
@@ -139,8 +146,13 @@ impl<W: Write> Bridge<'_, W> {
         let sessions = self.ask(&["list-sessions", "-F", SESSIONS_FORMAT])?;
         let windows = self.ask(&["list-windows", "-a", "-F", WINDOWS_FORMAT])?;
         let panes = self.ask(&["list-panes", "-a", "-F", PANES_FORMAT])?;
+        let clients = self.ask(&["list-clients", "-F", CLIENTS_FORMAT])?;
+        let buffers = self.ask(&["list-buffers", "-F", BUFFERS_FORMAT])?;
         let mut snap = Snapshot::parse(&sessions, &windows);
-        snap.panes = panes.lines().map(str::to_string).collect();
+        snap.modes = pairs(&panes);
+        snap.panes = snap.modes.keys().cloned().collect();
+        snap.clients = pairs(&clients);
+        snap.buffers = pairs(&buffers);
         Ok(snap)
     }
 
@@ -160,6 +172,17 @@ impl<W: Write> Bridge<'_, W> {
             }
         }
         alive
+    }
+
+    /// Writes the subscriptions that changed, once a second.
+    fn check_subs(&mut self) -> bool {
+        if !self.subs.due(Instant::now()) {
+            return true;
+        }
+        let mut subs = std::mem::take(&mut self.subs);
+        let lines = subs.check(&self.attached, |argv| self.ask(argv));
+        self.subs = subs;
+        lines.iter().all(|l| self.line(l))
     }
 
     /// Writes the pane output an event carried, as the flow allows.
@@ -218,6 +241,7 @@ pub fn run(opts: &Options, input: impl BufRead + Send + 'static, output: impl Wr
         attached: String::new(),
         snap: Snapshot::default(),
         after: Vec::new(),
+        subs: Subs::default(),
     };
     if opts.double {
         bridge.write(DCS_OPEN);
@@ -266,15 +290,9 @@ pub fn run(opts: &Options, input: impl BufRead + Send + 'static, output: impl Wr
         match msg {
             Msg::Line(line) if line.trim().is_empty() => {}
             Msg::Line(line) => {
-                let (result, detach) = match bridge.command_line(&line) {
-                    Outcome::Ok(out) => (Ok(out), false),
-                    Outcome::Err(e) => (Err(e), false),
-                    Outcome::Detach(out) => (Ok(out), true),
-                };
-                // What `refresh-client -A %p:on` released follows its block.
-                if !bridge.block(1, &result) || (result.is_ok() && !bridge.release_all()) {
+                let Some(detach) = bridge.command_line(&line) else {
                     return 0;
-                }
+                };
                 for l in std::mem::take(&mut bridge.after) {
                     bridge.line(&l);
                 }
@@ -296,7 +314,7 @@ pub fn run(opts: &Options, input: impl BufRead + Send + 'static, output: impl Wr
                 }
             }
             Msg::Tick => {
-                if !bridge.notify() {
+                if !bridge.notify() || !bridge.check_subs() {
                     break;
                 }
             }

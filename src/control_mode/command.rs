@@ -1,10 +1,13 @@
 //! Command lines: each runs on the server, except the client-bound commands
 //! the bridge answers itself (`detach-client`, `switch-client`,
-//! `refresh-client`).
+//! `refresh-client`) and the ones whose answer a control client gets in its
+//! own words (`display-message`, `source-file`).
 
 use std::io::Write;
+use std::time::Instant;
 
 use crate::cmd::split_command_string;
+use crate::compat::tmux::{Getopt, resolve};
 
 use super::Bridge;
 use super::conn::exchange;
@@ -20,9 +23,10 @@ pub(super) fn session_target(target: &str) -> String {
 }
 
 /// tmux words its parser's errors `parse error: ...`; the front end's are
-/// bare.
+/// bare. A command's argument errors (`command <verb>: too many
+/// arguments`) are the parser's too.
 fn parse_error_text(err: &str) -> String {
-    let parse = ["unknown command: ", "ambiguous command: "];
+    let parse = ["unknown command: ", "ambiguous command: ", "command "];
     if parse.iter().any(|p| err.starts_with(p)) {
         format!("parse error: {err}")
     } else {
@@ -30,43 +34,107 @@ fn parse_error_text(err: &str) -> String {
     }
 }
 
+/// A config file's error, `<path>:<line>: <message>`, which tmux gives a
+/// control client as `%config-error`.
+fn is_cause(line: &str) -> bool {
+    line.split_once(": ")
+        .and_then(|(head, _)| head.rsplit_once(':'))
+        .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// `argv`'s flags as tmux reads them for its verb.
+fn flags(argv: &[String]) -> Getopt<'_> {
+    resolve(&argv[0]).map_or(
+        Getopt {
+            flags: Vec::new(),
+            rest: 0,
+        },
+        |spec| spec.getopt(&argv[1..]),
+    )
+}
+
 /// What a command line did to the client.
-pub(super) enum Outcome {
+enum Outcome {
     Ok(String),
     Err(String),
     /// `detach-client`.
-    Detach(String),
+    Detach,
 }
 
 impl<W: Write> Bridge<'_, W> {
-    /// One command line: its commands in order, stopping at the first
-    /// error. The text printed, or the error.
-    pub(super) fn command_line(&mut self, text: &str) -> Outcome {
+    /// One command line: each command its own block, in order, stopping
+    /// at the first error (tmux 3.7b). `Some(true)` when the client
+    /// detached, `None` when the output is gone.
+    pub(super) fn command_line(&mut self, text: &str) -> Option<bool> {
         let cmds = match split_command_string(text) {
             Ok(c) => c,
-            Err(e) => return Outcome::Err(format!("parse error: {e}")),
+            Err(e) => {
+                return self
+                    .block(1, &Err(format!("parse error: {e}")))
+                    .then_some(false);
+            }
         };
-        let mut printed = String::new();
+        if cmds.is_empty() {
+            return self.block(1, &Ok(String::new())).then_some(false);
+        }
         for argv in cmds {
-            match self.command(&argv) {
-                Outcome::Ok(out) => printed.push_str(&out),
-                Outcome::Err(e) => return Outcome::Err(format!("{printed}{e}")),
-                Outcome::Detach(out) => return Outcome::Detach(format!("{printed}{out}")),
+            let (result, detach) = match self.command(&argv) {
+                Outcome::Ok(out) => (Ok(out), false),
+                Outcome::Err(e) => (Err(e), false),
+                Outcome::Detach => (Ok(String::new()), true),
+            };
+            // What `refresh-client -A %p:on` released follows its block.
+            if !self.block(1, &result) || (result.is_ok() && !self.release_all()) {
+                return None;
+            }
+            if detach {
+                return Some(true);
+            }
+            if result.is_err() {
+                break;
             }
         }
-        Outcome::Ok(printed)
+        Some(false)
     }
 
     fn command(&mut self, argv: &[String]) -> Outcome {
-        let verb = crate::compat::tmux::resolve(&argv[0]).map_or(argv[0].as_str(), |s| s.name);
+        let verb = resolve(&argv[0]).map_or(argv[0].as_str(), |s| s.name);
+        let getopt = flags(argv);
         match verb {
-            "detach-client" => Outcome::Detach(String::new()),
-            "switch-client" => self.switch_client(argv),
-            "refresh-client" => self.refresh_client(argv),
-            _ => match exchange(&self.opts.socket, &self.ctx(), argv) {
-                Ok(out) => Outcome::Ok(out),
-                Err(e) => Outcome::Err(parse_error_text(&e)),
+            // With a target it detaches other clients, on the server.
+            "detach-client" if !"ast".chars().any(|f| getopt.has(f)) => Outcome::Detach,
+            // `-c` switches another client, on the server.
+            "switch-client" if !getopt.has('c') => self.switch_client(argv),
+            "refresh-client" => self.refresh_client(&getopt),
+            // tmux shows a control client its message as `%message`.
+            "display-message" if !getopt.has('p') && !getopt.has('a') => {
+                let mut argv = argv.to_vec();
+                argv.insert(1, "-p".to_string());
+                match self.server(&argv) {
+                    Outcome::Ok(out) => {
+                        Outcome::Ok(format!("%message {}\n", out.trim_end_matches('\n')))
+                    }
+                    other => other,
+                }
+            }
+            // A config file's errors are notices after the block, which ends
+            // as a success.
+            "source-file" => match self.server(argv) {
+                Outcome::Err(e) if !e.is_empty() && e.lines().all(is_cause) => {
+                    let causes = e.lines().map(|l| format!("%config-error {l}"));
+                    self.after.extend(causes);
+                    Outcome::Ok(String::new())
+                }
+                other => other,
             },
+            _ => self.server(argv),
+        }
+    }
+
+    fn server(&self, argv: &[String]) -> Outcome {
+        match exchange(&self.opts.socket, &self.ctx(), argv) {
+            Ok(out) => Outcome::Ok(out),
+            Err(e) => Outcome::Err(parse_error_text(&e)),
         }
     }
 
@@ -100,21 +168,21 @@ impl<W: Write> Bridge<'_, W> {
     }
 
     /// `refresh-client`: the flags of control mode are the bridge's own
-    /// (`-C`, `-f`, `-A`).
-    fn refresh_client(&mut self, argv: &[String]) -> Outcome {
+    /// (`-C`, `-f`, `-A`, `-B`).
+    fn refresh_client(&mut self, getopt: &Getopt<'_>) -> Outcome {
         let mut printed = String::new();
-        let mut i = 1;
-        while i < argv.len() {
-            let flag = argv[i].as_str();
-            let value = argv.get(i + 1);
-            match (flag, value) {
-                ("-C", Some(size)) => {
-                    if let Err(e) = self.resize(size) {
+        for &(flag, value) in &getopt.flags {
+            let Some(value) = value else {
+                continue;
+            };
+            match flag {
+                'C' => {
+                    if let Err(e) = self.resize(value) {
                         return Outcome::Err(e);
                     }
                 }
-                ("-f", Some(flags)) => self.flow.set_flags(flags),
-                ("-A", Some(arg)) => match self.flow.set_pane(arg) {
+                'f' => self.flow.set_flags(value),
+                'A' => match self.flow.set_pane(value) {
                     Ok(lines) => {
                         for l in lines {
                             printed.push_str(&l);
@@ -123,14 +191,13 @@ impl<W: Write> Bridge<'_, W> {
                     }
                     Err(e) => return Outcome::Err(e),
                 },
-                // ponytail: `-B` (subscriptions), `-r`, `-l`, `-S` and the
-                // scroll flags are not control-mode features of this slice.
-                ("-B" | "-r", Some(_)) => {
-                    return Outcome::Err(format!("refresh-client {flag}: not supported yet"));
-                }
+                'B' => self.subs.update(value, Instant::now()),
+                // ponytail: `-r` (colour reports), `-l` (clipboard), `-S`
+                // and the scroll flags are not control-mode features of the
+                // bridge.
+                'r' => return Outcome::Err("refresh-client -r: not supported yet".into()),
                 _ => {}
             }
-            i += 2;
         }
         Outcome::Ok(printed)
     }

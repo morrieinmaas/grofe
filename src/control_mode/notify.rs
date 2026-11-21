@@ -37,6 +37,13 @@ pub struct Snapshot {
     pub windows: BTreeMap<String, WindowInfo>,
     /// Every pane id (`%N`) the server has.
     pub panes: BTreeSet<String>,
+    /// Pane id to its `#{pane_mode}`, empty out of a mode.
+    pub modes: BTreeMap<String, String>,
+    /// Client name to its session, `$N name`.
+    pub clients: BTreeMap<String, String>,
+    /// Paste buffer name to what tells its content apart (size, time,
+    /// sample).
+    pub buffers: BTreeMap<String, String>,
 }
 
 /// The `-F` of the sessions query: id and name.
@@ -46,8 +53,23 @@ pub const SESSIONS_FORMAT: &str = "#{session_id}\t#{session_name}";
 /// its session's current one, its active pane, layout, flags and name.
 pub const WINDOWS_FORMAT: &str = "#{session_id}\t#{window_id}\t#{window_active}\t#{pane_id}\t#{window_layout}\t#{window_visible_layout}\t#{window_flags}\t#{window_name}";
 
-/// The `-F` of the panes query.
-pub const PANES_FORMAT: &str = "#{pane_id}";
+/// The `-F` of the panes query: id and mode.
+pub const PANES_FORMAT: &str = "#{pane_id}\t#{pane_mode}";
+
+/// The `-F` of the clients query: name, session id and name.
+pub const CLIENTS_FORMAT: &str = "#{client_name}\t#{session_id} #{session_name}";
+
+/// The `-F` of the buffers query: name, then its content's fingerprint.
+pub const BUFFERS_FORMAT: &str =
+    "#{buffer_name}\t#{buffer_size}\t#{buffer_created}\t#{buffer_sample}";
+
+/// `key<TAB>value` lines as a map.
+pub fn pairs(text: &str) -> BTreeMap<String, String> {
+    text.lines()
+        .map(|l| l.split_once('\t').unwrap_or((l, "")))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
 
 impl Snapshot {
     /// Reads the output of `list-sessions -F` [`SESSIONS_FORMAT`] and
@@ -90,17 +112,45 @@ impl Snapshot {
     }
 }
 
+/// The `%window-add` (or unlinked) lines for the links `window` gained.
+fn adds(
+    out: &mut Vec<String>,
+    id: &str,
+    gained: &BTreeSet<String>,
+    w: &WindowInfo,
+    attached: &str,
+) {
+    let kind = if w.sessions.contains(attached) {
+        "window-add"
+    } else {
+        "unlinked-window-add"
+    };
+    out.extend(gained.iter().map(|_| format!("%{kind} {id}")));
+}
+
 /// The notifications between `old` and `new` for a client attached to
 /// `attached`, in the order tmux 3.7b sends them for one command.
 ///
-/// A window that leaves with its session sends nothing; one that leaves
-/// while a session still holds it sends `%unlinked-window-close`, which is
-/// what tmux 3.7b sends for `kill-window` (the window is unlinked before
-/// the notice).
-// ponytail: `%window-close` (a window still linked in the client's session
-// when it closes) is never sent.
+/// Each link a window gains or loses is one notice (tmux notifies per
+/// winlink), named for whether the window is in the client's session once
+/// the command is done: a window unlinked from another session but still in
+/// the client's sends `%window-close`, one killed outright
+/// `%unlinked-window-close` (tmux unlinks it before the notice). When the
+/// client's own session went, it is leaving and gets no window notices.
 pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let empty = BTreeSet::new();
+    let gained = |id: &String, w: &WindowInfo| -> BTreeSet<String> {
+        let had = old.windows.get(id).map_or(&empty, |o| &o.sessions);
+        w.sessions.difference(had).cloned().collect()
+    };
+    // `link-window` notifies the link before selecting it; `new-window`
+    // selects first.
+    for (id, w) in &new.windows {
+        if old.windows.contains_key(id) {
+            adds(&mut out, id, &gained(id, w), w, attached);
+        }
+    }
     for (session, window) in &new.current {
         if old.current.get(session).is_some_and(|w| w != window) {
             out.push(format!("%session-window-changed {session} {window}"));
@@ -108,22 +158,12 @@ pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
     }
     for (id, w) in &new.windows {
         if !old.windows.contains_key(id) {
-            let kind = if w.sessions.contains(attached) {
-                "window-add"
-            } else {
-                "unlinked-window-add"
-            };
-            out.push(format!("%{kind} {id}"));
+            adds(&mut out, id, &gained(id, w), w, attached);
         }
     }
     let ids = |s: &Snapshot| s.sessions.keys().cloned().collect::<Vec<_>>();
     if ids(old) != ids(new) {
         out.push("%sessions-changed".to_string());
-    }
-    if let (Some(a), Some(b)) = (old.sessions.get(attached), new.sessions.get(attached))
-        && a != b
-    {
-        out.push(format!("%session-renamed {attached} {b}"));
     }
     for (id, w) in &new.windows {
         let Some(was) = old.windows.get(id) else {
@@ -136,6 +176,11 @@ pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
                 "unlinked-window-renamed"
             };
             out.push(format!("%{kind} {id} {}", w.name));
+        }
+    }
+    for (id, name) in &new.sessions {
+        if old.sessions.get(id).is_some_and(|was| was != name) {
+            out.push(format!("%session-renamed {id} {name}"));
         }
     }
     for (id, w) in &new.windows {
@@ -158,10 +203,49 @@ pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
             ));
         }
     }
-    for (id, was) in &old.windows {
-        let kept = was.sessions.iter().any(|s| new.sessions.contains_key(s));
-        if !new.windows.contains_key(id) && kept {
-            out.push(format!("%unlinked-window-close {id}"));
+    for (pane, mode) in &new.modes {
+        if old.modes.get(pane).is_some_and(|was| was != mode) {
+            out.push(format!("%pane-mode-changed {pane}"));
+        }
+    }
+    for (name, session) in &new.clients {
+        if old.clients.get(name) != Some(session) {
+            out.push(format!("%client-session-changed {name} {session}"));
+        }
+    }
+    for name in old.clients.keys() {
+        if !new.clients.contains_key(name) {
+            out.push(format!("%client-detached {name}"));
+        }
+    }
+    // A buffer set again under its name is freed and added (`paste_set`).
+    let names: BTreeSet<&String> = old.buffers.keys().chain(new.buffers.keys()).collect();
+    for name in names {
+        match (old.buffers.get(name), new.buffers.get(name)) {
+            (Some(a), Some(b)) if a == b => {}
+            (was, now) => {
+                if was.is_some() {
+                    out.push(format!("%paste-buffer-deleted {name}"));
+                }
+                if now.is_some() {
+                    out.push(format!("%paste-buffer-changed {name}"));
+                }
+            }
+        }
+    }
+    if new.sessions.contains_key(attached) {
+        for (id, was) in &old.windows {
+            let now = new.windows.get(id);
+            let kind = if now.is_some_and(|w| w.sessions.contains(attached)) {
+                "window-close"
+            } else {
+                "unlinked-window-close"
+            };
+            let left = was
+                .sessions
+                .iter()
+                .filter(|s| now.is_none_or(|w| !w.sessions.contains(*s)));
+            out.extend(left.map(|_| format!("%{kind} {id}")));
         }
     }
     out
@@ -242,8 +326,80 @@ mod tests {
         );
     }
 
+    /// Recorded on tmux 3.7b: `link-window` of a window of the attached
+    /// session into `two`, `unlink-window` of that link, then `kill-window`.
     #[test]
-    fn a_killed_window_closes_unlinked_but_a_killed_session_is_quiet() {
+    fn links_gained_and_lost_add_and_close() {
+        let base = [
+            "$0\t@0\t1\t%0\tL\t*\ta",
+            "$0\t@2\t0\t%2\tL\t-\tc",
+            "$1\t@1\t1\t%1\tL\t*\tb",
+        ];
+        let old = snap(&[("$0", "m"), ("$1", "two")], &base);
+        let mut linked = base.to_vec();
+        linked[2] = "$1\t@1\t0\t%1\tL\t-\tb";
+        linked.push("$1\t@2\t1\t%2\tL\t*\tc");
+        let linked = snap(&[("$0", "m"), ("$1", "two")], &linked);
+        assert_eq!(
+            diff(&old, &linked, "$0"),
+            ["%window-add @2", "%session-window-changed $1 @2"]
+        );
+        assert_eq!(
+            diff(&linked, &old, "$0"),
+            ["%session-window-changed $1 @1", "%window-close @2"]
+        );
+        let killed = snap(
+            &[("$0", "m"), ("$1", "two")],
+            &["$0\t@0\t1\t%0\tL\t*\ta", "$1\t@1\t1\t%1\tL\t*\tb"],
+        );
+        assert_eq!(
+            diff(&linked, &killed, "$0"),
+            [
+                "%session-window-changed $1 @1",
+                "%unlinked-window-close @2",
+                "%unlinked-window-close @2",
+            ]
+        );
+    }
+
+    #[test]
+    fn modes_clients_and_buffers() {
+        let mut old = snap(&[("$0", "m"), ("$1", "two")], &[]);
+        old.modes.insert("%0".into(), String::new());
+        old.clients.insert("/dev/pts/1".into(), "$1 two".into());
+        old.clients.insert("/dev/pts/2".into(), "$1 two".into());
+        old.buffers.insert("b1".into(), "5\t1\thello".into());
+        old.buffers.insert("b2".into(), "1\t1\tx".into());
+        let mut new = old.clone();
+        new.modes.insert("%0".into(), "copy-mode".into());
+        new.clients.insert("/dev/pts/1".into(), "$0 m".into());
+        new.clients.remove("/dev/pts/2");
+        new.buffers.insert("b1".into(), "5\t2\tworld".into());
+        new.buffers.remove("b2");
+        new.buffers.insert("buffer0".into(), "4\t2\tanon".into());
+        assert_eq!(
+            diff(&old, &new, "$0"),
+            [
+                "%pane-mode-changed %0",
+                "%client-session-changed /dev/pts/1 $0 m",
+                "%client-detached /dev/pts/2",
+                "%paste-buffer-deleted b1",
+                "%paste-buffer-changed b1",
+                "%paste-buffer-deleted b2",
+                "%paste-buffer-changed buffer0",
+            ]
+        );
+    }
+
+    #[test]
+    fn any_session_rename_is_sent() {
+        let old = snap(&[("$0", "m"), ("$1", "two")], &[]);
+        let new = snap(&[("$0", "m"), ("$1", "deux")], &[]);
+        assert_eq!(diff(&old, &new, "$0"), ["%session-renamed $1 deux"]);
+    }
+
+    #[test]
+    fn a_killed_window_closes_unlinked_and_so_do_a_killed_sessions() {
         let old = snap(
             &[("$0", "m"), ("$1", "t")],
             &[
@@ -261,6 +417,12 @@ mod tests {
             &[("$0", "m")],
             &["$0\t@0\t1\t%0\tL\t*\ta", "$0\t@1\t0\t%1\tL\t-\tb"],
         );
-        assert_eq!(diff(&old, &no_session, "$0"), ["%sessions-changed"]);
+        // Recorded: `kill-session` of another session closes its windows.
+        assert_eq!(
+            diff(&old, &no_session, "$0"),
+            ["%sessions-changed", "%unlinked-window-close @2"]
+        );
+        // The client's own session went: it leaves, with no window notices.
+        assert_eq!(diff(&old, &no_session, "$1"), ["%sessions-changed"]);
     }
 }

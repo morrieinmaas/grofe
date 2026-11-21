@@ -396,6 +396,40 @@ impl Spec {
                 }))
     }
 
+    /// `args` (after the verb) as tmux's getopt reads them for this
+    /// command.
+    pub fn getopt<'a>(&self, args: &'a [String]) -> Getopt<'a> {
+        let mut flags = Vec::new();
+        let mut i = 0;
+        while let Some(arg) = args.get(i) {
+            if arg == "--" {
+                i += 1;
+                break;
+            }
+            let Some(letters) = arg.strip_prefix('-').filter(|l| !l.is_empty()) else {
+                break;
+            };
+            i += 1;
+            for (at, flag) in letters.char_indices() {
+                if !self.takes_value(flag) {
+                    flags.push((flag, None));
+                    continue;
+                }
+                let attached = &letters[at + flag.len_utf8()..];
+                let value = if attached.is_empty() {
+                    let next = args.get(i).map(String::as_str);
+                    i += usize::from(next.is_some());
+                    next
+                } else {
+                    Some(attached)
+                };
+                flags.push((flag, value));
+                break;
+            }
+        }
+        Getopt { flags, rest: i }
+    }
+
     /// How many positionals the usage requires: its words outside any
     /// `[...]` (`option [value]` is 1, `shell-command command [command]`
     /// 2).
@@ -584,36 +618,7 @@ impl Getopt<'_> {
 
 impl<'a> Invocation<'a> {
     pub fn getopt(&self) -> Getopt<'a> {
-        let args = self.args;
-        let mut flags = Vec::new();
-        let mut i = 0;
-        while let Some(arg) = args.get(i) {
-            if arg == "--" {
-                i += 1;
-                break;
-            }
-            let Some(letters) = arg.strip_prefix('-').filter(|l| !l.is_empty()) else {
-                break;
-            };
-            i += 1;
-            for (at, flag) in letters.char_indices() {
-                if !self.spec.takes_value(flag) {
-                    flags.push((flag, None));
-                    continue;
-                }
-                let attached = &letters[at + flag.len_utf8()..];
-                let value = if attached.is_empty() {
-                    let next = args.get(i).map(String::as_str);
-                    i += usize::from(next.is_some());
-                    next
-                } else {
-                    Some(attached)
-                };
-                flags.push((flag, value));
-                break;
-            }
-        }
-        Getopt { flags, rest: i }
+        self.spec.getopt(self.args)
     }
 
     /// The option a `set`/`show` (or `setw`/`showw`) names: its first
