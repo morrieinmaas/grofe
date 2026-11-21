@@ -204,17 +204,28 @@ impl Options {
         self.runtime.insert(name.to_string());
     }
 
-    /// Hands a global option back to the config: `reload` sets it again
-    /// (a reset in customize-mode, after the key left settings.toml).
-    /// Whether it was marked.
-    pub fn forget_runtime(&mut self, name: &str) -> bool {
-        self.runtime.remove(name)
+    /// Takes global option `name` out of the runtime's hands, so the next
+    /// `reload` applies the config's value and records the base itself: the
+    /// mark goes and the value falls back to the built-in default (a user
+    /// option keeps its value). Returns the value it had, or `None` when it
+    /// was not marked.
+    pub fn release_runtime(&mut self, name: &str) -> Option<String> {
+        if !self.runtime.remove(name) {
+            return None;
+        }
+        let live = self.get(Owner::Global, name)?.value.clone();
+        if let Some(b) = builtin(name) {
+            let default = self.default_of(b).to_string();
+            let _ = self.set(Owner::Global, name, &default, false);
+        }
+        Some(live)
     }
 
-    /// Puts back a mark [`Self::forget_runtime`] took, when the reload that
+    /// Puts back what [`Self::release_runtime`] took, when the reload that
     /// was to hand the option to the config failed.
-    pub fn remember_runtime(&mut self, name: &str) {
-        self.runtime.insert(name.to_string());
+    pub fn restore_runtime(&mut self, name: &str, live: &str) {
+        let _ = self.set(Owner::Global, name, live, false);
+        self.mark_runtime(name);
     }
 
     /// Sets `name` at `owner`. Returns whether the value changed: setting

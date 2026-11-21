@@ -449,6 +449,82 @@ fn a_failed_reload_after_p_keeps_the_runtime_value() {
     assert_eq!(global(&srv, "history-limit"), "222", "{}", h.text());
 }
 
+/// `P` on `history-limit`, which was set to 222 at runtime.
+fn save_history_limit(srv: &TestServer, h: &mut Harness) {
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("history-limit listed", WAIT, |t| {
+        t.contains("history-limit:")
+    });
+    h.send("j");
+    h.send("P");
+    let saved = wait_settings(srv, |t| {
+        t.get("history-limit").and_then(|v| v.as_integer()) == Some(222)
+    });
+    assert!(
+        saved.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(srv)),
+        h.text()
+    );
+}
+
+/// After `P`, the config owns the option and has recorded its base: with the
+/// key deleted from settings.toml by hand, a `reload` shows the built-in
+/// default, not the value that was saved.
+#[test]
+fn deleting_a_saved_key_by_hand_restores_the_default_on_reload() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 80);
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    save_history_limit(&srv, &mut h);
+    fs::write(settings_file(&srv), "").expect("hand edit");
+    srv.cmd(&["reload"]).expect("reload");
+    let shown = try_wait_until(|| global(&srv, "history-limit") == "2000", WAIT);
+    assert!(
+        shown.is_ok(),
+        "history-limit: {}\n{}",
+        global(&srv, "history-limit"),
+        h.text()
+    );
+}
+
+/// When the reload after `P` on a key fails, the runtime binding stays: a
+/// later good reload leaves it alone.
+#[test]
+fn a_failed_reload_after_p_keeps_the_runtime_binding() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{key},F5}", 100);
+    srv.cmd(&["bind-key", "F5", "display-message", "one"])
+        .expect("bind-key");
+    open_f5(&mut h);
+    fs::write(user_file(&srv), "history-limit = = oops\n").expect("user.toml");
+    h.send("P");
+    h.wait_until("error shown", WAIT, |t| t.contains("user.toml"));
+    assert!(
+        key_line(&srv, "F5").contains("one"),
+        "{}",
+        key_line(&srv, "F5")
+    );
+    fs::write(
+        user_file(&srv),
+        "[keys.prefix]\nF5 = \"display-message user\"\n",
+    )
+    .expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(
+        key_line(&srv, "F5").contains("one"),
+        "F5: {}\n{}",
+        key_line(&srv, "F5"),
+        h.text()
+    );
+}
+
 /// `d` on a session-local value leaves the saved global entry in settings.toml.
 #[test]
 fn d_on_a_session_local_value_keeps_the_global_entry() {
