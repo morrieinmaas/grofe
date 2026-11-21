@@ -164,6 +164,7 @@ fn rollback_after_a_bad_value_gives_a_loadable_file() {
     let saved = write::set(tmp.path(), "history-limit", value("lots")).expect("set");
     let env = |d: &Path| Env {
         config_dir: Some(d.to_path_buf()),
+        config_file: None,
         home: None,
     };
     assert!(
@@ -182,6 +183,7 @@ fn unset_removes_the_key_and_the_lower_layer_applies_again() {
     let tmp = dir();
     let env = Env {
         config_dir: Some(tmp.path().to_path_buf()),
+        config_file: None,
         home: None,
     };
     fs::write(tmp.path().join("user.toml"), "history-limit = 111\n").expect("user");
