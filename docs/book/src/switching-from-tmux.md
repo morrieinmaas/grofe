@@ -17,11 +17,17 @@ against send, but some things are not there yet or never will be:
   of the usual config, when the call starts the server. A file named
   `*.toml` stays grofe's own config, and `grofe`'s own server start reads
   TOML only (`grofe import-tmux` converts a `tmux.conf`).
-- **Control mode** (`tmux -C` and `-CC`) has a first slice: `attach` and
-  `new-session` through a client-side bridge. Several notifications and
-  commands are still missing, and iTerm2 has not been checked end to end;
-  the [control-mode spec](https://github.com/termage/grofe/blob/main/docs/specs/2026-11-15-control-mode.md)
-  lists what is left.
+- **Control mode** (`tmux -C` and `-CC`) works for `attach` and
+  `new-session` through a client-side bridge: command blocks, every
+  notification tmux 3.7b sends (windows, panes, modes, sessions, other
+  clients, paste buffers, `%message`, `%config-error`), flow control with
+  `refresh-client -f` and `-A`, sizing with `-C`, and subscriptions with
+  `refresh-client -B name:what:format`. The bridge sees the server through
+  snapshots, so notices of one command come in a fixed order and two quick
+  changes can merge; `refresh-client -r` is refused, and iTerm2 has not been
+  checked end to end. The
+  [control-mode spec](https://github.com/termage/grofe/blob/main/docs/specs/2026-11-15-control-mode.md)
+  lists each divergence.
 - **Out of scope:** a window linked twice into one session is refused.
 
 Keep real tmux reachable by its full path while you try grofe.

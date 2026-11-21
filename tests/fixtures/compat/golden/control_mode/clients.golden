@@ -1,0 +1,15 @@
+%begin T N 0
+%end T N 0
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%client-session-changed CLIENT $0 main
+%begin T N 1
+%end T N 1
+%client-session-changed CLIENT $1 two
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%client-detached CLIENT
+%exit

@@ -4,13 +4,17 @@
 # Usage: scripts/record-compat-goldens.sh [--check] [--tmux PATH] [SCENARIO...]
 #
 #   (default)    record every tests/fixtures/compat/golden/**/*.scenario into
-#                its sibling .golden, plus golden/list-commands.txt
+#                its sibling .golden, plus golden/list-commands.txt, and the
+#                control-mode cases of tests/control_mode into
+#                golden/control_mode/<case>.golden
 #   --check      record into a scratch dir and diff against the committed
 #                goldens; exits nonzero on any difference (the determinism check)
 #   --tmux PATH  the tmux to record from, as a path inside the container
 #                (default /usr/local/bin/tmux, built by the image)
 #   SCENARIO     record only scenarios whose path (relative to golden/)
-#                contains one of these strings, e.g. fe_1/ or tc_0b/errors
+#                contains one of these strings, e.g. fe_1/ or tc_0b/errors;
+#                control_mode records the control-mode cases (alone, it
+#                records only them)
 #
 # Recording happens only inside the container built from
 # containers/compat/golden.Containerfile, never against the host's tmux, and
@@ -19,6 +23,11 @@
 # read-only, and hands the goldens back as a tar on stdout. As a guard the
 # script lists the host's real tmux and grofe socket directories before and
 # after and fails if they changed.
+#
+# The control-mode cases are driven from the host (`cargo test --test
+# control_mode`, as rustc does not run in the emulated container) against a
+# wrapper that runs each tmux command in a container of the same image, so
+# the tmux they record is still the container's.
 #
 # The image is always linux/amd64, emulated on another host: tmux's output
 # depends on the platform, as copy-mode search keeps the case of a pattern
@@ -65,27 +74,56 @@ before=$(socket_dirs)
 podman build -q --platform linux/amd64 -t "$image" -f "$repo/containers/compat/golden.Containerfile" \
   "$repo/containers/compat" >/dev/null
 
-run=(podman run --rm --platform linux/amd64
-  -v "$repo:/src:ro"
-  -v grofe-compat-golden-target-v2:/target
-  -v grofe-compat-golden-cargo-v2:/home/golden/cargo)
-
-"${run[@]}" "$image" cargo fetch --locked >&2
-
 scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
+mkdir "$scratch/out"
+ctr=
+trap 'rm -rf "$scratch"; [ -z "$ctr" ] || podman rm -f "$ctr" >/dev/null' EXIT
 
-# A fixed hostname keeps pane titles (and so the status line) stable; the
-# normalizer still replaces it, for the grofe side.
-"${run[@]}" --network none --hostname grofe-golden \
-  -e CARGO_NET_OFFLINE=true \
-  -e GROFE_COMPAT_TMUX="$tmux_path" \
-  -e GROFE_COMPAT_SCENARIOS="${scenarios[*]:-}" \
-  -e GROFE_COMPAT_OUT=/tmp/out \
-  "$image" sh -c '
-    cargo test --locked --quiet --test compat -- \
-      --ignored --exact record::record_goldens --nocapture >&2 &&
-    tar -C /tmp/out -cf - .' | tar -C "$scratch" -xf -
+want_control=0
+want_scenarios=0
+if [ ${#scenarios[@]} = 0 ]; then
+  want_control=1 want_scenarios=1
+fi
+for s in ${scenarios[@]+"${scenarios[@]}"}; do
+  if [ "$s" = control_mode ]; then want_control=1; else want_scenarios=1; fi
+done
+
+if [ "$want_control" = 1 ]; then
+  ctr=$(podman run -d --rm --platform linux/amd64 --network none --hostname grofe-golden \
+    -v "$repo:$repo:ro" "$image" sleep 3600)
+  cat > "$scratch/tmux" <<WRAP
+#!/bin/sh
+tty=
+[ -t 0 ] && tty=-t
+exec podman exec -i \$tty -e TERM=xterm-256color -e SHELL=/bin/sh -e TMUX_TMPDIR=/tmp \\
+  "$ctr" "$tmux_path" "\$@"
+WRAP
+  chmod +x "$scratch/tmux"
+  (cd "$repo" && GROFE_COMPAT_TMUX="$scratch/tmux" GROFE_COMPAT_OUT="$scratch/out" \
+    cargo test --locked --quiet --test control_mode -- \
+      --ignored --exact record_control_goldens --nocapture >&2)
+fi
+
+if [ "$want_scenarios" = 1 ]; then
+  run=(podman run --rm --platform linux/amd64
+    -v "$repo:/src:ro"
+    -v grofe-compat-golden-target-v2:/target
+    -v grofe-compat-golden-cargo-v2:/home/golden/cargo)
+
+  "${run[@]}" "$image" cargo fetch --locked >&2
+
+  # A fixed hostname keeps pane titles (and so the status line) stable; the
+  # normalizer still replaces it, for the grofe side.
+  "${run[@]}" --network none --hostname grofe-golden \
+    -e CARGO_NET_OFFLINE=true \
+    -e GROFE_COMPAT_TMUX="$tmux_path" \
+    -e GROFE_COMPAT_SCENARIOS="${scenarios[*]:-}" \
+    -e GROFE_COMPAT_OUT=/tmp/out \
+    "$image" sh -c '
+      cargo test --locked --quiet --test compat -- \
+        --ignored --exact record::record_goldens --nocapture >&2 &&
+      tar -C /tmp/out -cf - .' | tar -C "$scratch/out" -xf -
+fi
 
 after=$(socket_dirs)
 if [ "$before" != "$after" ]; then
@@ -96,15 +134,15 @@ fi
 
 golden=$repo/tests/fixtures/compat/golden
 if [ "$check" = 0 ]; then
-  cp -R "$scratch/." "$golden/"
+  cp -R "$scratch/out/." "$golden/"
   exit 0
 fi
 status=0
 while IFS= read -r -d '' f; do
-  rel=${f#"$scratch"/}
+  rel=${f#"$scratch/out"/}
   if ! diff -u "$golden/$rel" "$f"; then
     status=1
   fi
-done < <(find "$scratch" -type f -print0)
+done < <(find "$scratch/out" -type f -print0)
 [ "$status" = 0 ] && echo "goldens reproduce byte for byte"
 exit "$status"

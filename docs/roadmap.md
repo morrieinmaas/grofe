@@ -27,9 +27,9 @@ codebase-health review of 2026-11-15. Each item is one branch and one PR.
 - **Keys, targets, format variables and inert options** that scripts rely on
   and grofe lacks.
 - **Control mode, the rest.** `-C` and `-CC` work as a client-side bridge
-  (`docs/specs/2026-11-15-control-mode.md`); left are subscriptions
-  (`refresh-client -B`), the auto-pause of `pause-after`, a server-side client
-  kind, and an iTerm2 end-to-end check.
+  (`docs/specs/2026-11-15-control-mode.md`) with every notification and
+  `refresh-client -B`; left are a server-side client kind (which removes the
+  divergences the spec lists) and an iTerm2 end-to-end check.
 
 ## Features
 

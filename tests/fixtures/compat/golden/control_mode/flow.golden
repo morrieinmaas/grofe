@@ -1,0 +1,107 @@
+%begin T N 0
+%end T N 0
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%window-pane-changed @0 %1
+%layout-change @0 8205,80x24,0,0{40x24,0,0,0,39x24,41,0,1} 8205,80x24,0,0{40x24,0,0,0,39x24,41,0,1} *
+%begin T N 1
+%end T N 1
+%window-pane-changed @0 %0
+%begin T N 1
+%end T N 1
+%layout-change @0 b25d,80x24,0,0,0 b25d,80x24,0,0,0 *
+%begin T N 1
+%end T N 1
+%layout-change @0 a87d,100x30,0,0,0 a87d,100x30,0,0,0 *
+%begin T N 1
+size too small or too big
+%error T N 1
+%begin T N 1
+bad size argument
+%error T N 1
+%begin T N 1
+%end T N 1
+%layout-change @0 b69d,90x25,0,0,0 b69d,90x25,0,0,0 *
+%begin T N 1
+size too small or too big
+%error T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%extended-output %0 A : abc\015\012abc\015\012
+%begin T N 1
+%pause %0
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%continue %0
+%end T N 1
+%begin T N 1
+%end T N 1
+%extended-output %0 A : DEF\015\012DEF\015\012
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%extended-output %0 A : ghi\015\012ghi\015\012
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%extended-output %0 A : JKL\015\012JKL\015\012
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%pause %0
+%end T N 1
+%begin T N 1
+%continue %0
+%end T N 1
+%begin T N 1
+%pause %0
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%continue %0
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%extended-output %0 A : stu\015\012stu\015\012
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%extended-output %0 A : vwx\015\012vwx\015\012
+%begin T N 1
+%end T N 1
+%exit

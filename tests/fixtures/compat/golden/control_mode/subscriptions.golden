@@ -1,0 +1,42 @@
+%begin T N 0
+%end T N 0
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%subscription-changed sname $0 - - - : main
+%subscription-changed pane0 $0 @0 0 %0 : %0-0
+%subscription-changed win1 $0 @1 1 - : w1
+%subscription-changed allp $0 @0 0 %0 : 0
+%subscription-changed allp $0 @0 0 %1 : 1
+%subscription-changed allp $0 @1 1 %2 : 0
+%subscription-changed allw $0 @0 0 - : w0
+%subscription-changed allw $0 @1 1 - : w1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%window-renamed @1 ren
+%session-renamed $0 newname
+%subscription-changed sname $0 - - - : newname
+%subscription-changed win1 $0 @1 1 - : ren
+%subscription-changed allw $0 @1 1 - : ren
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%begin T N 1
+%end T N 1
+%window-renamed @1 again
+%session-renamed $0 third
+%subscription-changed win1 $0 @1 1 - : again
+%begin T N 1
+%end T N 1
+%subscription-changed bad $0 - - - : %0
+%subscription-changed dash $0 - - - : -third
+%subscription-changed neg $0 - - - : $0
+%subscription-changed p00 $0 @0 0 %0 : 0
+%subscription-changed p0x $0 @0 0 %0 : %0
+%subscription-changed sp1 $0 @0 0 %1 : %1
+%subscription-changed sp2 $0 @0 0 %1 : %1
+%subscription-changed w0 $0 @0 0 - : @0
+%exit

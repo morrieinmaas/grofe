@@ -1120,9 +1120,7 @@ impl FormatVars for FormatCtx<'_> {
             "session_attached" => s.attached.to_string(),
             "session_path" => s.cwd.display().to_string(),
             "window_layout" => window_layout(w),
-            // ponytail: a zoomed window's visible layout is its one zoomed
-            // pane; not built, so no answer then.
-            "window_visible_layout" if !w.zoomed => window_layout(w),
+            "window_visible_layout" => window_visible_layout(w),
             "window_raw_flags" => window_flags(m, s, w),
             "pane_id" => p.id.to_string(),
             "pane_uid" => p.uid.clone(),
@@ -1466,6 +1464,24 @@ pub(crate) fn window_layout(w: &crate::server::model::Window) -> String {
         })
         .collect();
     tmux_layout(&w.layout.export(w.area()), &floating, !w.zoomed)
+}
+
+/// tmux's `window_visible_layout`: the layout, or for a zoomed window its
+/// one zoomed pane over the whole window.
+fn window_visible_layout(w: &crate::server::model::Window) -> String {
+    use crate::server::layout::{GeometryCell, LayoutGeometry, tmux_layout};
+    if !w.zoomed {
+        return window_layout(w);
+    }
+    let area = w.area();
+    let zoomed = LayoutGeometry {
+        x: area.x,
+        y: area.y,
+        cols: area.cols,
+        rows: area.rows,
+        cell: GeometryCell::Pane(w.active),
+    };
+    tmux_layout(&zoomed, &[], true)
 }
 
 /// tmux's `window_flags`: `#` activity (written `##`, as tmux escapes it

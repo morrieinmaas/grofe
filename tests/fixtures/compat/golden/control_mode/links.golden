@@ -1,0 +1,33 @@
+%begin T N 0
+%end T N 0
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%window-add @2
+%begin T N 1
+%end T N 1
+%window-add @2
+%session-window-changed $1 @2
+%begin T N 1
+%end T N 1
+%session-window-changed $1 @1
+%window-close @2
+%begin T N 1
+%end T N 1
+%window-add @1
+%session-window-changed $0 @1
+%begin T N 1
+%end T N 1
+%session-window-changed $0 @0
+%unlinked-window-close @1
+%begin T N 1
+%end T N 1
+%unlinked-window-renamed @1 x
+%begin T N 1
+%end T N 1
+%session-renamed $1 deux
+%begin T N 1
+%end T N 1
+%sessions-changed
+%unlinked-window-close @1
+%exit

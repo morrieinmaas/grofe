@@ -1,0 +1,10 @@
+%begin T N 0
+%end T N 0
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%layout-change @0 c195,80x24,0,0[80x12,0,0,0,80x11,0,13,1] b25d,80x24,0,0,0 *Z
+%begin T N 1
+%end T N 1
+%layout-change @0 c195,80x24,0,0[80x12,0,0,0,80x11,0,13,1] c195,80x24,0,0[80x12,0,0,0,80x11,0,13,1] *
+%exit
