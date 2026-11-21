@@ -2,6 +2,7 @@
 //! layout in one fuzzy list, previewed live and saved to `settings.toml`.
 
 pub mod apply;
+pub mod keys;
 pub mod layouts;
 pub mod overlay;
 mod rows;

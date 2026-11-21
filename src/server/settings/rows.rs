@@ -2,10 +2,10 @@
 
 use std::path::Path;
 
-use crate::config::{Layer, Provenance, Source};
+use crate::config::{self, Layer, Provenance, Source};
 use crate::server::customize::{Scope, set_command};
 use crate::server::dispatch::options::{Kind, option_docs};
-use crate::server::input::Routed;
+use crate::server::input::{Key, Routed};
 use crate::server::prompt;
 use crate::server::{State, clients, dispatch};
 use crate::types::ClientId;
@@ -16,6 +16,8 @@ use super::sections::{Section, section_of};
 #[derive(Clone)]
 pub struct Row {
     pub name: &'static str,
+    /// The key in settings.toml.
+    pub toml: &'static str,
     pub section: Section,
     pub doc: &'static str,
     pub default: &'static str,
@@ -23,6 +25,26 @@ pub struct Row {
     /// Where the config sets it, `overrides <file>:<line>` when
     /// settings.toml hides a lower layer's value; empty for the default.
     pub note: String,
+}
+
+/// A key or layout row, listed beside the options.
+pub struct Entry {
+    pub section: Section,
+    pub cols: Vec<String>,
+    pub act: Act,
+}
+
+/// What Enter on an [`Entry`] works on.
+pub enum Act {
+    Key { table: String, key: Key },
+    Layout { name: String, toml: String },
+}
+
+/// `v`, the text of option `toml_key`, as the TOML value settings.toml
+/// holds.
+pub fn item(toml_key: &str, v: &str) -> toml_edit::Item {
+    let text = config::literal(toml_key, v);
+    toml_edit::Item::Value(text.parse().unwrap_or_else(|_| v.into()))
 }
 
 fn place(src: &Source, dir: Option<&Path>) -> String {
@@ -42,6 +64,7 @@ pub fn build(prov: &Provenance, dir: Option<&Path>) -> Vec<Row> {
             };
             Row {
                 name: o.name,
+                toml: o.toml,
                 section: section_of(o.name),
                 doc: o.doc,
                 default: o.default,

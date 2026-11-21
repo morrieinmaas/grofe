@@ -1,7 +1,45 @@
 //! The settings menu's Layouts section: layout files and their previews.
 
 use crate::layouts::{self, Dirs, schema};
+use crate::server::listdraw;
+use crate::server::render::Screen;
+use crate::server::status::Style;
 use crate::server::{State, clients};
+use crate::types::Rect;
+
+use super::rows::{Act, Entry};
+use super::sections::Section;
+
+/// A row per file in the layouts directory: name and the sessions it makes.
+pub fn entries() -> Vec<Entry> {
+    let Ok(found) = layouts::entries(&Dirs::from_process()) else {
+        return Vec::new();
+    };
+    found
+        .into_iter()
+        .map(|e| Entry {
+            section: Section::Layouts,
+            cols: vec![
+                e.name.clone(),
+                e.sessions.map_or_else(|err| err, |s| s.join(", ")),
+            ],
+            act: Act::Layout {
+                name: e.name,
+                toml: std::fs::read_to_string(&e.file).unwrap_or_default(),
+            },
+        })
+        .collect()
+}
+
+/// Draws the preview of `layout_toml` into `area`.
+pub fn draw_preview(screen: &mut Screen, area: Rect, layout_toml: &str) {
+    let lines = preview(layout_toml, area.cols, area.rows.min(12));
+    for (i, line) in lines.iter().enumerate() {
+        let end = usize::from(area.x + area.cols);
+        let y = usize::from(area.y) + i;
+        listdraw::put_text(screen, usize::from(area.x), y, end, line, &Style::default());
+    }
+}
 
 /// Logs `default-layout: no layout <name>` when the option names no layout
 /// file; the client then builds nothing and the session stays plain.
