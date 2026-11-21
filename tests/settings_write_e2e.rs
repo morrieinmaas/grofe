@@ -78,3 +78,179 @@ fn s_in_customize_mode_saves_the_selected_option() {
         .expect("toml");
     assert_eq!(t.len(), 1, "{t:?}");
 }
+
+/// A server with a session `s` and customize-mode on `C`, filtered by the
+/// format `filter`; an attached client of `cols` columns.
+fn attach(srv: &TestServer, filter: &str, cols: u16) -> Harness {
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "s",
+        "-x",
+        &cols.to_string(),
+        "-y",
+        "20",
+        "cat",
+    ])
+    .expect("new-session");
+    let h = Harness::spawn_attach_with_env(srv.command(), "s", &[], cols, 20);
+    srv.cmd(&["bind-key", "C", "customize-mode", "-Z", "-f", filter])
+        .expect("bind-key");
+    h
+}
+
+fn settings_file(srv: &TestServer) -> std::path::PathBuf {
+    srv.config_home.join("grofe").join("settings.toml")
+}
+
+fn user_file(srv: &TestServer) -> std::path::PathBuf {
+    srv.config_home.join("grofe").join("user.toml")
+}
+
+/// The saved table of settings.toml, once it parses and `has` holds for it.
+fn wait_settings(srv: &TestServer, has: impl Fn(&toml::Table) -> bool) -> Result<(), String> {
+    let file = settings_file(srv);
+    try_wait_until(
+        || {
+            fs::read_to_string(&file)
+                .ok()
+                .and_then(|t| t.parse::<toml::Table>().ok())
+                .is_some_and(|t| has(&t))
+        },
+        WAIT,
+    )
+}
+
+fn global(srv: &TestServer, name: &str) -> String {
+    srv.cmd(&["show", "-gv", name])
+        .expect("show")
+        .trim()
+        .to_string()
+}
+
+/// T16: `P` over user.toml, then `d`: the key is gone from settings.toml and
+/// the user.toml value shows again (AC2.7).
+#[test]
+fn d_in_customize_mode_resets_to_the_lower_layer() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 80);
+    fs::write(user_file(&srv), "history-limit = 111\n").expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(global(&srv, "history-limit"), "111");
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("history-limit listed", WAIT, |t| {
+        t.contains("history-limit:")
+    });
+    h.send("j");
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        t.get("history-limit").and_then(|v| v.as_integer()) == Some(222)
+    });
+    assert!(
+        saved.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(&srv)),
+        h.text()
+    );
+    h.send("d");
+    h.wait_until("reset asked", WAIT, |t| t.contains("Reset history-limit"));
+    h.send("y");
+    let gone = wait_settings(&srv, |t| !t.contains_key("history-limit"));
+    assert!(
+        gone.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(&srv)),
+        h.text()
+    );
+    let shown = try_wait_until(|| global(&srv, "history-limit") == "111", WAIT);
+    assert!(
+        shown.is_ok(),
+        "history-limit: {}\n{}",
+        global(&srv, "history-limit"),
+        h.text()
+    );
+}
+
+/// `P` on a key binding writes its command in the config's spelling, its
+/// note and its repeat flag.
+#[test]
+fn p_on_a_key_saves_the_binding() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{key},F5}", 100);
+    srv.cmd(&[
+        "bind-key",
+        "-r",
+        "-N",
+        "my note",
+        "F5",
+        "display-message",
+        "one",
+        "\\;",
+        "display-message",
+        "two",
+    ])
+    .expect("bind-key");
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Key Table - prefix")
+    });
+    // The groups are not filtered away; the prefix table is the sixth.
+    for _ in 0..5 {
+        h.send("j");
+    }
+    h.send("l");
+    h.wait_until("key listed", WAIT, |t| t.contains("F5"));
+    h.send("j");
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        t.get("keys")
+            .and_then(|k| k.get("prefix")?.get("F5"))
+            .is_some()
+    });
+    let text = fs::read_to_string(settings_file(&srv));
+    assert!(saved.is_ok(), "{text:?}\n{}", h.text());
+    let t: toml::Table = text.expect("read").parse().expect("toml");
+    let e = &t["keys"]["prefix"]["F5"];
+    assert_eq!(
+        e["cmd"].as_str(),
+        Some("display-message one ; display-message two"),
+        "{e:?}"
+    );
+    assert_eq!(e["desc"].as_str(), Some("my note"), "{e:?}");
+    assert_eq!(e["repeat"].as_bool(), Some(true), "{e:?}");
+}
+
+/// AC2.6: when the reload after `P` fails (a broken user.toml), settings.toml
+/// keeps its bytes and the error is shown.
+#[test]
+fn a_failed_reload_after_p_keeps_the_file_and_shows_the_error() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},status}", 200);
+    srv.cmd(&["set", "-g", "status", "3"]).expect("set");
+    let before = "# mine\nmouse = true\n";
+    fs::write(settings_file(&srv), before).expect("settings.toml");
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("status listed", WAIT, |t| t.contains("status:"));
+    h.send("j");
+    fs::write(user_file(&srv), "history-limit = = oops\n").expect("user.toml");
+    h.send("P");
+    h.wait_until("error shown", WAIT, |t| t.contains("user.toml"));
+    assert_eq!(
+        fs::read_to_string(settings_file(&srv)).expect("read"),
+        before
+    );
+    assert!(!h.text().contains("Saved status"), "{}", h.text());
+}

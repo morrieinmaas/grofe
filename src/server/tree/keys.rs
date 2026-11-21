@@ -519,11 +519,15 @@ pub(super) fn custom_change(
             tree.tag = Some(above);
         }
         let mut cmds = Vec::new();
+        let mut reset_names = Vec::new();
         for (entry, fs) in entries {
             match entry {
                 Entry::Option { scope, name, idx } => {
                     if reset && idx.is_some() {
                         continue;
+                    }
+                    if reset {
+                        reset_names.push(name.clone());
                     }
                     cmds.extend(customize::unset_commands(
                         state, fs, scope, &name, idx, reset,
@@ -539,6 +543,14 @@ pub(super) fn custom_change(
             }
         }
         rebuild(state, client, None);
+        // A reset also takes the option out of settings.toml, so the layer
+        // below applies again (AC2.7).
+        if !reset_names.is_empty() {
+            if let Err(e) = customize::reset(state, client, &cmds, &reset_names) {
+                error_message(state, client, &e);
+            }
+            return Routed::Consumed;
+        }
         Routed::Command(cmds, Dialect::Tmux)
     })
 }

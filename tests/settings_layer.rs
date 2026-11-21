@@ -33,8 +33,8 @@ fn settings_toml_wins_over_user_toml() {
     assert_eq!(r.get("history-limit"), Some("222"));
 }
 
-/// T10: a key only settings.toml sets still loads, and the layer is User or later
-/// (it must not be reported as the defaults).
+/// T10: a key only settings.toml sets still loads, and its provenance is the
+/// Settings layer (not the defaults, not User).
 #[test]
 fn settings_toml_alone_sets_a_key() {
     let (tmp, dir) = setup();
@@ -42,7 +42,17 @@ fn settings_toml_alone_sets_a_key() {
     let env = Env::from_vars(None, tmp.path().join("home").to_str());
     let r = config::load(&env).unwrap_or_else(|e| panic!("load failed: {e:?}"));
     assert_eq!(r.get("history-limit"), Some("333"));
-    let _ = Layer::User;
+    let (_, _, source) = r
+        .configured()
+        .find(|(name, _, _)| *name == "history-limit")
+        .expect("history-limit is configured");
+    assert_eq!(source.layer, Layer::Settings);
+    assert!(
+        source
+            .file
+            .as_deref()
+            .is_some_and(|f| f.ends_with("settings.toml"))
+    );
 }
 
 /// T11: `show-config --explain` names settings.toml for the key it sets and

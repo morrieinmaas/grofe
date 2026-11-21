@@ -2,7 +2,7 @@ use super::*;
 
 /// Where the server reads its config: the process environment (R5). Unit
 /// tests never read the real config dir.
-pub(super) fn config_env() -> config::Env {
+pub(crate) fn config_env() -> config::Env {
     if cfg!(test) {
         return config::Env {
             config_dir: None,

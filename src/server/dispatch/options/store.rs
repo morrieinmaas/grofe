@@ -204,6 +204,12 @@ impl Options {
         self.runtime.insert(name.to_string());
     }
 
+    /// Hands a global option back to the config: `reload` sets it again
+    /// (a reset in customize-mode, after the key left settings.toml).
+    pub fn forget_runtime(&mut self, name: &str) {
+        self.runtime.remove(name);
+    }
+
     /// Sets `name` at `owner`. Returns whether the value changed: setting
     /// an option to its current value is a no-op (spec §4.2), so the
     /// caller emits `option-changed` only on `true`. `persist` (`--persist`)

@@ -246,3 +246,121 @@ fn a_hand_edit_between_saves_survives() {
     let got = read(&file);
     assert!(got.contains("# hand edit\nbase-index = 1\n"), "{got}");
 }
+
+/// An inline table (`status = { lines = 3 }`) takes a nested set and a nested
+/// unset like a dotted key does.
+#[test]
+fn an_inline_table_takes_set_and_unset() {
+    let tmp = dir();
+    let file = tmp.path().join("settings.toml");
+    fs::write(&file, "status = { lines = 3 }\nmouse = true\n").expect("fixture");
+    write::set(tmp.path(), "status.lines", value(2)).expect("set");
+    let v: toml::Table = read(&file).parse().expect("valid toml");
+    assert_eq!(v["status"]["lines"].as_integer(), Some(2), "{v:?}");
+    write::set(tmp.path(), "status.left", value("x")).expect("set a sibling");
+    let v: toml::Table = read(&file).parse().expect("valid toml");
+    assert_eq!(v["status"]["left"].as_str(), Some("x"), "{v:?}");
+    write::unset(tmp.path(), "status.lines").expect("unset");
+    write::unset(tmp.path(), "status.left").expect("unset");
+    let got = read(&file);
+    let v: toml::Table = got.parse().expect("valid toml");
+    assert!(
+        v.get("status").is_none(),
+        "an empty inline table goes: {got}"
+    );
+    assert!(got.contains("mouse = true"), "{got}");
+}
+
+/// `unset` that finds the key removes it; whatever it leaves is not the key.
+#[test]
+fn unset_of_a_nested_key_in_a_header_table_removes_it() {
+    let tmp = dir();
+    let file = tmp.path().join("settings.toml");
+    fs::write(&file, "[status]\nlines = 3\nleft = \"x\"\n").expect("fixture");
+    write::unset(tmp.path(), "status.lines").expect("unset");
+    let v: toml::Table = read(&file).parse().expect("valid toml");
+    assert!(v["status"].get("lines").is_none());
+    assert_eq!(v["status"]["left"].as_str(), Some("x"));
+}
+
+/// A symlinked settings.toml is written through: the link stays, its target
+/// changes, and the target keeps its permissions.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_file_is_written_through_and_keeps_its_mode() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let tmp = dir();
+    let target = tmp.path().join("real.toml");
+    fs::write(&target, "mouse = true\n").expect("target");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("chmod");
+    let link = tmp.path().join("settings.toml");
+    symlink(&target, &link).expect("symlink");
+    write::set(tmp.path(), "history-limit", value(7)).expect("set");
+    assert!(
+        fs::symlink_metadata(&link)
+            .expect("stat")
+            .file_type()
+            .is_symlink(),
+        "the link was replaced by a file"
+    );
+    assert!(
+        read(&target).contains("history-limit = 7"),
+        "{}",
+        read(&target)
+    );
+    let mode = fs::metadata(&target).expect("stat").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+/// A write that fails does not leave its temp file behind.
+#[test]
+fn a_failed_write_removes_its_temp_file() {
+    let tmp = dir();
+    let file = tmp.path().join("settings.toml");
+    let saved = write::set(tmp.path(), "mouse", value(false)).expect("set");
+    // The rename cannot replace a folder with something in it.
+    fs::remove_file(&file).expect("rm");
+    fs::create_dir(&file).expect("mkdir");
+    fs::write(file.join("keep"), "x").expect("keep");
+    assert!(saved.rollback().is_err());
+    let names: Vec<String> = fs::read_dir(tmp.path())
+        .expect("ls")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, vec!["settings.toml".to_string()], "{names:?}");
+}
+
+/// A binding saves its note and repeat flag, and keeps the other fields of
+/// the entry that was there.
+#[test]
+fn a_binding_keeps_the_fields_it_does_not_set() {
+    let tmp = dir();
+    let file = tmp.path().join("settings.toml");
+    fs::write(
+        &file,
+        "[keys.prefix]\nC-t = { cmd = \"a\", group = \"g\", name = \"n\", repeat = true }\n",
+    )
+    .expect("fixture");
+    // `set_binding` changes the command only.
+    write::set_binding(tmp.path(), "prefix", "C-t", "b").expect("bind");
+    let v: toml::Table = read(&file).parse().expect("valid toml");
+    let e = &v["keys"]["prefix"]["C-t"];
+    assert_eq!(e["cmd"].as_str(), Some("b"));
+    assert_eq!(e["group"].as_str(), Some("g"));
+    assert_eq!(e["repeat"].as_bool(), Some(true));
+    // `set_binding_with` also sets the note and the flag, and still keeps the rest.
+    write::set_binding_with(tmp.path(), "prefix", "C-t", "c", Some("my note"), false)
+        .expect("bind");
+    let v: toml::Table = read(&file).parse().expect("valid toml");
+    let e = &v["keys"]["prefix"]["C-t"];
+    assert_eq!(e["cmd"].as_str(), Some("c"));
+    assert_eq!(e["desc"].as_str(), Some("my note"));
+    assert_eq!(e["name"].as_str(), Some("n"));
+    assert!(e.get("repeat").is_none(), "{e:?}");
+    // A new key gets the fields it has.
+    write::set_binding_with(tmp.path(), "prefix", "C-u", "d", Some("n2"), true).expect("bind");
+    let v: toml::Table = read(&file).parse().expect("valid toml");
+    let e = &v["keys"]["prefix"]["C-u"];
+    assert_eq!(e["desc"].as_str(), Some("n2"));
+    assert_eq!(e["repeat"].as_bool(), Some(true));
+}

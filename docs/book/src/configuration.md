@@ -20,19 +20,31 @@ setting removes its key, and the value from the layer below applies again.
 
 In customize-mode (`prefix C` in the tmux identity), `P` writes the selected
 option or key binding to `settings.toml` and reloads the config. `S` is not
-used for this: as in tmux, it sets the option globally. An option with no
-TOML key (a `@user` option or a list option) answers `not saveable`. If the
-reload fails, the file is put back as it was and the error is shown. A
-missing `settings.toml` or config folder is created on the first save.
+used for this: as in tmux, it sets the option globally. A key binding is
+saved with its command, its note (`desc`) and its repeat flag.
+
+Only global values are saveable: a value set on one session, window or pane
+answers `only global values are saveable`. An option with no TOML key (a
+`@user` option or a list option) answers `not saveable`, and its preview in
+customize-mode says so. If the reload fails, the file is put back as it was
+and the error is shown. A missing `settings.toml` or config folder is created
+on the first save.
+
+`d` and `D` (reset) take the option out of `settings.toml` as well as
+resetting it, and reload: the value from the layer below, such as
+`user.toml`, applies again.
+
+A server started with `tmux -f <file>` reads only the files you name, never
+`settings.toml`, so `P` there answers that nothing was saved.
 
 ## Another config file
 
 `grofe --config <file>` loads `<file>` in place of `config.toml`, and
 `GROFE_CONFIG=<file>` does the same; the flag wins over the variable, which
-wins over the default. `conf.d/`, `user.toml` and `layouts/` are then read
-from the file's folder, not `~/.config/grofe/`. A relative path is taken from
-the current directory and `~/` from `$HOME`. A file that does not exist loads
-as empty. `reload` re-reads the same file, and `show-config` honours both. A
+wins over the default. `conf.d/`, `user.toml`, `settings.toml` and `layouts/` are
+then read from the file's folder, not `~/.config/grofe/`. A relative path is
+taken from the current directory and `~/` from `$HOME`. A file that does not
+exist loads as empty. `reload` re-reads the same file, and `show-config` honours both. A
 folder is refused. Only the command that starts the server picks the file: a
 later command with another `--config` prints `grofe: server uses <path>` and
 carries on.
