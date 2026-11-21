@@ -72,25 +72,9 @@ pub fn unset(dir: &Path, key: &str) -> Result<Saved, String> {
 
 /// Binds `key` in `[keys.<table>]` to `cmd`; an empty `cmd` unbinds it
 /// (`key = ""`). The fields of an entry already there (`desc`, `repeat`,
-/// `group`, `name`) stay.
-pub fn set_binding(dir: &Path, table: &str, key: &str, cmd: &str) -> Result<Saved, String> {
-    bind(dir, table, key, cmd, None, None)
-}
-
-/// [`set_binding`] that also sets the entry's `desc` (when given) and
-/// `repeat` (written when true, removed when false).
-pub fn set_binding_with(
-    dir: &Path,
-    table: &str,
-    key: &str,
-    cmd: &str,
-    desc: Option<&str>,
-    repeat: bool,
-) -> Result<Saved, String> {
-    bind(dir, table, key, cmd, desc, Some(repeat))
-}
-
-fn bind(
+/// `group`, `name`) stay, except those given: `desc` sets the note, and
+/// `repeat` writes the flag (true) or removes it (false).
+pub fn set_binding(
     dir: &Path,
     table: &str,
     key: &str,
@@ -190,13 +174,31 @@ fn remove(table: &mut dyn TableLike, path: &[&str]) -> bool {
     removed
 }
 
+/// Where a write to `path` lands: its target when it is a symlink, also a
+/// dangling one, which the write then creates and a rollback removes, so the
+/// link itself is never replaced.
+fn resolve(path: &Path) -> PathBuf {
+    let mut p = path.to_path_buf();
+    for _ in 0..40 {
+        if let Ok(c) = fs::canonicalize(&p) {
+            return c;
+        }
+        let is_link = fs::symlink_metadata(&p).is_ok_and(|m| m.is_symlink());
+        let Some(target) = is_link.then(|| fs::read_link(&p).ok()).flatten() else {
+            break;
+        };
+        p = p.parent().unwrap_or(Path::new("")).join(target);
+    }
+    p
+}
+
 /// Reads the file, applies `f`, and writes when `f` says it changed
 /// something.
 fn edit(
     dir: &Path,
     f: impl FnOnce(&mut DocumentMut) -> Result<bool, String>,
 ) -> Result<Saved, String> {
-    let path = dir.join(FILE);
+    let path = resolve(&dir.join(FILE));
     let old = match fs::read(&path) {
         Ok(b) => Some(b),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,

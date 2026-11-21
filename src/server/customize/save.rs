@@ -3,7 +3,7 @@
 //! key out again. Each then reloads the config, and puts the file back when
 //! the reload fails.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::{Entry, Scope, is_global, key_command_text, value_of};
 use crate::config::write::{self, Saved};
@@ -83,32 +83,32 @@ fn binding_fields(
 /// config. When the reload fails the file is put back and the error
 /// returned. On success, what was saved.
 pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String> {
-    type Save = Box<dyn FnOnce(&Path) -> Result<Saved, String>>;
-    let (what, save): (String, Save) = match entry {
+    let (what, saved) = match entry {
         Entry::Option { scope, name, idx } => {
             if let Some(why) = refusal(*scope, name, *idx) {
                 return Err(format!("{name}: not saveable, {why}"));
             }
             let (key, item) = toml_item(state, *scope, name, *idx)?;
-            (
-                name.clone(),
-                Box::new(move |dir| write::set(dir, key, item)),
-            )
+            let saved = write::set(&settings_dir()?, key, item)?;
+            // settings.toml owns the value now: a reload skips runtime names.
+            state.model.options.forget_runtime(name);
+            (name.clone(), saved)
         }
         Entry::Key { table, key } | Entry::Field { table, key, .. } => {
             let (cmd, desc, repeat) = binding_fields(state, table, key);
-            let (table, name) = (table.clone(), key.to_string());
-            let at = name.clone();
-            (
-                name,
-                Box::new(move |dir| {
-                    write::set_binding_with(dir, &table, &at, &cmd, desc.as_deref(), repeat)
-                }),
-            )
+            let name = key.to_string();
+            let saved = write::set_binding(
+                &settings_dir()?,
+                table,
+                &name,
+                &cmd,
+                desc.as_deref(),
+                Some(repeat),
+            )?;
+            (name, saved)
         }
         Entry::Group => return Err("nothing to save here".to_string()),
     };
-    let saved = save(&settings_dir()?)?;
     reload_or_roll_back(state, saved)?;
     Ok(format!("Saved {what} to settings.toml"))
 }

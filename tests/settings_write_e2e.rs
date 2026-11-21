@@ -19,7 +19,7 @@ const WAIT: Duration = Duration::from_secs(10);
 /// settings.toml. The spec writes `status = false` for an off status; the
 /// TOML key of the option is `status.lines`, so this checks `status.lines = 3`.
 #[test]
-fn s_in_customize_mode_saves_the_selected_option() {
+fn p_in_customize_mode_saves_the_selected_option() {
     let srv = TestServer::start();
     srv.cmd(&[
         "new-session",
@@ -171,6 +171,45 @@ fn d_in_customize_mode_resets_to_the_lower_layer() {
         h.text()
     );
     let shown = try_wait_until(|| global(&srv, "history-limit") == "111", WAIT);
+    assert!(
+        shown.is_ok(),
+        "history-limit: {}\n{}",
+        global(&srv, "history-limit"),
+        h.text()
+    );
+}
+
+/// After `P`, settings.toml owns the option: a hand edit of the file and a
+/// `reload` show the new value, though the first one was set at runtime.
+#[test]
+fn a_hand_edit_after_p_shows_on_reload() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 80);
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("history-limit listed", WAIT, |t| {
+        t.contains("history-limit:")
+    });
+    h.send("j");
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        t.get("history-limit").and_then(|v| v.as_integer()) == Some(222)
+    });
+    assert!(
+        saved.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(&srv)),
+        h.text()
+    );
+    fs::write(settings_file(&srv), "history-limit = 333\n").expect("hand edit");
+    srv.cmd(&["reload"]).expect("reload");
+    let shown = try_wait_until(|| global(&srv, "history-limit") == "333", WAIT);
     assert!(
         shown.is_ok(),
         "history-limit: {}\n{}",

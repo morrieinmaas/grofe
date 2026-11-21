@@ -84,8 +84,8 @@ fn set_of_a_dotted_key_loads_back() {
 #[test]
 fn bindings_and_unbinds_land_in_the_keys_table() {
     let tmp = dir();
-    write::set_binding(tmp.path(), "prefix", "C-t", "new-window").expect("bind");
-    write::set_binding(tmp.path(), "prefix", "%", "").expect("unbind");
+    write::set_binding(tmp.path(), "prefix", "C-t", "new-window", None, None).expect("bind");
+    write::set_binding(tmp.path(), "prefix", "%", "", None, None).expect("unbind");
     let got = read(&tmp.path().join("settings.toml"));
     let v: toml::Table = got.parse().expect("valid toml");
     let prefix = v["keys"]["prefix"].as_table().expect("[keys.prefix]");
@@ -98,8 +98,8 @@ fn bindings_and_unbinds_land_in_the_keys_table() {
 #[test]
 fn rebinding_a_key_replaces_the_line() {
     let tmp = dir();
-    write::set_binding(tmp.path(), "prefix", "C-t", "new-window").expect("bind");
-    write::set_binding(tmp.path(), "prefix", "C-t", "split-window").expect("rebind");
+    write::set_binding(tmp.path(), "prefix", "C-t", "new-window", None, None).expect("bind");
+    write::set_binding(tmp.path(), "prefix", "C-t", "split-window", None, None).expect("rebind");
     let got = read(&tmp.path().join("settings.toml"));
     let v: toml::Table = got.parse().expect("valid toml (no duplicate key)");
     assert_eq!(
@@ -314,6 +314,25 @@ fn a_symlinked_file_is_written_through_and_keeps_its_mode() {
     assert_eq!(mode & 0o777, 0o600);
 }
 
+/// A dangling symlinked settings.toml is not replaced by a regular file: the
+/// write creates its target, and a rollback removes the target, not the link.
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_is_written_through_and_rolled_back() {
+    use std::os::unix::fs::symlink;
+    let tmp = dir();
+    let link = tmp.path().join("settings.toml");
+    symlink("real.toml", &link).expect("symlink");
+    let saved = write::set(tmp.path(), "history-limit", value(7)).expect("set");
+    let is_link = |p: &Path| fs::symlink_metadata(p).expect("stat").is_symlink();
+    assert!(is_link(&link), "the link was replaced by a file");
+    let target = tmp.path().join("real.toml");
+    assert!(read(&target).contains("history-limit = 7"));
+    saved.rollback().expect("rollback");
+    assert!(is_link(&link), "the rollback removed the link");
+    assert!(!target.exists(), "the created target stayed");
+}
+
 /// A write that fails does not leave its temp file behind.
 #[test]
 fn a_failed_write_removes_its_temp_file() {
@@ -344,15 +363,22 @@ fn a_binding_keeps_the_fields_it_does_not_set() {
     )
     .expect("fixture");
     // `set_binding` changes the command only.
-    write::set_binding(tmp.path(), "prefix", "C-t", "b").expect("bind");
+    write::set_binding(tmp.path(), "prefix", "C-t", "b", None, None).expect("bind");
     let v: toml::Table = read(&file).parse().expect("valid toml");
     let e = &v["keys"]["prefix"]["C-t"];
     assert_eq!(e["cmd"].as_str(), Some("b"));
     assert_eq!(e["group"].as_str(), Some("g"));
     assert_eq!(e["repeat"].as_bool(), Some(true));
-    // `set_binding_with` also sets the note and the flag, and still keeps the rest.
-    write::set_binding_with(tmp.path(), "prefix", "C-t", "c", Some("my note"), false)
-        .expect("bind");
+    // With `desc` and `repeat` it also sets the note and the flag, and still keeps the rest.
+    write::set_binding(
+        tmp.path(),
+        "prefix",
+        "C-t",
+        "c",
+        Some("my note"),
+        Some(false),
+    )
+    .expect("bind");
     let v: toml::Table = read(&file).parse().expect("valid toml");
     let e = &v["keys"]["prefix"]["C-t"];
     assert_eq!(e["cmd"].as_str(), Some("c"));
@@ -360,7 +386,7 @@ fn a_binding_keeps_the_fields_it_does_not_set() {
     assert_eq!(e["name"].as_str(), Some("n"));
     assert!(e.get("repeat").is_none(), "{e:?}");
     // A new key gets the fields it has.
-    write::set_binding_with(tmp.path(), "prefix", "C-u", "d", Some("n2"), true).expect("bind");
+    write::set_binding(tmp.path(), "prefix", "C-u", "d", Some("n2"), Some(true)).expect("bind");
     let v: toml::Table = read(&file).parse().expect("valid toml");
     let e = &v["keys"]["prefix"]["C-u"];
     assert_eq!(e["desc"].as_str(), Some("n2"));
