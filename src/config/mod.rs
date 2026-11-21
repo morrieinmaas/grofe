@@ -18,7 +18,8 @@ pub mod provenance;
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub use cli::show_config;
 pub use load::agents::{
@@ -104,19 +105,45 @@ pub fn tmux_name(toml_key: &str) -> Option<&'static str> {
 /// environment; tests build one pointing at a tempdir.
 #[derive(Debug, Clone)]
 pub struct Env {
-    /// `$XDG_CONFIG_HOME/grofe`, else `$HOME/.config/grofe` (R5). `None`
-    /// when neither is set: only the built-in defaults load.
+    /// `$XDG_CONFIG_HOME/grofe`, else `$HOME/.config/grofe` (R5), or the
+    /// folder of the `--config` file. `None` when neither is set: only the
+    /// built-in defaults load.
     pub config_dir: Option<PathBuf>,
+    /// The file read in place of `config.toml`'s layer: `<config_dir>/config.toml`,
+    /// or the `--config` / `$GROFE_CONFIG` file.
+    pub config_file: Option<PathBuf>,
     /// `$HOME`, for printing paths with `~`.
     pub home: Option<PathBuf>,
 }
 
+/// The absolute `--config` file of this process, set once at start.
+static PROCESS_CONFIG: OnceLock<PathBuf> = OnceLock::new();
+
+/// Makes `file` (absolute) this process's config file for every
+/// [`Env::from_process`] after it. Not an environment variable: it must
+/// not reach the panes.
+pub fn set_process_config(file: PathBuf) {
+    let _ = PROCESS_CONFIG.set(file);
+}
+
+/// The file [`set_process_config`] set.
+pub fn process_config() -> Option<PathBuf> {
+    PROCESS_CONFIG.get().cloned()
+}
+
 impl Env {
+    /// With the file [`set_process_config`] set, else `$GROFE_CONFIG`.
     pub fn from_process() -> Env {
-        Env::from_vars(
+        let config = process_config();
+        let mut env = Env::from_vars(
             std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
             std::env::var("HOME").ok().as_deref(),
-        )
+        );
+        if let Some(file) = config.or_else(env_config_file) {
+            env.config_dir = file.parent().map(Path::to_path_buf);
+            env.config_file = Some(file);
+        }
+        env
     }
 
     /// From the two variables' values; an empty value counts as unset.
@@ -126,8 +153,56 @@ impl Env {
         let config_dir = xdg
             .or_else(|| home.as_ref().map(|h| h.join(".config")))
             .map(|d| d.join("grofe"));
-        Env { config_dir, home }
+        let config_file = config_dir.as_ref().map(|d| d.join("config.toml"));
+        Env {
+            config_dir,
+            config_file,
+            home,
+        }
     }
+}
+
+/// An absolute config file path: `~/` against `home`, anything else
+/// against `cwd` (spec 2026-11-20 AC1.5).
+pub fn resolve_config_path(arg: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
+    match (arg.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => cwd.join(arg),
+    }
+}
+
+/// `arg` as an absolute config file path against this process's cwd and
+/// `$HOME`; an unreadable cwd is an error rather than a relative path.
+pub fn resolve_from_process(arg: &str) -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("--config: cannot resolve {arg}: {e}"))?;
+    Ok(resolve_config_path(arg, &cwd, home.as_deref()))
+}
+
+/// `$GROFE_CONFIG` as an absolute path, when set and not empty. One that
+/// names a directory is reported once on stderr and ignored.
+pub fn env_config_checked() -> Result<Option<PathBuf>, String> {
+    let Some(arg) = std::env::var("GROFE_CONFIG").ok().filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let path = resolve_from_process(&arg)?;
+    if path.is_dir() {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "grofe: GROFE_CONFIG: {} is a directory, ignoring it",
+                path.display()
+            );
+        });
+        return Ok(None);
+    }
+    Ok(Some(path))
+}
+
+/// [`env_config_checked`], an unresolvable path counting as unset.
+fn env_config_file() -> Option<PathBuf> {
+    env_config_checked().ok().flatten()
 }
 
 /// One config mistake. `Display` is `<file>:<line>: <key>: <message>`,

@@ -90,6 +90,7 @@ fn user_toml() -> PathBuf {
 fn no_dir() -> Env {
     Env {
         config_dir: None,
+        config_file: None,
         home: None,
     }
 }

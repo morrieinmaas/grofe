@@ -780,6 +780,7 @@ fn a_stopped_plugin_stays_off_even_if_it_exits_as_it_is_stopped() {
 fn config_env(dir: &Path) -> Env {
     Env {
         config_dir: Some(dir.to_path_buf()),
+        config_file: Some(dir.join("config.toml")),
         home: None,
     }
 }

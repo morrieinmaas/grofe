@@ -54,8 +54,8 @@ fn load_layers(env: &Env, files: Option<&[PathBuf]>) -> Result<Resolved, Vec<Con
     let dir = env.config_dir.as_deref();
     match files {
         None => {
-            if let Some(dir) = dir {
-                l.load_path(&dir.join("config.toml"), Layer::Config, true);
+            if let Some(file) = &env.config_file {
+                l.load_path(file, Layer::Config, true);
             }
         }
         Some(files) => {

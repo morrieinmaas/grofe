@@ -33,6 +33,7 @@ impl Setup {
         let dir = home.join(".config").join("grofe");
         fs::create_dir_all(dir.join("conf.d")).expect("config dir");
         let env = Env {
+            config_file: Some(dir.join("config.toml")),
             config_dir: Some(dir),
             home: Some(home),
         };
@@ -164,6 +165,7 @@ fn defaults_come_from_the_built_in_layer() {
 fn no_config_dir_loads_defaults_only() {
     let env = Env {
         config_dir: None,
+        config_file: None,
         home: None,
     };
     let r = resolved(config::load(&env));
