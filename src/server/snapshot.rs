@@ -446,26 +446,31 @@ impl Io {
     }
 
     /// Keeps `snap` as the last state built. When a pane of the one before
-    /// is missing from it, that one is held for [`LOSS_HOLD`] too: the
-    /// pane may have died of a signal the server has not handled yet.
-    fn keep(&self, snap: Option<Snapshot>) {
+    /// is missing from it and a pane died of a signal (at `killed_at`)
+    /// within [`LOSS_HOLD`], that one is held for [`LOSS_HOLD`] too: the
+    /// pane may have died of a signal the server has not handled yet. A
+    /// pane closed on purpose (kill-pane, `exit`) is not held.
+    fn keep(&self, snap: Option<Snapshot>, killed_at: Option<Instant>) {
         let mut latest = lock(&self.latest);
-        if let (Some(old), Some(new)) = (latest.as_ref(), snap.as_ref())
+        let killed = killed_at.is_some_and(|at| at.elapsed() < LOSS_HOLD);
+        if let (true, Some(old), Some(new)) = (killed, latest.as_ref(), snap.as_ref())
             && lost_pane(old, new)
         {
             let mut held = lock(&self.before_loss);
-            if !held
-                .as_ref()
-                .is_some_and(|(at, _)| at.elapsed() < LOSS_HOLD)
-            {
-                *held = Some((Instant::now(), old.clone()));
+            let now = Instant::now();
+            match held.as_mut() {
+                // A later death in the hold restarts it, keeping the
+                // state from before the first.
+                Some((at, _)) if at.elapsed() < LOSS_HOLD => *at = now,
+                _ => *held = Some((now, old.clone())),
             }
         }
         *latest = snap;
     }
 
     /// What a termination signal writes: the state from before the first
-    /// pane that went in the last [`LOSS_HOLD`], else the last one built.
+    /// pane that died of a signal in a running hold, else the last one
+    /// built.
     fn pre_signal(&self) -> Option<Snapshot> {
         match lock(&self.before_loss).as_ref() {
             Some((at, snap)) if at.elapsed() < LOSS_HOLD => return Some(snap.clone()),
@@ -546,7 +551,7 @@ impl Writer {
         let snap = build(model, &self.cwds);
         let writable = !snap.sessions.is_empty() || self.had_sessions;
         let snap = writable.then_some(snap);
-        self.io.keep(snap.clone());
+        self.io.keep(snap.clone(), self.killed_at);
         snap
     }
 }
@@ -979,12 +984,20 @@ mod tests {
     fn a_signal_just_after_panes_went_writes_the_state_before_them() {
         let io = unwritten_io();
         let two = with_panes(&["a", "b"]);
-        io.keep(Some(with_panes(&["a"])));
-        io.keep(Some(two.clone()));
+        let killed = Some(Instant::now());
+        io.keep(Some(with_panes(&["a"])), None);
+        io.keep(Some(two.clone()), None);
         assert_eq!(io.pre_signal(), Some(two.clone()));
-        io.keep(Some(with_panes(&["a"])));
-        io.keep(Some(with_panes(&[])));
+        io.keep(Some(with_panes(&["a"])), killed);
+        io.keep(Some(with_panes(&[])), killed);
         assert_eq!(io.pre_signal(), Some(two));
+    }
+
+    /// Moves the hold's start back by `by`.
+    fn age(io: &Io, by: Duration) {
+        if let Some((at, _)) = lock(&io.before_loss).as_mut() {
+            *at = at.checked_sub(by).expect("an instant in the past");
+        }
     }
 
     /// A pane gone longer than [`LOSS_HOLD`] did not die of the signal.
@@ -992,17 +1005,43 @@ mod tests {
     fn a_pane_gone_before_the_hold_stays_gone() {
         let io = unwritten_io();
         let one = with_panes(&["a"]);
-        io.keep(Some(with_panes(&["a", "b"])));
-        io.keep(Some(one.clone()));
-        let age = |io: &Io| {
-            if let Some((at, _)) = lock(&io.before_loss).as_mut() {
-                *at = at.checked_sub(LOSS_HOLD).expect("an instant a hold ago");
-            }
-        };
-        age(&io);
+        let killed = Some(Instant::now());
+        io.keep(Some(with_panes(&["a", "b"])), None);
+        io.keep(Some(one.clone()), killed);
+        age(&io, LOSS_HOLD);
         assert_eq!(io.pre_signal(), Some(one.clone()));
         // The next pane going is held anew.
-        io.keep(Some(with_panes(&[])));
+        io.keep(Some(with_panes(&[])), killed);
         assert_eq!(io.pre_signal(), Some(one));
+    }
+
+    /// A pane closed on purpose (kill-pane, `exit`) is no signal death: a
+    /// signal right after it writes the state without it.
+    #[test]
+    fn a_pane_closed_on_purpose_is_not_held() {
+        let io = unwritten_io();
+        let one = with_panes(&["a"]);
+        io.keep(Some(with_panes(&["a", "b"])), None);
+        io.keep(Some(one.clone()), None);
+        assert_eq!(io.pre_signal(), Some(one));
+        // Nor does a signal death longer than the hold ago arm it.
+        let long_ago = Instant::now().checked_sub(LOSS_HOLD * 2);
+        io.keep(Some(with_panes(&[])), long_ago);
+        assert_eq!(io.pre_signal(), Some(with_panes(&[])));
+    }
+
+    /// Each signal death in the hold restarts it, keeping the state from
+    /// before the first.
+    #[test]
+    fn the_hold_runs_from_the_last_signal_death() {
+        let io = unwritten_io();
+        let two = with_panes(&["a", "b"]);
+        let killed = Some(Instant::now());
+        io.keep(Some(two.clone()), None);
+        io.keep(Some(with_panes(&["a"])), killed);
+        age(&io, LOSS_HOLD - Duration::from_millis(50));
+        io.keep(Some(with_panes(&[])), killed);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(io.pre_signal(), Some(two));
     }
 }
