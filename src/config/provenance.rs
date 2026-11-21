@@ -15,8 +15,10 @@ pub enum Layer {
     Config,
     /// `conf.d/*.toml`, in lexical order.
     ConfD,
-    /// `user.toml`, the user's final word.
+    /// `user.toml`, the last file the user writes by hand.
     User,
+    /// `settings.toml`, written by grofe itself; the last word.
+    Settings,
 }
 
 /// Where a resolved value came from. An included file (`source-file`)

@@ -42,6 +42,7 @@ thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal", "process", "fs"] }
 tokio-util = { version = "0.7.19", features = ["codec"] }
 toml = "1.1.6"
+toml_edit = "0.25"
 ulid = "3.0.0"
 unicode-width = "0.2.2"
 

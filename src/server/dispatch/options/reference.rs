@@ -55,15 +55,6 @@ pub fn reference_markdown() -> String {
             Kind::Size => "`<columns>x<rows>`".to_string(),
         }
     }
-    fn toml_key(
-        name: &str,
-        mut table: impl Iterator<Item = (&'static str, &'static str)>,
-    ) -> &'static str {
-        table
-            .find(|(_, n)| *n == name)
-            .map(|(t, _)| t)
-            .unwrap_or("(none)")
-    }
     let notes = |name: &str| {
         let mut out = String::new();
         if is_grofe_only(name) {
@@ -76,7 +67,7 @@ pub fn reference_markdown() -> String {
     };
     let mut entries: Vec<(&str, String)> = Vec::new();
     for b in BUILTINS {
-        let key = toml_key(b.name, crate::config::option_names());
+        let key = crate::config::toml_key(b.name).unwrap_or("(none)");
         let ty = crate::config::toml_type_name(key);
         let mut text = format!(
             "## {}\n\n{}\n\n- **TOML key**: `{key}` ({ty})\n- **Scope**: {}\n- **Values**: {}\n\n",
@@ -103,7 +94,10 @@ pub fn reference_markdown() -> String {
         entries.push((b.name, text));
     }
     for l in LISTS {
-        let key = toml_key(l.name, crate::config::LIST_NAMES.iter().copied());
+        let key = crate::config::LIST_NAMES
+            .iter()
+            .find(|(_, n)| *n == l.name)
+            .map_or("(none)", |(t, _)| *t);
         let indexed = |items: &[&str]| -> Vec<String> {
             items
                 .iter()

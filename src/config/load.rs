@@ -10,6 +10,7 @@ use toml::Spanned;
 use toml::de::{DeString, DeTable, DeValue};
 
 use super::provenance::tilde;
+use super::write;
 use super::{
     ConfigCommand, ConfigError, ConfigHook, ConfigSource, Env, KeyBinding, LIST_NAMES, Layer,
     Provenance, Resolved, Source, Ty, closest, option_names, tmux_name, toml_type,
@@ -25,7 +26,7 @@ use crate::server::input::{Key, parse_key};
 use crate::server::sources::MAX_SECONDS;
 
 /// Loads the machine's config chain: built-in defaults, `config.toml`,
-/// `conf.d/*.toml` in lexical order, `user.toml`. All errors, or none.
+/// `conf.d/*.toml` in lexical order, `user.toml`, `settings.toml`. All errors, or none.
 pub fn load(env: &Env) -> Result<Resolved, Vec<ConfigError>> {
     load_layers(env, None)
 }
@@ -77,6 +78,7 @@ fn load_layers(env: &Env, files: Option<&[PathBuf]>) -> Result<Resolved, Vec<Con
             l.load_path(&f, Layer::ConfD, false);
         }
         l.load_path(&dir.join("user.toml"), Layer::User, true);
+        l.load_path(&dir.join(write::FILE), Layer::Settings, true);
     }
     l.check_names();
     let missing = l.plugins.missing_cmds();

@@ -13,7 +13,12 @@
 // line of a key are not here; hooks are not listed, as tmux does not list
 // them either.
 
+mod save;
 mod table;
+
+// `toml_item` is the settings menu's too (PR 3).
+#[allow(unused_imports)]
+pub(crate) use save::{persist, reset, toml_item};
 
 use std::collections::BTreeMap;
 
@@ -165,7 +170,12 @@ pub const DEFAULT_FORMAT: &str = "#{?is_option,\
 #{key}}";
 
 /// An option's value as tmux's `options_to_string` has it.
-fn value_of(state: &State, scope: Scope, name: &str, idx: Option<u32>) -> Option<String> {
+pub(crate) fn value_of(
+    state: &State,
+    scope: Scope,
+    name: &str,
+    idx: Option<u32>,
+) -> Option<String> {
     let opts = &state.model.options;
     let owners: &[Owner] = match scope {
         Scope::Server => &[Owner::Server, Owner::Global],
@@ -212,7 +222,7 @@ fn owner_of(scope: Scope) -> Owner {
     }
 }
 
-fn is_global(scope: Scope) -> bool {
+pub(crate) fn is_global(scope: Scope) -> bool {
     matches!(
         scope,
         Scope::Server | Scope::GlobalSession | Scope::GlobalWindow
@@ -775,6 +785,17 @@ fn draw_option(
     if !page.text(&format!("This is a {kind_text} option."), false, None) {
         return;
     }
+    // Only the missing TOML key is marked: a local value's preview stays
+    // tmux's own.
+    if save::key_of(name, idx).is_none()
+        && !page.text(
+            "Not saveable to settings.toml: it has no TOML key.",
+            false,
+            None,
+        )
+    {
+        return;
+    }
     let array = info.is_some_and(|i| i.flags & ARRAY != 0);
     if array {
         let ok = match idx {
@@ -1128,11 +1149,6 @@ pub fn toggle_key_repeat(state: &mut State, table: &str, key: &Key) {
 
 pub fn unbind_key(state: &mut State, table: &str, key: &Key) {
     state.registry.key_tables.unbind_runtime(table, key);
-}
-
-/// `window_customize_reset_key`: the key's default binding back, or none.
-pub fn reset_key(state: &mut State, table: &str, key: &Key) {
-    state.registry.key_tables.reset_to_default(table, key);
 }
 
 /// Whether resetting `key` leaves it bound.

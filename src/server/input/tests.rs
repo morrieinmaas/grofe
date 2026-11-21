@@ -1439,26 +1439,32 @@ fn words(b: &Binding) -> Vec<&str> {
     b.cmds[0].iter().map(String::as_str).collect()
 }
 
-/// customize-mode's `d` on a key (`key_bindings_reset`): a rebound
-/// stock key gets tmux's binding back, a key with no default goes.
+/// customize-mode's `d` on a key releases it before the reload: a rebound
+/// stock key has tmux's binding until then, a key with no default goes, and
+/// a runtime unbind ends.
 #[test]
-fn a_key_resets_to_its_default_or_goes() {
+fn a_released_key_has_its_default_or_goes() {
     let mut t = default_bindings();
     t.use_tmux_stock();
     let cz = parse_key("C-z").unwrap();
     let stock = t.exact(PREFIX_TABLE, &cz).unwrap().cmds.clone();
-    t.bind(
-        PREFIX_TABLE,
-        cz,
-        vec!["display-message".into(), "zz".into()],
+    let mut b = Binding::new(
+        vec![vec!["display-message".into(), "zz".into()]],
         false,
+        BindingSource::Runtime,
     );
-    t.reset_to_default(PREFIX_TABLE, &cz);
+    t.insert(PREFIX_TABLE, cz, b.clone());
+    t.release_runtime(PREFIX_TABLE, &cz);
     assert_eq!(t.exact(PREFIX_TABLE, &cz).unwrap().cmds, stock);
     let f5 = parse_key("F5").unwrap();
-    t.bind("mytab", f5, vec!["display-message".into()], false);
-    t.reset_to_default("mytab", &f5);
+    b.cmds = vec![vec!["display-message".into()]];
+    t.insert("mytab", f5, b);
+    t.release_runtime("mytab", &f5);
     assert!(t.exact("mytab", &f5).is_none());
+    t.unbind_runtime(PREFIX_TABLE, &cz);
+    t.release_runtime(PREFIX_TABLE, &cz);
+    assert_eq!(t.exact(PREFIX_TABLE, &cz).unwrap().cmds, stock);
+    assert!(t.runtime_unbound.is_empty());
 }
 
 /// tmux 3.7b's stock prefix bindings (`list-keys -T prefix` on a

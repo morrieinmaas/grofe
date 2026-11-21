@@ -7,16 +7,53 @@ ones before:
 1. `config.toml`
 2. every `conf.d/*.toml`, in name order
 3. `user.toml`
+4. `settings.toml`
 
-Your own file always loads last, so tools and themes can add to your setup
-without overriding you.
+`user.toml` is your own file, so tools and themes can add to your setup
+without overriding you. `settings.toml` is the one grofe writes: it loads
+last and overrides everything above it, so a value saved there always wins.
+Do not expect to edit it by hand; grofe re-reads it before each save and
+keeps your comments and other keys, but its layout is its own. Resetting an
+option or a key binding removes its entry, and the value or binding from
+the layer below applies again.
+
+## Saving from customize-mode
+
+In customize-mode (`prefix C` in the tmux identity), `P` writes the selected
+option or key binding to `settings.toml` and reloads the config. `S` is not
+used for this: as in tmux, it sets the option globally. A key binding is
+saved with its command, its note (`desc`), its repeat flag, its `group` and
+its `name`; saving it again replaces the whole entry, so a field the binding
+no longer has (a note it was rebound without) leaves the file. Once saved, `settings.toml` owns it: a hand edit of the file and a
+`reload` apply, even for a value or binding first set at runtime.
+
+Only global values are saveable: a value set on one session, window or pane
+answers `only global values are saveable`. A binding that is not grofe-dialect (a stock key of the
+tmux identity, or a `bind-key` from a tmux client) answers `only grofe-dialect
+bindings are saveable`. A key bound by a plugin (`init.luau` or a pack) answers
+`bound by a plugin, not saveable`, and `d`/`D` leave `settings.toml` alone for it. An option with no TOML key (a
+`@user` option or a list option) answers `not saveable`, and its preview in
+customize-mode says so. If the reload fails, the file is put back as it was
+and the error is shown. A missing `settings.toml` or config folder is created
+on the first save.
+
+`d` and `D` (reset) on a global option or a key binding take its entry (an
+option's key, a binding's `[keys.<table>]` entry) out of `settings.toml` and
+reload: the value or binding from the layer below, such as `user.toml`, or
+else the built-in default, applies again, and the config owns it from then on.
+If the reload fails, the file, the value and the binding stay as they were
+before the reset and the error is shown. On a value set on one session,
+window or pane, `d` unsets it as tmux does and leaves `settings.toml` alone.
+
+A server started with `tmux -f <file>` reads only the files you name, never
+`settings.toml`, so `P` there answers that nothing was saved.
 
 ## Another config file
 
 `grofe --config <file>` loads `<file>` in place of `config.toml`, and
 `GROFE_CONFIG=<file>` does the same; the flag wins over the variable, which
 wins over the default. The file's folder then becomes the config dir:
-`conf.d/`, `user.toml`, `layouts/`, packs (`pack-lock.toml`),
+`conf.d/`, `user.toml`, `settings.toml`, `layouts/`, packs (`pack-lock.toml`),
 `init.luau` and `machines.toml` are read from there, not `~/.config/grofe/`. A relative path is taken from
 the current directory and `~/` from `$HOME`. A file that does not exist loads
 as empty. `reload` re-reads the same file, and `show-config` honours both. A

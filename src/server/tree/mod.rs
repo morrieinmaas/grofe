@@ -48,12 +48,14 @@ use crate::server::status::{self, Style};
 use crate::server::{State, clients};
 use crate::types::{ClientId, PaneId, Rect, SessionId, WindowId};
 
+mod customize_keys;
 mod drawing;
 mod items;
 mod keys;
 mod model;
 mod pointer;
 
+use self::customize_keys::*;
 pub use self::drawing::*;
 pub(crate) use self::items::*;
 pub use self::keys::*;

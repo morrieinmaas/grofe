@@ -204,6 +204,28 @@ impl Options {
         self.runtime.insert(name.to_string());
     }
 
+    /// Takes global option `name` out of the runtime's hands, so the next
+    /// `reload` applies the config's value, or the built-in default when the
+    /// config sets none: the mark goes and the default becomes the option's
+    /// config base. The value stays until the reload, which announces only a
+    /// real change. Whether it was marked.
+    pub fn release_runtime(&mut self, name: &str) -> bool {
+        if !self.runtime.remove(name) {
+            return false;
+        }
+        if let Some(b) = builtin(name) {
+            let default = self.default_of(b).to_string();
+            self.config_base.insert(name.to_string(), default);
+        }
+        true
+    }
+
+    /// Undoes [`Self::release_runtime`], when the reload that was to hand
+    /// the option to the config failed.
+    pub fn restore_runtime(&mut self, name: &str) {
+        self.mark_runtime(name);
+    }
+
     /// Sets `name` at `owner`. Returns whether the value changed: setting
     /// an option to its current value is a no-op (spec §4.2), so the
     /// caller emits `option-changed` only on `true`. `persist` (`--persist`)
