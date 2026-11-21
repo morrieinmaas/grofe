@@ -133,8 +133,8 @@ and `refresh-client` (`-F` or `-f`, then the first of `-A`, `-B` and `-C`, as tm
 flags included, before running any of it, and so does the bridge: an unknown command or flag
 anywhere in a `;` chain is one parse-error block and nothing runs (a flag the usage does not
 list is `unknown flag`, a value flag with no value `expects an argument`). `display-message` without `-p` runs with it and
-prints `%message` (with `-v`, only the last line; the trace lines come first), and a `-t`
-that names nothing falls back to the attached session, as tmux's target may fail there.
+prints `%message` with newlines written `_` (with `-v`, the trace lines come first, one line
+each), and a `-t` that names nothing runs without it.
 `source-file` errors of the `<file>:<line>:` form become `%config-error` lines right after its
 block, which ends `%end` and keeps any other error (a missing file of several).
 `detach-client -a -t <other>`, and `-s` of the attached session, run on the server and then
@@ -265,8 +265,12 @@ tmux:
   entered again, or a client that detaches and reattaches between two snapshots sends nothing.
   A window linked twice into one session counts once.
 - **`source-file` blocks.** tmux gives a control client one more block after `source-file`'s
-  own for each command in the file (with that command's output); grofe runs the file on the
-  server and answers with one block.
+  own for each command in the file (with that command's output), before the `%config-error`
+  lines; grofe runs the file on the server and answers with one block. Files with no commands
+  match (`source-file control-ok.conf control-bad.conf`).
+- **`display-message -t` that names nothing.** tmux expands the format with no target, so
+  `#{session_name}` is empty; grofe's server always has a session to expand in, so the bridge's
+  fallback expands in the attached session.
 - **`%config-error` at start.** tmux reports errors of the config it loads at server start to
   the first control client; grofe's server reads its config before any client, and the bridge
   never sees those errors.

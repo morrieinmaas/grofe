@@ -177,6 +177,10 @@ const CASES: &[Case] = &[
             "source-file {fixtures}/control-bad.conf",
             "source-file {fixtures}/control-bad.conf ; display -p after",
             "source-file {fixtures}/control-bad.conf /nonexistent.conf",
+            "source-file {fixtures}/control-ok.conf /nonexistent.conf",
+            "source-file {fixtures}/control-ok.conf {fixtures}/control-bad.conf",
+            "display-message \"a\\nb\"",
+            "display-message -v \"r\\ns\"",
             "display-message -v 'v#{pane_id}'",
             "display-message -t nosuch fallback",
         ],
@@ -241,6 +245,14 @@ const CASES: &[Case] = &[
         pty: None,
         start: ATTACH,
         script: &["detach-client -s main"],
+    },
+    // `-s` wins over `-a`: only that session's clients go.
+    Case {
+        name: "detach-a-s",
+        setup: &["new-session -d -s two -x 80 -y 24 -n t0 'sleep 99'"],
+        pty: Some("two"),
+        start: ATTACH,
+        script: &["detach-client -a -s two", "display -p still"],
     },
     // `detach-client -a` detaches every other client.
     Case {
@@ -323,6 +335,11 @@ fn golden_detach_all_but() {
 #[test]
 fn golden_detach_session() {
     assert_golden("detach-session");
+}
+
+#[test]
+fn golden_detach_a_s() {
+    assert_golden("detach-a-s");
 }
 
 #[test]

@@ -40,6 +40,20 @@ No such file or directory: /nonexistent.conf
 %end T N 1
 %config-error {fixtures}/control-bad.conf:1: unknown command: bogus-cmd
 %begin T N 1
+No such file or directory: /nonexistent.conf
+%end T N 1
+%begin T N 1
+%end T N 1
+%config-error {fixtures}/control-bad.conf:1: unknown command: bogus-cmd
+%begin T N 1
+%message a_b
+%end T N 1
+%begin T N 1
+# expanding format: r_s
+# result is: r_s
+%message r_s
+%end T N 1
+%begin T N 1
 # expanding format: v#{pane_id}
 # found #{}: pane_id
 # format 'pane_id' found: %0

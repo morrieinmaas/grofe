@@ -153,9 +153,13 @@ impl<W: Write> Bridge<'_, W> {
                 self.detach_others()
             }
             // `-a -t <other>` and `-s` of the attached session take the
-            // control client with them.
+            // control client with them; `-s` wins over `-a`.
             "detach-client" if getopt.has('a') || getopt.has('s') => {
-                let ours = getopt.has('a') || self.is_attached(getopt.value('s'));
+                let ours = if getopt.has('s') {
+                    self.is_attached(getopt.value('s'))
+                } else {
+                    getopt.has('a')
+                };
                 match self.server(argv) {
                     Outcome::Ok(_) if ours => Outcome::Detach,
                     other => other,
@@ -171,8 +175,9 @@ impl<W: Write> Bridge<'_, W> {
             // A config file's errors are notices after the block, which ends
             // as a success.
             // The block keeps the other errors (a missing file of several).
+            // With several files, a missing one does not fail the block.
             "source-file" => match self.server(argv) {
-                Outcome::Err(e) if e.lines().any(is_cause) => {
+                Outcome::Err(e) if e.lines().any(is_cause) || argv.len() - getopt.rest > 2 => {
                     let (causes, rest): (Vec<&str>, Vec<&str>) =
                         e.lines().partition(|l| is_cause(l));
                     let causes = causes.iter().map(|l| format!("%config-error {l}"));
@@ -201,26 +206,53 @@ impl<W: Write> Bridge<'_, W> {
             .is_ok_and(|id| id.trim_end() == self.attached)
     }
 
-    /// `display-message` without `-p`: its text as `%message` (with `-v`,
-    /// the trace lines first). A `-t` that names nothing falls back to the
-    /// attached session, as tmux's target may fail for it.
+    /// `display-message` without `-p`: its text as `%message`, newlines
+    /// written `_` as tmux writes a control line. With `-v` the trace lines
+    /// come first, each one line. A `-t` that names nothing runs without it.
     fn message(&self, argv: &[String], getopt: &Getopt<'_>) -> Outcome {
         let mut argv = argv.to_vec();
         argv.insert(1, "-p".to_string());
-        let mut out = self.server(&argv);
-        if matches!(&out, Outcome::Err(e) if e.starts_with("can't find")) && getopt.has('t') {
-            out = self.server(&without_target(&argv));
+        let run = |argv: &[String]| exchange(&self.opts.socket, &self.ctx(), argv);
+        let mut out = run(&argv);
+        // ponytail: tmux expands the format with no target then (empty
+        // session and pane values); grofe's server always has one, so the
+        // fallback expands in the attached session.
+        if matches!(&out, Err(e) if e.starts_with("can't find")) && getopt.has('t') {
+            argv = without_target(&argv);
+            out = run(&argv);
         }
-        match out {
-            Outcome::Ok(text) => {
-                let mut lines: Vec<&str> = text.trim_end_matches('\n').split('\n').collect();
-                let last = lines.pop().unwrap_or_default();
-                let mut text: String = lines.iter().map(|l| format!("{l}\n")).collect();
-                text.push_str(&format!("%message {last}\n"));
-                Outcome::Ok(text)
+        let text = match out {
+            Ok(text) => text,
+            Err(e) => return Outcome::Err(parse_error_text(&e)),
+        };
+        let mut printed = String::new();
+        let mut msg = text.trim_end_matches('\n').to_string();
+        if getopt.has('v') {
+            // The message is what the same command prints without `-v`.
+            let quiet: Vec<String> = argv.iter().filter(|a| *a != "-v").cloned().collect();
+            let Ok(quiet) = run(&quiet) else {
+                return Outcome::Ok(text);
+            };
+            let quiet = quiet.trim_end_matches('\n');
+            let trace = msg
+                .strip_suffix(quiet)
+                .unwrap_or(&msg)
+                .trim_end_matches('\n');
+            for line in trace.split('\n').filter(|l| !l.is_empty()) {
+                if line.starts_with("# ") || printed.is_empty() {
+                    printed.push_str(line);
+                } else {
+                    // A trace line that went on past a newline.
+                    printed.pop();
+                    printed.push('_');
+                    printed.push_str(line);
+                }
+                printed.push('\n');
             }
-            other => other,
+            msg = quiet.to_string();
         }
+        printed.push_str(&format!("%message {}\n", msg.replace('\n', "_")));
+        Outcome::Ok(printed)
     }
 
     fn server(&self, argv: &[String]) -> Outcome {
