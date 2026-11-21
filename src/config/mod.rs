@@ -134,12 +134,7 @@ pub fn process_config() -> Option<PathBuf> {
 impl Env {
     /// With the file [`set_process_config`] set, else `$GROFE_CONFIG`.
     pub fn from_process() -> Env {
-        Env::from_process_with(process_config())
-    }
-
-    /// With `config`, an absolute file, in place of `config.toml`; else
-    /// `$GROFE_CONFIG`. The file's folder is then the config dir.
-    pub fn from_process_with(config: Option<PathBuf>) -> Env {
+        let config = process_config();
         let mut env = Env::from_vars(
             std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
             std::env::var("HOME").ok().as_deref(),
@@ -206,7 +201,7 @@ pub fn env_config_checked() -> Result<Option<PathBuf>, String> {
 }
 
 /// [`env_config_checked`], an unresolvable path counting as unset.
-pub fn env_config_file() -> Option<PathBuf> {
+fn env_config_file() -> Option<PathBuf> {
     env_config_checked().ok().flatten()
 }
 

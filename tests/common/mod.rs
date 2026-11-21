@@ -295,6 +295,7 @@ impl TestServer {
             .current_dir(&self.home)
             .env_remove("GROFE")
             .env_remove("GROFE_PANE")
+            .env_remove("GROFE_CONFIG")
             .env("HOME", &self.home)
             .env("XDG_CONFIG_HOME", &self.config_home)
             .env("XDG_STATE_HOME", &self.state_home)

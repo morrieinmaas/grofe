@@ -19,20 +19,23 @@ pub(super) fn config_env() -> config::Env {
 pub fn config_files() -> String {
     let files: Vec<PathBuf> = match crate::compat::start_config() {
         None => config_env().config_file.into_iter().collect(),
-        Some(files) => files
-            .into_iter()
-            .filter(|f| f != Path::new("/dev/null") && f.exists())
-            .collect(),
+        Some(files) => existing_files(files),
     };
     files.iter().map(|f| format!("{}\n", f.display())).collect()
 }
 
 /// The `tmux -f` files that count: a missing file or `/dev/null` is none.
-fn start_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
+fn existing_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
     files
         .into_iter()
-        .filter(|f| f != Path::new("/dev/null") && f.exists() && !is_tmux_conf(f))
+        .filter(|f| f != Path::new("/dev/null") && f.exists())
         .collect()
+}
+
+fn start_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut files = existing_files(files);
+    files.retain(|f| !is_tmux_conf(f));
+    files
 }
 
 /// The config chain (spec §5.1), or with `tmux -f <file>...` those files

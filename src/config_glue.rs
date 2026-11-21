@@ -108,6 +108,45 @@ fn ask_files(stream: UnixStream) -> Option<Vec<PathBuf>> {
 fn same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
+        _ => normalize(a) == normalize(b),
+    }
+}
+
+/// `path` with `.` and `..` resolved lexically, for files that do not exist.
+fn normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_files_compare_after_lexical_normalising() {
+        assert!(same_file(
+            Path::new("/nonexistent-grofe/a/../a/x.toml"),
+            Path::new("/nonexistent-grofe/a/x.toml")
+        ));
+        assert!(same_file(
+            Path::new("nonexistent-grofe/a/../a/x.toml"),
+            Path::new("nonexistent-grofe/a/x.toml")
+        ));
+        assert!(!same_file(
+            Path::new("/nonexistent-grofe/a/x.toml"),
+            Path::new("/nonexistent-grofe/b/x.toml")
+        ));
     }
 }

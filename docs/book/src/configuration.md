@@ -16,7 +16,7 @@ without overriding you.
 `grofe --config <file>` loads `<file>` in place of `config.toml`, and
 `GROFE_CONFIG=<file>` does the same; the flag wins over the variable, which
 wins over the default. The file's folder then becomes the config dir:
-`conf.d/`, `user.toml`, `settings.toml`, `layouts/`, packs (`pack-lock.toml`),
+`conf.d/`, `user.toml`, `layouts/`, packs (`pack-lock.toml`),
 `init.luau` and `machines.toml` are read from there, not `~/.config/grofe/`. A relative path is taken from
 the current directory and `~/` from `$HOME`. A file that does not exist loads
 as empty. `reload` re-reads the same file, and `show-config` honours both. A
