@@ -233,6 +233,9 @@ pub struct AttachExtras {
     /// `-x`: with `-d`, the detached clients' parents are sent SIGHUP.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub kill_parent: bool,
+    /// `grofe settings`: open the settings menu on the new client.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open_settings: bool,
 }
 
 impl AttachExtras {

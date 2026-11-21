@@ -1865,6 +1865,8 @@ pub enum Command {
     AgentSidebar(SidebarOp),
     /// `agent-grid`: the all-agents grid overlay.
     AgentGrid,
+    /// `settings`: the settings menu overlay.
+    Settings,
     /// `choose-notification`: the notification tray overlay.
     ChooseNotification,
     Notify(NotifyCmd),

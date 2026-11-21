@@ -91,6 +91,7 @@ pub(super) static ROWS: &[Row] = &[
     row("reload", "", "", 0, |_| Ok(Command::Reload(Reload))),
     row("choose-agent", "", "", 0, |_| Ok(Command::ChooseAgent)),
     row("agent-grid", "", "", 0, |_| Ok(Command::AgentGrid)),
+    row("settings", "", "", 0, |_| Ok(Command::Settings)),
     row("choose-notification", "", "", 0, |_| {
         Ok(Command::ChooseNotification)
     }),

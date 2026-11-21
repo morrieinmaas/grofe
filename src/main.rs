@@ -343,6 +343,12 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // grofe's own verb: attach (starting a server when none runs) and
+        // open the settings menu.
+        "settings" if dialect() == Dialect::Grofe && rest.len() == 1 => {
+            OPEN_SETTINGS.store(true, std::sync::atomic::Ordering::Relaxed);
+            new_and_attach(&globals, &["new-session".to_string()], true)
+        }
         "new-session" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
@@ -358,6 +364,9 @@ fn main() -> ExitCode {
 /// The dialect every hello this process sends carries: grofe, unless the
 /// tmux front end chose otherwise.
 static DIALECT: OnceLock<Dialect> = OnceLock::new();
+
+/// `grofe settings`: the client this call attaches opens the settings menu.
+static OPEN_SETTINGS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `tmux -N`: this call never starts a server.
 static NO_START: OnceLock<bool> = OnceLock::new();
@@ -1364,6 +1373,7 @@ fn attach_to(
             flags: parsed.flags.clone(),
             no_env: parsed.no_env,
             kill_parent: parsed.kill_parent,
+            open_settings: OPEN_SETTINGS.load(std::sync::atomic::Ordering::Relaxed),
         },
     };
     let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());

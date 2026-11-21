@@ -143,6 +143,8 @@ const PREFIX_ROWS: &[(&str, &[&str], bool, &str)] = &[
     ("i", &["display-message"], false, "Display window information"),
     ("w", &["choose-tree", "-Zw"], false, "Choose a window from a list"),
     ("Space", &["key-menu", "-T", "prefix"], false, "Show the key menu"),
+    // grofe's own: tmux identity keeps `C` for customize-mode.
+    ("C", &["settings"], false, "Open the settings menu"),
     ("M-Space", &["next-layout"], false, "Select next layout"),
     ("U", &["choose-agent"], false, "Pick an agent"),
     ("b", &["agent-sidebar", "toggle"], false, "Toggle the agent sidebar"),

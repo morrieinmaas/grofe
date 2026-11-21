@@ -57,7 +57,7 @@ fn attached(srv: &TestServer, w: u16, h: u16) -> Harness {
 /// Client with the menu open (`prefix C`, grofe identity).
 fn open_menu(srv: &TestServer) -> Harness {
     let mut h = attached(srv, 100, 30);
-    h.send(&format!("{PREFIX}C"));
+    h.send(format!("{PREFIX}C"));
     h.wait_until("menu open", WAIT, |t| t.contains("Appearance"));
     h
 }
@@ -67,7 +67,7 @@ fn type_query(h: &mut Harness, q: &str) {
 }
 
 fn clear_query(h: &mut Harness, n: usize) {
-    h.send(&BACKSPACE.repeat(n));
+    h.send(BACKSPACE.repeat(n));
 }
 
 /// T19: `prefix C` opens the menu in grofe identity.
@@ -88,7 +88,7 @@ fn prefix_c_is_customize_mode_in_tmux_identity() {
     let srv = TestServer::unstarted();
     write(&srv, "config.toml", "compat-identity = \"tmux\"\n");
     let mut h = attached(&srv, 100, 30);
-    h.send(&format!("{PREFIX}C"));
+    h.send(format!("{PREFIX}C"));
     h.wait_until("customize-mode", WAIT, |t| t.contains("Session Options"));
     assert!(!h.text().contains("Appearance"));
 }
@@ -130,8 +130,8 @@ fn query_stl_ranks_status_left_first() {
 #[test]
 fn a_row_shows_what_settings_toml_overrides() {
     let srv = TestServer::unstarted();
-    write(&srv, "conf.d/10.toml", "# c\n\nstatus-left = \"A\"\n");
-    write(&srv, "settings.toml", "status-left = \"S\"\n");
+    write(&srv, "conf.d/10.toml", "# c\n\nstatus.left = \"A\"\n");
+    write(&srv, "settings.toml", "status.left = \"S\"\n");
     let mut h = {
         srv.cmd(&[
             "new-session",
@@ -147,7 +147,7 @@ fn a_row_shows_what_settings_toml_overrides() {
         .unwrap();
         Harness::spawn_attach_with_env(srv.command(), "s", &[], 100, 30)
     };
-    h.send(&format!("{PREFIX}C"));
+    h.send(format!("{PREFIX}C"));
     h.wait_until("menu", WAIT, |t| t.contains("Appearance"));
     type_query(&mut h, "status-left");
     h.wait_until("override note", WAIT, |t| {
@@ -323,7 +323,7 @@ fn enter_on_a_layout_sets_default_layout() {
         .unwrap();
         Harness::spawn_attach_with_env(srv.command(), "s", &[], 100, 30)
     };
-    h.send(&format!("{PREFIX}C"));
+    h.send(format!("{PREFIX}C"));
     h.wait_until("menu", WAIT, |t| t.contains("Appearance"));
     h.send("\t\t\t");
     h.wait_until("layout row", WAIT, |t| t.contains("dev"));
@@ -345,7 +345,7 @@ fn a_query_with_no_match_says_so() {
 #[test]
 fn a_unicode_query_matches_a_value() {
     let srv = TestServer::unstarted();
-    write(&srv, "config.toml", "status-left = \"世界 hi\"\n");
+    write(&srv, "config.toml", "status.left = \"世界 hi\"\n");
     srv.cmd(&[
         "new-session",
         "-d",
@@ -359,7 +359,7 @@ fn a_unicode_query_matches_a_value() {
     ])
     .unwrap();
     let mut h = Harness::spawn_attach_with_env(srv.command(), "s", &[], 100, 30);
-    h.send(&format!("{PREFIX}C"));
+    h.send(format!("{PREFIX}C"));
     h.wait_until("menu", WAIT, |t| t.contains("Appearance"));
     type_query(&mut h, "世界");
     h.wait_until("row for the value", WAIT, |t| t.contains("status-left"));
@@ -371,7 +371,7 @@ fn a_unicode_query_matches_a_value() {
 fn a_tiny_client_gets_window_too_small_and_the_menu_closes() {
     let srv = TestServer::start();
     let mut h = attached(&srv, 20, 5);
-    h.send(&format!("{PREFIX}C"));
+    h.send(format!("{PREFIX}C"));
     h.wait_until("too small", WAIT, |t| t.contains("window too small"));
     h.send("hello\r");
     try_wait_until(|| srv.capture("s").contains("hello"), WAIT)
