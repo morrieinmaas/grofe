@@ -106,14 +106,16 @@ pub(super) fn close(state: &mut State, client: ClientId) {
 /// A client that detached takes its menu with it, and what the menu
 /// changed, as Esc then `y` would.
 pub fn client_gone(state: &mut State, id: ClientId, ctx: &ClientCtx) {
-    discard_with(state, id, ctx);
+    discard_with(state, id, ctx, true);
 }
 
 /// A client resized below [`MIN_SIZE`] loses its menu, as Esc then `y`
 /// would close it, and is told why.
 pub fn resized(state: &mut State, id: ClientId, size: (u16, u16)) {
     if state.settings_menus.is_open(id) && too_small(size) {
-        discard(state, id);
+        if let Some(ctx) = state.clients.get(&id).map(|c| c.ctx.clone()) {
+            discard_with(state, id, &ctx, true);
+        }
         clients::show_message(state, id, "window too small");
     }
 }
@@ -258,23 +260,46 @@ fn discard(state: &mut State, client: ClientId) {
     let Some(ctx) = state.clients.get(&client).map(|c| c.ctx.clone()) else {
         return;
     };
-    discard_with(state, client, &ctx);
+    discard_with(state, client, &ctx, false);
 }
 
-fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx) {
-    let Some(menu) = state.settings_menus.open.remove(&client) else {
+/// Hands back what the menu changed and closes it. When the reload that
+/// hands options and keys to the config fails, a menu the client is still
+/// using stays open with its edits and shows the error; a `forced` close
+/// (the client is gone or too small) sets them back to what they were
+/// instead, runtime marked.
+fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx, forced: bool) {
+    let Some(mut menu) = state.settings_menus.open.remove(&client) else {
         return;
     };
+    let (key_release, key_rest) = keys::split(state, std::mem::take(&mut menu.keys));
+    let (set_release, set_rest) = rows::split(state, std::mem::take(&mut menu.set));
+    let names: Vec<&str> = set_release.keys().copied().collect();
+    let bound: Vec<(&str, Key)> = key_release
+        .iter()
+        .map(|t| (t.table.as_str(), t.key))
+        .collect();
+    if (!names.is_empty() || !bound.is_empty())
+        && let Err(e) = customize::release_and_reload(state, &names, &bound)
+    {
+        if forced {
+            rows::put_back(state, client, ctx, &set_release);
+            keys::put_back(state, key_release);
+            clients::show_message(state, client, e.trim_end());
+        } else {
+            menu.set = set_rest;
+            menu.set.extend(set_release);
+            menu.keys = key_rest;
+            menu.keys.extend(key_release);
+            state.settings_menus.open.insert(client, menu);
+            clients::show_message(state, client, e.trim_end());
+            clients::mark_dirty(state, client);
+            return;
+        }
+    }
     clients::mark_dirty(state, client);
-    let keys = keys::discard(state, menu.keys);
-    let names = rows::discard(state, client, ctx, menu.set);
-    if names.is_empty() && keys.is_empty() {
-        return;
-    }
-    let keys: Vec<(&str, Key)> = keys.iter().map(|(t, k)| (t.as_str(), *k)).collect();
-    if let Err(e) = customize::release_and_reload(state, &names, &keys) {
-        clients::show_message(state, client, e.trim_end());
-    }
+    keys::discard(state, key_rest);
+    rows::discard(state, client, ctx, set_rest);
 }
 
 /// Takes a client's keys while its settings menu is open.
@@ -306,11 +331,17 @@ impl InputHook for SettingsHook {
         if let Some((table, old)) = menu.pending.take() {
             keys::pressed(state, client, table, old, key);
             clients::mark_dirty(state, client);
-        } else if !clients::key_settings(&state.model, session).is_prefix(&key) {
+        } else if is_menu_key(&key) || !clients::key_settings(&state.model, session).is_prefix(&key)
+        {
             on_key(state, client, key, size);
         }
         Some(Routed::Consumed)
     }
+}
+
+/// C-s and C-d are the menu's even when one is the user's prefix.
+fn is_menu_key(key: &Key) -> bool {
+    key.mods.ctrl && !key.mods.alt && matches!(key.code, KeyCode::Char('s' | 'd'))
 }
 
 /// A key for the list: it moves, filters, switches tabs, or acts on the

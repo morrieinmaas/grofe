@@ -147,6 +147,31 @@ pub fn unbind(state: &mut State, client: ClientId, table: &str, key: Key) {
     overlay::record(state, client, vec![touched]);
 }
 
+/// Splits `touched` into the keys that go back to the config (the first)
+/// and the rest, which [`discard`] handles.
+pub fn split(state: &State, touched: Vec<Touched>) -> (Vec<Touched>, Vec<Touched>) {
+    let tables = &state.registry.key_tables;
+    touched.into_iter().partition(|t| {
+        let live = tables.exact(&t.table, &t.key);
+        let mine = live == t.last.as_ref()
+            && (live.is_some() || tables.is_runtime_unbound(&t.table, &t.key));
+        let held = t.held_unbound || t.was.as_ref().is_some_and(|b| !b.source.is_config());
+        mine && !held
+    })
+}
+
+/// Puts the keys of `released` back to their before binding, runtime
+/// marked, when they could not go back to the config.
+pub fn put_back(state: &mut State, released: Vec<Touched>) {
+    let tables = &mut state.registry.key_tables;
+    for t in released {
+        match t.was {
+            Some(b) => tables.insert(&t.table, t.key, b),
+            None => tables.unbind_runtime(&t.table, &t.key),
+        }
+    }
+}
+
 /// Hands back the keys of `touched`, as Esc then `y` does, and returns
 /// those that go back to the config. A key whose live binding is no longer
 /// what this menu left is left alone; another open menu that touched it

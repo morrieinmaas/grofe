@@ -119,6 +119,33 @@ pub fn apply(state: &mut State, client: ClientId, changes: &[(&'static str, &str
     clients::mark_dirty(state, client);
 }
 
+/// Splits `set` into the options that go back to the config (the first) and
+/// the rest, which [`discard`] handles.
+pub fn split(
+    state: &State,
+    set: BTreeMap<&'static str, Edit>,
+) -> (BTreeMap<&'static str, Edit>, BTreeMap<&'static str, Edit>) {
+    set.into_iter().partition(|(name, edit)| {
+        state.model.options.is_runtime(name) && value(state, name) == edit.last && !edit.runtime
+    })
+}
+
+/// Sets the options of `released` back to their before values, runtime
+/// marked, when they could not go back to the config.
+pub fn put_back(
+    state: &mut State,
+    client: ClientId,
+    ctx: &ClientCtx,
+    released: &BTreeMap<&'static str, Edit>,
+) {
+    for (name, edit) in released {
+        let argv = set(state, name, &edit.before);
+        if let Err(e) = dispatch::run(state, ctx, &argv) {
+            clients::show_message(state, client, e.trim_end());
+        }
+    }
+}
+
 /// Hands back the options of `set`, as Esc then `y` does, and returns those
 /// that go back to the config. One whose live value is no longer what this
 /// menu last set is left alone; another open menu that set it over this

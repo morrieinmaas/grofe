@@ -809,9 +809,9 @@ fn a_status_click_finds_the_range_under_it() {
 fn the_builtin_hooks_and_overlays_are_inert() {
     let (mut state, id) = state_with_client();
     crate::server::register_builtins(&mut state);
-    assert_eq!(state.registry.input_hooks.len(), 13);
+    assert_eq!(state.registry.input_hooks.len(), 14);
     // TM.6 removed the mouse's scrollback view overlay.
-    assert_eq!(state.registry.overlays.len(), 12);
+    assert_eq!(state.registry.overlays.len(), 13);
     let now = Instant::now();
     let inputs = [
         Input::Key(crate::server::input::parse_key("C-b").expect("key")),

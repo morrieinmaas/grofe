@@ -892,3 +892,45 @@ fn default_layout_is_found_in_the_servers_config_folder() {
     let panes = srv.cmd(&["list-panes", "-t", "d"]).unwrap();
     assert_eq!(panes.lines().count(), 2, "{panes}");
 }
+
+/// Esc `y` with a config that no longer loads keeps the menu open with its
+/// edits and shows the error; after the fix, Esc `y` restores the config.
+#[test]
+fn a_failed_reload_on_discard_keeps_the_menu_open() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    type_query(&mut h, "mouse");
+    h.send("\r");
+    try_wait_until(|| opt(&srv, "mouse") == "off", WAIT)
+        .unwrap_or_else(|e| panic!("mouse did not change: {e}\n{}", h.text()));
+    let user = grofe_dir(&srv).join("user.toml");
+    fs::write(&user, "history-limit = = oops\n").expect("user.toml");
+    h.send(ESC);
+    h.wait_until("asks", WAIT, |t| t.contains("discard 1 changes? (y/n)"));
+    h.send("y");
+    h.wait_until("error", WAIT, |t| t.contains("user.toml"));
+    assert!(
+        h.text().contains("Appearance"),
+        "menu closed:\n{}",
+        h.text()
+    );
+    assert_eq!(opt(&srv, "mouse"), "off");
+    fs::remove_file(&user).expect("remove user.toml");
+    esc_y(&mut h, 1);
+    try_wait_until(|| opt(&srv, "mouse") == "on", WAIT)
+        .unwrap_or_else(|e| panic!("config value not restored: {e}"));
+}
+
+/// C-s is the menu's even when it is the prefix.
+#[test]
+fn ctrl_s_saves_in_the_menu_when_it_is_the_prefix() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    srv.cmd(&["set-option", "-g", "prefix", "C-s"])
+        .expect("prefix");
+    assert_eq!(opt(&srv, "prefix"), "C-s");
+    type_query(&mut h, "mouse");
+    h.send("\r");
+    h.send(CTRL_S);
+    h.wait_until("diff", WAIT, |t| t.contains("write settings.toml"));
+}
