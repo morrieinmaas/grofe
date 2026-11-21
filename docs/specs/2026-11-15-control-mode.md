@@ -126,7 +126,8 @@ own flow controller: `pause-after`, `-A`, and `no-output` drop or hold data befo
 
 Client-bound commands are answered in the bridge: `detach-client` with no `-a`, `-s` or `-t`,
 `switch-client -t` (the attached session) and `refresh-client` (`-C` as `resize-window` on the
-attached session's windows, `-f`, `-A`, `-B`). `display-message` without `-p` runs with it and
+attached session's windows, `-f`, `-A`, `-B`). tmux's flag checks run first, so a flag the usage does not list
+is `unknown flag` and a value flag with no value `expects an argument`, as parse errors. `display-message` without `-p` runs with it and
 prints `%message`; `source-file` errors of the `<file>:<line>:` form become `%config-error`
 lines after a successful block. `display-message -p` formats naming `client_*` go to the
 server, which has no such client.
@@ -188,7 +189,8 @@ window outside the attached session is not reported.
 
 The bridge expands the formats on the server: `display-message -p -t $<s>:` for the session,
 `list-panes -s -t $<s>` and `list-windows -t $<s>` for the rest, and checks on its 250 ms
-tick once a second is up.
+tick once a second is up. A query the server does not answer skips that subscription until
+the next check, keeping the values it last wrote.
 
 ## 8. Parity test
 

@@ -83,9 +83,15 @@ impl<W: Write> Bridge<'_, W> {
                 Outcome::Err(e) => (Err(e), false),
                 Outcome::Detach => (Ok(String::new()), true),
             };
-            // What `refresh-client -A %p:on` released follows its block.
+            // What `refresh-client -A %p:on` released follows its block, as
+            // do `source-file`'s `%config-error` lines.
             if !self.block(1, &result) || (result.is_ok() && !self.release_all()) {
                 return None;
+            }
+            for l in std::mem::take(&mut self.after_block) {
+                if !self.line(&l) {
+                    return None;
+                }
             }
             if detach {
                 return Some(true);
@@ -98,16 +104,20 @@ impl<W: Write> Bridge<'_, W> {
     }
 
     fn command(&mut self, argv: &[String]) -> Outcome {
-        let verb = resolve(&argv[0]).map_or(argv[0].as_str(), |s| s.name);
+        let spec = resolve(&argv[0]).ok();
+        if let Some(Err(e)) = spec.map(|s| s.check_flags(&argv[1..])) {
+            return Outcome::Err(parse_error_text(&e.0));
+        }
+        let verb = spec.map_or(argv[0].as_str(), |s| s.name);
         let getopt = flags(argv);
         match verb {
             // With a target it detaches other clients, on the server.
             "detach-client" if !"ast".chars().any(|f| getopt.has(f)) => Outcome::Detach,
             // `-c` switches another client, on the server.
-            "switch-client" if !getopt.has('c') => self.switch_client(argv),
+            "switch-client" if !getopt.has('c') => self.switch_client(getopt.value('t')),
             "refresh-client" => self.refresh_client(&getopt),
             // tmux shows a control client its message as `%message`.
-            "display-message" if !getopt.has('p') && !getopt.has('a') => {
+            "display-message" if !"pac".chars().any(|f| getopt.has(f)) => {
                 let mut argv = argv.to_vec();
                 argv.insert(1, "-p".to_string());
                 match self.server(&argv) {
@@ -122,7 +132,7 @@ impl<W: Write> Bridge<'_, W> {
             "source-file" => match self.server(argv) {
                 Outcome::Err(e) if !e.is_empty() && e.lines().all(is_cause) => {
                     let causes = e.lines().map(|l| format!("%config-error {l}"));
-                    self.after.extend(causes);
+                    self.after_block.extend(causes);
                     Outcome::Ok(String::new())
                 }
                 other => other,
@@ -140,13 +150,10 @@ impl<W: Write> Bridge<'_, W> {
 
     /// `switch-client -t <session>`: the client's session changes, and
     /// `%session-changed` says so.
-    fn switch_client(&mut self, argv: &[String]) -> Outcome {
-        let Some(at) = argv.iter().position(|a| a == "-t") else {
+    fn switch_client(&mut self, target: Option<&str>) -> Outcome {
+        let Some(target) = target else {
             // ponytail: only an explicit `-t` (not `-n`, `-p`, `-l`).
             return Outcome::Err("switch-client: only -t is supported in control mode".into());
-        };
-        let Some(target) = argv.get(at + 1) else {
-            return Outcome::Err("switch-client: -t needs a target".into());
         };
         match self.ask(&[
             "display-message",

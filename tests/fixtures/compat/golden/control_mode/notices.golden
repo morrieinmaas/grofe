@@ -29,4 +29,10 @@ parse error: command display-message: too many arguments (need at most 1)
 %begin T N 1
 %end T N 1
 %config-error {fixtures}/control-bad.conf:1: unknown command: bogus-cmd
+%begin T N 1
+%end T N 1
+%config-error {fixtures}/control-bad.conf:1: unknown command: bogus-cmd
+%begin T N 1
+after
+%end T N 1
 %exit

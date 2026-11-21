@@ -9,5 +9,7 @@
 %client-session-changed CLIENT $1 two
 %begin T N 1
 %end T N 1
+%begin T N 1
+%end T N 1
 %client-detached CLIENT
 %exit

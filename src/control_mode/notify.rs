@@ -57,6 +57,8 @@ pub const WINDOWS_FORMAT: &str = "#{session_id}\t#{window_id}\t#{window_active}\
 pub const PANES_FORMAT: &str = "#{pane_id}\t#{pane_mode}";
 
 /// The `-F` of the clients query: name, session id and name.
+// ponytail: the control client is not a server client, so this lists
+// only the others; `%client-*` never names another control bridge.
 pub const CLIENTS_FORMAT: &str = "#{client_name}\t#{session_id} #{session_name}";
 
 /// The `-F` of the buffers query: name, then its content's fingerprint.
@@ -137,6 +139,8 @@ fn adds(
 /// the client's sends `%window-close`, one killed outright
 /// `%unlinked-window-close` (tmux unlinks it before the notice). When the
 /// client's own session went, it is leaving and gets no window notices.
+// ponytail: the notices of one command come in this fixed order, not the
+// order the command made them (tmux interleaves a multi-link `kill-window`).
 pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
     let mut out = Vec::new();
     let empty = BTreeSet::new();

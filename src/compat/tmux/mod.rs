@@ -396,6 +396,25 @@ impl Spec {
                 }))
     }
 
+    /// tmux's own flag errors for `args` (after the verb): a flag the usage
+    /// does not list (hidden flags it still takes, [`HIDDEN_VALUE_FLAGS`],
+    /// count as listed) is `unknown flag`, a value flag with no value
+    /// `expects an argument`.
+    pub fn check_flags(&self, args: &[String]) -> Result<(), TmuxError> {
+        for (flag, value) in self.getopt(args).flags {
+            if flag == '-' {
+                return Err(ParseError::UnknownLongFlag(self.name.to_string()).into());
+            }
+            if !self.lists(flag) {
+                return Err(ParseError::UnknownFlag(self.name.to_string(), flag).into());
+            }
+            if self.takes_value(flag) && value.is_none() {
+                return Err(ParseError::MissingValue(self.name.to_string(), flag).into());
+            }
+        }
+        Ok(())
+    }
+
     /// `args` (after the verb) as tmux's getopt reads them for this
     /// command.
     pub fn getopt<'a>(&self, args: &'a [String]) -> Getopt<'a> {
@@ -914,23 +933,9 @@ fn translate_with(
     Ok(before)
 }
 
-/// tmux's own flag errors, before any row: a flag its usage does not list
-/// (hidden flags it still takes, [`HIDDEN_VALUE_FLAGS`], count as listed)
-/// is `unknown flag`, a value flag with no value `expects an argument`.
+/// tmux's own flag errors, before any row: see [`Spec::check_flags`].
 fn check_flags(inv: &Invocation<'_>) -> Result<(), TmuxError> {
-    let spec = inv.spec;
-    for (flag, value) in inv.getopt().flags {
-        if flag == '-' {
-            return Err(ParseError::UnknownLongFlag(spec.name.to_string()).into());
-        }
-        if !spec.lists(flag) {
-            return Err(ParseError::UnknownFlag(spec.name.to_string(), flag).into());
-        }
-        if spec.takes_value(flag) && value.is_none() {
-            return Err(ParseError::MissingValue(spec.name.to_string(), flag).into());
-        }
-    }
-    Ok(())
+    inv.spec.check_flags(inv.args)
 }
 
 // ---- Options by tmux name ------------------------------------------------

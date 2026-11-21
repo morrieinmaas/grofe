@@ -32,4 +32,5 @@
 %begin T N 1
 %end T N 1
 %subscription-changed bad $0 - - - : %0
+%subscription-changed dash $0 - - - : -third
 %exit

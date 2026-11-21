@@ -116,7 +116,11 @@ impl Subs {
                 .iter_mut()
                 .filter(|(_, s)| s.what.class() == class)
             {
-                let rows = rows(sub, session, &ask);
+                // A failed query skips the subscription this time, keeping
+                // what it last wrote.
+                let Some(rows) = rows(sub, session, &ask) else {
+                    continue;
+                };
                 sub.last.retain(|k, _| rows.iter().any(|(r, _)| r == k));
                 for (i, (row, value)) in rows.into_iter().enumerate() {
                     if sub.last.get(&row) == Some(&value) {
@@ -138,43 +142,42 @@ impl Subs {
     }
 }
 
-/// The rows `sub` covers in `session` and its format's value in each.
+/// The rows `sub` covers in `session` and its format's value in each;
+/// `None` when the server did not answer.
 fn rows(
     sub: &Sub,
     session: &str,
     ask: impl Fn(&[&str]) -> Result<String, String>,
-) -> Vec<(String, String)> {
+) -> Option<Vec<(String, String)>> {
     let target = format!("{session}:");
     // `list-panes -s` and `list-windows` list the session's panes and
     // windows, each row keyed as the notice names it.
-    let listed = |verb: &str, key: &str| -> Vec<(String, String)> {
+    let listed = |verb: &str, key: &str| -> Option<Vec<(String, String)>> {
         let format = format!("{key}\t{}", sub.format);
         let mut argv = vec![verb, "-t", session, "-F", &format];
         if verb == "list-panes" {
             argv.insert(1, "-s");
         }
-        ask(&argv)
-            .unwrap_or_default()
+        let text = ask(&argv).ok()?;
+        let rows = text
             .lines()
             .filter_map(|l| l.split_once('\t'))
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+            .map(|(k, v)| (k.to_string(), v.to_string()));
+        Some(rows.collect())
     };
     let panes = || listed("list-panes", "#{window_id} #{window_index} #{pane_id}");
     let windows = || listed("list-windows", "#{window_id} #{window_index} -");
+    let only = |rows: Option<Vec<(String, String)>>, keep: &dyn Fn(&str) -> bool| {
+        rows.map(|r| r.into_iter().filter(|(k, _)| keep(k)).collect())
+    };
     match &sub.what {
-        What::Session => ask(&["display-message", "-p", "-t", &target, &sub.format])
-            .map(|v| vec![("- - -".to_string(), v.trim_end_matches('\n').to_string())])
-            .unwrap_or_default(),
-        What::Pane(id) => panes()
-            .into_iter()
-            .filter(|(k, _)| k.ends_with(&format!(" {id}")))
-            .collect(),
+        // `--`: a format may start with `-`.
+        What::Session => ask(&["display-message", "-p", "-t", &target, "--", &sub.format])
+            .ok()
+            .map(|v| vec![("- - -".to_string(), v.trim_end_matches('\n').to_string())]),
+        What::Pane(id) => only(panes(), &|k| k.ends_with(&format!(" {id}"))),
         What::AllPanes => panes(),
-        What::Window(id) => windows()
-            .into_iter()
-            .filter(|(k, _)| k.starts_with(&format!("{id} ")))
-            .collect(),
+        What::Window(id) => only(windows(), &|k| k.starts_with(&format!("{id} "))),
         What::AllWindows => windows(),
     }
 }
@@ -227,6 +230,16 @@ mod tests {
                 "%subscription-changed allw $0 @1 1 - : X",
             ]
         );
+        assert!(subs.check("$0", fake).is_empty());
+    }
+
+    #[test]
+    fn a_failed_query_keeps_what_was_written() {
+        let now = Instant::now();
+        let mut subs = Subs::default();
+        subs.update("all:%*:A", now);
+        assert_eq!(subs.check("$0", fake).len(), 3);
+        assert!(subs.check("$0", |_| Err("gone".into())).is_empty());
         assert!(subs.check("$0", fake).is_empty());
     }
 

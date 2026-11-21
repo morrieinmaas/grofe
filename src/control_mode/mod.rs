@@ -84,8 +84,11 @@ struct Bridge<'a, W: Write> {
     num: u64,
     attached: String,
     snap: Snapshot,
-    /// Notification lines a command asks for, written after its block.
+    /// Notification lines a command line asks for, written after its last
+    /// block.
     after: Vec<String>,
+    /// Lines written right after the current command's own block.
+    after_block: Vec<String>,
     /// `refresh-client -B`.
     subs: Subs,
 }
@@ -241,6 +244,7 @@ pub fn run(opts: &Options, input: impl BufRead + Send + 'static, output: impl Wr
         attached: String::new(),
         snap: Snapshot::default(),
         after: Vec::new(),
+        after_block: Vec::new(),
         subs: Subs::default(),
     };
     if opts.double {
