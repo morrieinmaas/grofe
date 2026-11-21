@@ -214,3 +214,24 @@ fn killing_the_last_session_inside_the_hold_does_not_wait() {
     let snap = snapshot(&srv).expect("a snapshot");
     assert!(snap.sessions.is_empty(), "{snap:#?}");
 }
+
+/// The last pane dying of a signal with no signal to the server (a
+/// `kill` from outside): the server waits out the hold for a signal that
+/// never comes, then saves the empty state.
+#[test]
+fn the_last_pane_dying_of_a_signal_alone_writes_the_empty_state() {
+    let srv = TestServer::start();
+    let (panes, _) = one_window(&srv, 1);
+    let start = Instant::now();
+    kill(Pid::from_raw(panes[0].pid), Signal::SIGTERM).expect("signal the pane");
+    srv.wait_for(|| !srv.is_running(), Duration::from_secs(5))
+        .expect("the server goes with its last pane");
+    let took = start.elapsed();
+    assert!(
+        took >= Duration::from_millis(450),
+        "the exit did not wait out the hold: {took:?}"
+    );
+    common::quiet_period(Duration::from_millis(500));
+    let snap = snapshot(&srv).expect("a snapshot");
+    assert!(snap.sessions.is_empty(), "{snap:#?}");
+}
