@@ -38,27 +38,30 @@ impl Saved {
 
 /// Sets option `key` (a TOML key, `status.lines` for a nested one) to `item`.
 pub fn set(dir: &Path, key: &str, item: Item) -> Result<Saved, String> {
+    edit(dir, |doc| set_in(doc, key, item).map(|()| true))
+}
+
+/// What [`set`] does to the file, done to `doc`.
+pub fn set_in(doc: &mut DocumentMut, key: &str, item: Item) -> Result<(), String> {
     if key.starts_with('@') || key.is_empty() {
         return Err(format!("{key}: not saveable, it has no TOML key"));
     }
-    edit(dir, |doc| {
-        let parts: Vec<&str> = key.split('.').collect();
-        let (last, parents) = parts.split_last().ok_or("empty key")?;
-        let mut table: &mut dyn TableLike = doc.as_table_mut();
-        for p in parents {
-            if !table.contains_key(p) {
-                let mut t = Table::new();
-                t.set_dotted(true);
-                table.insert(p, Item::Table(t));
-            }
-            table = table
-                .get_mut(p)
-                .and_then(Item::as_table_like_mut)
-                .ok_or_else(|| format!("{key}: {p} in settings.toml is not a table"))?;
+    let parts: Vec<&str> = key.split('.').collect();
+    let (last, parents) = parts.split_last().ok_or("empty key")?;
+    let mut table: &mut dyn TableLike = doc.as_table_mut();
+    for p in parents {
+        if !table.contains_key(p) {
+            let mut t = Table::new();
+            t.set_dotted(true);
+            table.insert(p, Item::Table(t));
         }
-        put(table, last, item);
-        Ok(true)
-    })
+        table = table
+            .get_mut(p)
+            .and_then(Item::as_table_like_mut)
+            .ok_or_else(|| format!("{key}: {p} in settings.toml is not a table"))?;
+    }
+    put(table, last, item);
+    Ok(())
 }
 
 /// Removes `key` from settings.toml, so the lower layers apply again. A key
@@ -91,48 +94,59 @@ pub fn set_binding(
     fields: &BindingFields,
 ) -> Result<Saved, String> {
     edit(dir, |doc| {
-        let root = doc.as_table_mut();
-        let keys = sub_table(root, "keys", true)?;
-        let t = sub_table(keys, table, false)?;
-        if cmd.is_empty() {
-            put(t, key, value(""));
-            return Ok(true);
-        }
-        let texts = [
-            ("desc", fields.desc),
-            ("group", fields.group),
-            ("name", fields.name),
-        ];
-        if let Some(entry) = t.get_mut(key).and_then(Item::as_table_like_mut) {
-            put(entry, "cmd", value(cmd));
-            for (field, text) in texts {
-                match text {
-                    Some(text) => put(entry, field, value(text)),
-                    None => {
-                        entry.remove(field);
-                    }
-                }
-            }
-            if fields.repeat {
-                put(entry, "repeat", value(true));
-            } else {
-                entry.remove("repeat");
-            }
-            return Ok(true);
-        }
-        let mut inline = InlineTable::new();
-        inline.insert("cmd", cmd.into());
+        set_binding_in(doc, table, key, cmd, fields).map(|()| true)
+    })
+}
+
+/// What [`set_binding`] does to the file, done to `doc`.
+pub fn set_binding_in(
+    doc: &mut DocumentMut,
+    table: &str,
+    key: &str,
+    cmd: &str,
+    fields: &BindingFields,
+) -> Result<(), String> {
+    let root = doc.as_table_mut();
+    let keys = sub_table(root, "keys", true)?;
+    let t = sub_table(keys, table, false)?;
+    if cmd.is_empty() {
+        put(t, key, value(""));
+        return Ok(());
+    }
+    let texts = [
+        ("desc", fields.desc),
+        ("group", fields.group),
+        ("name", fields.name),
+    ];
+    if let Some(entry) = t.get_mut(key).and_then(Item::as_table_like_mut) {
+        put(entry, "cmd", value(cmd));
         for (field, text) in texts {
-            if let Some(text) = text {
-                inline.insert(field, text.into());
+            match text {
+                Some(text) => put(entry, field, value(text)),
+                None => {
+                    entry.remove(field);
+                }
             }
         }
         if fields.repeat {
-            inline.insert("repeat", Value::from(true));
+            put(entry, "repeat", value(true));
+        } else {
+            entry.remove("repeat");
         }
-        put(t, key, value(inline));
-        Ok(true)
-    })
+        return Ok(());
+    }
+    let mut inline = InlineTable::new();
+    inline.insert("cmd", cmd.into());
+    for (field, text) in texts {
+        if let Some(text) = text {
+            inline.insert(field, text.into());
+        }
+    }
+    if fields.repeat {
+        inline.insert("repeat", Value::from(true));
+    }
+    put(t, key, value(inline));
+    Ok(())
 }
 
 /// Removes `key` of `[keys.<table>]` from settings.toml, so the lower layers
@@ -220,7 +234,7 @@ fn resolve(path: &Path) -> PathBuf {
 
 /// Reads the file, applies `f`, and writes when `f` says it changed
 /// something.
-fn edit(
+pub(crate) fn edit(
     dir: &Path,
     f: impl FnOnce(&mut DocumentMut) -> Result<bool, String>,
 ) -> Result<Saved, String> {

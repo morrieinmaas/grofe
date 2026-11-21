@@ -15,7 +15,8 @@ use schema::Plan;
 
 use crate::util::quote;
 
-pub use up::{UpOptions, up, watch};
+use up::populate;
+pub use up::{UpOptions, UpReport, up, watch};
 
 /// What the layout commands need from the running program and server.
 pub trait Server {
@@ -108,6 +109,41 @@ pub fn valid_name(name: &str) -> bool {
 pub fn load(path: &Path, dirs: &Dirs) -> Result<Plan, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     schema::parse(&text, path, dirs.home.as_deref(), &dirs.cwd).map_err(|e| e.to_string())
+}
+
+/// The file of layout `name` in the layouts directory, if there is one.
+pub fn find(dirs: &Dirs, name: &str) -> Option<PathBuf> {
+    dirs.resolve_name(name).ok().filter(|p| p.is_file())
+}
+
+/// `default-layout`: builds that layout's first session into the session
+/// `sid` just made, whose one window it replaces. Does nothing when the
+/// option is empty; a name with no file is an error (the server also logs it). The layout's
+/// `before` and `on_stop` hooks do not run: the session already exists.
+pub fn build_default(server: &mut dyn Server, dirs: &Dirs, sid: &str) -> Result<UpReport, String> {
+    let mut report = UpReport::default();
+    let name = server.run(&words(&["show-options", "-gv", "default-layout"]))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(report);
+    }
+    let Some(path) = find(dirs, name) else {
+        return Err(format!("no layout {name}"));
+    };
+    let Some(mut plan) = load(&path, dirs)?.sessions.into_iter().next() else {
+        return Ok(report);
+    };
+    let here = server.run(&words(&[
+        "display-message",
+        "-p",
+        "-t",
+        sid,
+        "#{window_id} #{session_name}",
+    ]))?;
+    let (window, session) = here.trim().split_once(' ').unwrap_or((here.trim(), ""));
+    plan.name = session.to_string();
+    populate(server, &plan, sid, window, &mut report)?;
+    Ok(report)
 }
 
 fn words(list: &[&str]) -> Vec<String> {

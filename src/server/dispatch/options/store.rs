@@ -196,6 +196,11 @@ impl Options {
         self.config_base.contains_key(name) || self.runtime.contains(name)
     }
 
+    /// Whether a runtime `set -g` holds global option `name`.
+    pub fn is_runtime(&self, name: &str) -> bool {
+        self.runtime.contains(name)
+    }
+
     /// Marks a global option as set at runtime, which the config then
     /// leaves alone.
     pub(super) fn mark_runtime(&mut self, name: &str) {

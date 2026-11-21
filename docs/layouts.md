@@ -206,3 +206,17 @@ g = "run-shell 'grofe layout pick'"
 
 `layout pick` finds the client through the server, so it works from
 `run-shell` as bound here; `layout up` then switches that client.
+
+## Default layout
+
+`set -g default-layout dev` (or `default-layout = "dev"` in `config.toml`)
+makes a `new-session` without a command build `layouts/dev.toml` into the new
+session: its windows and panes replace the session's one plain window. Only
+the first session of the file is used, and its `before` and `on_stop` hooks do
+not run, as the session already exists. An unknown name makes a plain session
+and logs `default-layout: no layout <name>` for `show-messages`. The
+settings menu's Layouts section sets the option with Enter.
+
+The layout is built by the `grofe` command that ran `new-session -d` (or
+`new-session`, which then attaches), so a `new-session` run inside the server,
+from a key binding or the command prompt, makes a plain session. So do `-P` and `-A`.

@@ -111,6 +111,7 @@ pub(super) const GROFE_ONLY: &[&str] = &[
     "remote-udp-ports",
     "remote-quic-idle",
     "predictive-echo",
+    "default-layout",
 ];
 
 /// grofe's own list options, kept apart from [`GROFE_ONLY`] (which names
@@ -221,6 +222,7 @@ pub(super) const BUILTINS: &[Builtin] = builtins! {
     // (`server::adopt`).
     { "start-from-tmux", Kind::Bool, Global, "off", "When the default server starts with no sessions, take them from a running tmux server or tmux-resurrect's newest save." }
     { "resurrect-dir", Kind::String, Global, "", "Where to look for tmux-resurrect saves for start-from-tmux; empty uses resurrect's own default." }
+    { "default-layout", Kind::String, Global, "", "Name of the layout file in the layouts directory that a new-session without a command builds; empty makes a plain session." }
     { "automatic-rename", Kind::Bool, Window, "on", "Rename a window after automatic-rename-format as its pane changes." }
     { "automatic-rename-format", Kind::String, Window, "#{b:pane_current_path}", "Format for a window's name while automatic-rename is on; grofe's default is the current folder."; tmux_default = "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}" }
     { "allow-rename", Kind::Bool, Window, "off", "Let a program rename its window with an escape sequence." }

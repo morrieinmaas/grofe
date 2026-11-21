@@ -8,6 +8,7 @@
 - [Getting started](getting-started.md)
 - [Switching from tmux](switching-from-tmux.md)
 - [Configuration](configuration.md)
+- [Settings menu](settings.md)
 - [Framed panes](framed-panes.md)
 - [Scratchpads](scratchpads.md)
 - [Agent sessions](agents.md)

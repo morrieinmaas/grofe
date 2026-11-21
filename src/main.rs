@@ -349,9 +349,16 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // grofe's own verb: attach (starting a server when none runs) and
+        // open the settings menu.
+        "settings" if dialect() == Dialect::Grofe && rest.len() == 1 => {
+            OPEN_SETTINGS.store(true, std::sync::atomic::Ordering::Relaxed);
+            new_and_attach(&globals, &["new-session".to_string()], true)
+        }
         "new-session" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
+        "new-session" if plain_new_session(rest, true) => layout_glue::new_detached(&globals, rest),
         "new-session" if attaches(rest) => new_and_attach(&globals, rest, bare),
         _ => {
             let (socket, own_dir) = globals.resolve();
@@ -363,6 +370,9 @@ fn main() -> ExitCode {
 /// The dialect every hello this process sends carries: grofe, unless the
 /// tmux front end chose otherwise.
 static DIALECT: OnceLock<Dialect> = OnceLock::new();
+
+/// `grofe settings`: the client this call attaches opens the settings menu.
+static OPEN_SETTINGS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `tmux -N`: this call never starts a server.
 static NO_START: OnceLock<bool> = OnceLock::new();
@@ -771,6 +781,25 @@ fn attaches(argv: &[String]) -> bool {
     )
 }
 
+/// A grofe `new-session` that makes a plain session, which `default-layout`
+/// then builds into: no command, no `-t` group, nothing printed, no `-A`.
+/// `detached` picks `-d` or not.
+// ponytail: `default-layout` is applied by this CLI after the session exists,
+// so a `new-session` run inside the server (a key binding, the command
+// prompt) makes a plain session, and `-P` skips it for a detached one.
+fn plain_new_session(argv: &[String], detached: bool) -> bool {
+    dialect() == Dialect::Grofe
+        && matches!(
+            grofe::cmd::parse(argv),
+            Ok(grofe::cmd::Command::NewSession(c))
+                if c.detached == detached
+                    && c.command.is_none()
+                    && c.group.is_none()
+                    && !c.print
+                    && !c.attach
+        )
+}
+
 /// What bare `grofe`'s request prints when it made no session.
 const REATTACH: &str = "grofe:reattach";
 
@@ -832,6 +861,9 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),
     };
+    if created && plain_new_session(&new_cmd, true) {
+        layout_glue::apply_default_layout_to(globals, &id);
+    }
     let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
     // `new-session -f`: client flags for the client it attaches.
     if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&new_cmd) {
@@ -1302,6 +1334,7 @@ fn attach_to(
             flags: parsed.flags.clone(),
             no_env: parsed.no_env,
             kill_parent: parsed.kill_parent,
+            open_settings: OPEN_SETTINGS.load(std::sync::atomic::Ordering::Relaxed),
         },
     };
     let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());

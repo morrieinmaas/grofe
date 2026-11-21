@@ -22,6 +22,8 @@ start-from-tmux = false
   set by built-in defaults
 resurrect-dir = ""
   set by built-in defaults
+default-layout = ""
+  set by built-in defaults
 automatic-rename = true
   set by built-in defaults
 automatic-rename-format = "#{b:pane_current_path}"

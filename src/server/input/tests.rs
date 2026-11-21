@@ -1522,7 +1522,7 @@ fn default_bindings_are_tmux_stock_for_the_m2_commands() {
     // Nothing in root: every key there goes to the pane.
     assert!(t.get(ROOT_TABLE, &k("q")).is_none());
     // Stock keys grofe leaves unbound (out of scope).
-    for name in ["m", "M", "t", "C", "<", ">", "*"] {
+    for name in ["m", "M", "t", "<", ">", "*"] {
         assert!(t.get(PREFIX_TABLE, &k(name)).is_none(), "{name}");
     }
 }

@@ -52,6 +52,7 @@ pub mod render;
 pub mod restore;
 pub mod resume;
 pub mod screenimg;
+pub mod settings;
 pub mod shell_jobs;
 pub(crate) mod sidebar;
 pub mod sixel;
@@ -249,6 +250,7 @@ pub struct State {
     pub notify_runner: notify::desktop::Runner,
     pub trays: tray::Trays,
     pub keymenus: keymenu::Menus,
+    pub settings_menus: settings::overlay::Menus,
     /// The paste buffers (TM.4).
     pub buffers: buffers::Buffers,
     /// The panes in copy mode (TM.1).
@@ -404,6 +406,8 @@ fn register_builtins(state: &mut State) {
     register_overlay(state, Arc::new(tray::TrayOverlay));
     register_input_hook(state, Arc::new(toast::ToastHook));
     register_overlay(state, Arc::new(toast::ToastOverlay));
+    register_input_hook(state, Arc::new(settings::overlay::SettingsHook));
+    register_overlay(state, Arc::new(settings::overlay::SettingsOverlay));
     register_input_hook(state, Arc::new(keymenu::KeyMenuHook));
     register_overlay(state, Arc::new(keymenu::KeyMenuOverlay));
     register_input_hook(state, Arc::new(tree::TreeHook));
@@ -678,6 +682,7 @@ async fn serve(
         notify_runner: notify::desktop::Runner::default(),
         trays: tray::Trays::default(),
         keymenus: keymenu::Menus::default(),
+        settings_menus: settings::overlay::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),
@@ -1469,6 +1474,7 @@ fn test_state_at(socket: PathBuf) -> (State, mpsc::Receiver<Job>) {
         notify_runner: notify::desktop::Runner::default(),
         trays: tray::Trays::default(),
         keymenus: keymenu::Menus::default(),
+        settings_menus: settings::overlay::Menus::default(),
         buffers: buffers::Buffers::default(),
         copy: copy::Copies::default(),
         clocks: clock::Clocks::default(),

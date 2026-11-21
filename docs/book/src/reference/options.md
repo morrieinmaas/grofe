@@ -469,6 +469,18 @@ Command new panes run; empty runs default-shell.
 
 Default: empty
 
+## default-layout
+
+Name of the layout file in the layouts directory that a new-session without a command builds; empty makes a plain session.
+
+- **TOML key**: `default-layout` (string)
+- **Scope**: global
+- **Values**: text
+
+Default: empty
+
+grofe only: tmux does not have this option.
+
 ## default-shell
 
 Shell new panes run when default-command is empty; set from $SHELL when the server starts.

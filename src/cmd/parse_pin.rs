@@ -99,6 +99,7 @@ const VERBS: &[&str] = &[
     "select-pane",
     "select-window",
     "send-keys",
+    "settings",
     "send-prefix",
     "server-access",
     "set-buffer",

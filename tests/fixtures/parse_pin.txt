@@ -1888,6 +1888,27 @@ send-keys value-after-positional => ok af3d586d
 send-keys dashdash-flag => ok a4dacd55
 send-keys flag-dashdash-positional => err command send-keys: unknown flag -d
 send-keys letters => a=U a=U b=U b=U c=err command send-keys: -c expects an argument c=ok c46e9fd5 d=U d=U e=U e=U f=U f=U g=U g=U h=U h=U i=U i=U j=U j=U k=U k=U l=ok 1c7e9ba0 l=ok 369c3c5c m=U m=U n=U n=U o=U o=U p=U p=U q=U q=U r=U r=U s=U s=U t=err command send-keys: -t expects an argument t=ok 1941341c u=U u=U v=U v=U w=U w=U x=U x=U y=U y=U z=U z=U A=U A=U B=U B=U C=U C=U D=U D=U E=U E=U F=ok 9f68e77b F=ok 6e2f038f G=U G=U H=ok 1c7e9ba0 H=err invalid hex byte: %1 I=U I=U J=U J=U K=ok 59d8c1e9 K=ok d612bd6d L=U L=U M=ok 36507ae3 M=ok f20ee3a7 N=err command send-keys: -N expects an argument N=ok fc499d15 O=U O=U P=U P=U Q=U Q=U R=ok d0228d13 R=ok 76f201a7 S=U S=U T=U T=U U=U U=U V=U V=U W=U W=U X=ok 619b662d X=ok 06b85d91 Y=U Y=U Z=U Z=U 
+settings none => ok 4b058728
+settings one => err command settings: too many arguments (need at most 0)
+settings two => err command settings: too many arguments (need at most 0)
+settings many => err command settings: too many arguments (need at most 0)
+settings long => err command settings: invalid flag --
+settings dashdash => err command settings: too many arguments (need at most 0)
+settings target => err command settings: unknown flag -t
+settings target-extra => err command settings: unknown flag -t
+settings target-glued => err command settings: unknown flag -t
+settings target-num => err command settings: unknown flag -t
+settings combined-bool => err command settings: unknown flag -d
+settings combined-bool-rev => err command settings: unknown flag -P
+settings combined-value => err command settings: unknown flag -d
+settings combined-glued => err command settings: unknown flag -d
+settings repeated-bool => err command settings: unknown flag -d
+settings repeated-value => err command settings: unknown flag -t
+settings flag-after-positional => err command settings: too many arguments (need at most 0)
+settings value-after-positional => err command settings: too many arguments (need at most 0)
+settings dashdash-flag => err command settings: too many arguments (need at most 0)
+settings flag-dashdash-positional => err command settings: unknown flag -d
+settings letters => a=U a=U b=U b=U c=U c=U d=U d=U e=U e=U f=U f=U g=U g=U h=U h=U i=U i=U j=U j=U k=U k=U l=U l=U m=U m=U n=U n=U o=U o=U p=U p=U q=U q=U r=U r=U s=U s=U t=U t=U u=U u=U v=U v=U w=U w=U x=U x=U y=U y=U z=U z=U A=U A=U B=U B=U C=U C=U D=U D=U E=U E=U F=U F=U G=U G=U H=U H=U I=U I=U J=U J=U K=U K=U L=U L=U M=U M=U N=U N=U O=U O=U P=U P=U Q=U Q=U R=U R=U S=U S=U T=U T=U U=U U=U V=U V=U W=U W=U X=U X=U Y=U Y=U Z=U Z=U 
 send-prefix none => ok 5631edaf
 send-prefix one => err command send-prefix: too many arguments (need at most 0)
 send-prefix two => err command send-prefix: too many arguments (need at most 0)

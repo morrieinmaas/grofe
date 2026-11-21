@@ -30,6 +30,62 @@ pub fn run(globals: &Globals, args: &[String]) -> ExitCode {
     }
 }
 
+/// `new-session -d` without a command: made with `-P`, so the session is
+/// known, then `default-layout` builds into it.
+pub fn new_detached(globals: &Globals, argv: &[String]) -> ExitCode {
+    let (socket, own_dir) = globals.resolve();
+    let mut server = Host {
+        socket,
+        own_dir,
+        held: HangUp(None),
+    };
+    let mut argv = argv.to_vec();
+    argv.extend(["-P", "-F", "#{session_id}"].map(String::from));
+    match layouts::Server::create_session(&mut server, &argv) {
+        Ok(id) => {
+            apply_default_layout(&mut server, id.trim());
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// `default-layout` for session `id`; a layout that will not build is a
+/// warning, the session stays.
+pub fn apply_default_layout_to(globals: &Globals, id: &str) {
+    let (socket, own_dir) = globals.resolve();
+    let mut server = Host {
+        socket,
+        own_dir,
+        held: HangUp(None),
+    };
+    apply_default_layout(&mut server, id);
+}
+
+/// The layouts are the server's: those next to the config file it loaded,
+/// else this CLI's own.
+fn apply_default_layout(server: &mut Host, id: &str) {
+    let mut dirs = Dirs::from_process();
+    if let Some(dir) = super::config_glue::server_config_dir(&server.socket) {
+        dirs.layouts = Some(dir.join("layouts"));
+    }
+    match layouts::build_default(server, &dirs, id) {
+        Ok(report) => {
+            for w in &report.warnings {
+                eprintln!("grofe: warning: {w}");
+            }
+        }
+        Err(e) => {
+            let line = format!("grofe: default-layout: {e}");
+            eprintln!("{line}");
+            // `-p -l` only prints, but the server logs the command it was
+            // sent, so `show-messages` has the line.
+            let log = ["display-message", "-p", "-l", "-t", id, &line].map(String::from);
+            let _ = layouts::Server::run(server, &log);
+        }
+    }
+}
+
 struct Host {
     socket: PathBuf,
     own_dir: bool,

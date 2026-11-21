@@ -17,8 +17,8 @@ use grofe::remote::ssh::Target;
 use grofe::remote::{forward, session};
 
 use super::{
-    FEATURES, Globals, attach_argv_for_existing, attaches, connect_or_start, dialect, fail,
-    print_reply, request, request_with, server_left, session_gone,
+    FEATURES, Globals, OPEN_SETTINGS, attach_argv_for_existing, attaches, connect_or_start,
+    dialect, fail, print_reply, request, request_with, server_left, session_gone,
 };
 
 /// A call for a remote host: `-r <host> [command...]`, or `attach
@@ -434,6 +434,7 @@ fn attach_options(
             flags: parsed.flags.clone(),
             no_env: parsed.no_env,
             kill_parent: parsed.kill_parent,
+            open_settings: OPEN_SETTINGS.load(std::sync::atomic::Ordering::Relaxed),
         },
     }
 }

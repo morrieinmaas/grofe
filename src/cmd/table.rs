@@ -92,6 +92,7 @@ pub(super) static ROWS: &[Row] = &[
     row("__config-file", "", "", 0, |_| Ok(Command::ConfigFile)),
     row("choose-agent", "", "", 0, |_| Ok(Command::ChooseAgent)),
     row("agent-grid", "", "", 0, |_| Ok(Command::AgentGrid)),
+    row("settings", "", "", 0, |_| Ok(Command::Settings)),
     row("choose-notification", "", "", 0, |_| {
         Ok(Command::ChooseNotification)
     }),

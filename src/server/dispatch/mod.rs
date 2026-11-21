@@ -54,7 +54,9 @@ use crate::protocol::{ATTACH_CHECK, ClientCtx};
 use crate::server::clients::CommandLog;
 use crate::server::model::{Model, Pane};
 use crate::server::pane::{PaneHandle, PaneSpawn, pane_shell, usable_cwd};
-use crate::server::{State, clients, graphics, grid, keymenu, picker, prompt, sidebar, tray};
+use crate::server::{
+    State, clients, graphics, grid, keymenu, picker, prompt, settings, sidebar, tray,
+};
 use crate::types::{PaneId, SessionId, WindowId};
 use crate::{compat, server};
 
@@ -479,6 +481,10 @@ fn route(state: &mut State, ctx: &ClientCtx, cmd: Command) -> Result<String, Str
             sidebar::set(state, client, op)?;
             clients::resize_for_sidebar(state, client);
             Ok(String::new())
+        }
+        Command::Settings => {
+            let client = clients::current_client(state, ctx).ok_or("no client")?;
+            settings::overlay::open(state, client).map(|()| String::new())
         }
         Command::AgentGrid => {
             let client = clients::current_client(state, ctx).ok_or("no client")?;

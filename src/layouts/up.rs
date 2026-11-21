@@ -139,7 +139,7 @@ fn format_literal(s: &str) -> String {
     s.replace('#', "##")
 }
 
-fn populate(
+pub(super) fn populate(
     server: &mut dyn Server,
     s: &SessionPlan,
     sid: &str,

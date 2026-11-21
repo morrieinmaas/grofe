@@ -137,3 +137,23 @@ fn scope_word(scope: OptionScope) -> &'static str {
         OptionScope::Pane => "pane",
     }
 }
+
+/// A built-in option as the settings menu lists it.
+pub(crate) struct OptionDoc {
+    pub name: &'static str,
+    pub toml: &'static str,
+    pub doc: &'static str,
+    pub default: &'static str,
+    pub kind: Kind,
+}
+
+/// Every built-in option, in table order.
+pub(crate) fn option_docs() -> impl Iterator<Item = OptionDoc> {
+    BUILTINS.iter().map(|b| OptionDoc {
+        name: b.name,
+        toml: crate::config::toml_key(b.name).unwrap_or(b.name),
+        doc: b.doc,
+        default: b.default,
+        kind: b.kind,
+    })
+}

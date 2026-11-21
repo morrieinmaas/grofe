@@ -56,7 +56,7 @@ fn put_cell(screen: &mut Screen, x: usize, y: usize, c: char, style: &Style, fla
 /// Draws `text` from `x` and never past column `end` (exclusive). A wide
 /// character that does not fit whole is dropped, not split. Returns the
 /// column after the last cell drawn.
-fn put_text(
+pub fn put_text(
     screen: &mut Screen,
     mut x: usize,
     y: usize,

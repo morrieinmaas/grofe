@@ -131,6 +131,13 @@ impl KeyTables {
         }
     }
 
+    /// Whether a runtime `unbind-key` holds `key` unbound over a `reload`.
+    pub fn is_runtime_unbound(&self, table: &str, key: &Key) -> bool {
+        self.runtime_unbound
+            .iter()
+            .any(|(t, k)| t == table && k == key)
+    }
+
     /// Takes `key` out of the runtime's hands, so the next `reload` binds
     /// it from the config: a runtime binding of it and a runtime unbind go,
     /// and an unbound key gets its default binding until then (a reload that
