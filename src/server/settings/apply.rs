@@ -30,27 +30,23 @@ pub enum Change {
     },
 }
 
-/// Writes `changes`. What puts the file back as it was is returned (`None`
-/// when there was nothing to change); the first error puts it back itself.
-pub fn write(dir: &Path, changes: &[Change]) -> Result<Option<Saved>, String> {
-    let mut first: Option<Saved> = None;
+/// Makes `changes` to the parsed `settings.toml` in `doc`.
+fn apply_changes(doc: &mut DocumentMut, changes: &[Change]) -> Result<(), String> {
     for c in changes {
-        let r = match c {
-            Change::Set { key, value } => write::set(dir, key, value.clone()),
+        match c {
+            Change::Set { key, value } => write::set_in(doc, key, value.clone())?,
             Change::Bind { table, key, fields } => {
-                write::set_binding(dir, table, key, &fields.cmd, &fields.as_write())
-            }
-        };
-        match r {
-            Ok(s) => {
-                first.get_or_insert(s);
-            }
-            Err(e) => {
-                return Err(customize::failed(e, first.map_or(Ok(()), Saved::rollback)));
+                write::set_binding_in(doc, table, key, &fields.cmd, &fields.as_write())?
             }
         }
     }
-    Ok(first)
+    Ok(())
+}
+
+/// Writes `changes` in one go, or nothing when one fails. What puts the
+/// file back as it was is returned.
+pub fn write(dir: &Path, changes: &[Change]) -> Result<Saved, String> {
+    write::edit(dir, |doc| apply_changes(doc, changes).map(|()| true))
 }
 
 /// `-old` / `+new` lines of `settings.toml` before and after `changes`,
@@ -66,14 +62,7 @@ pub fn diff(dir: &Path, changes: &[Change]) -> Result<String, String> {
     let mut doc: DocumentMut = before
         .parse()
         .map_err(|e| format!("{}: {e}", write::FILE))?;
-    for c in changes {
-        match c {
-            Change::Set { key, value } => write::set_in(&mut doc, key, value.clone())?,
-            Change::Bind { table, key, fields } => {
-                write::set_binding_in(&mut doc, table, key, &fields.cmd, &fields.as_write())?
-            }
-        }
-    }
+    apply_changes(&mut doc, changes)?;
     Ok(line_diff(&before, &doc.to_string()))
 }
 
@@ -215,8 +204,9 @@ fn commit(state: &mut State, client: ClientId) {
         return;
     }
     let keys: Vec<(&str, Key)> = plan.keys.iter().map(|(t, k)| (t.as_str(), *k)).collect();
-    let result =
-        customize::with_owned_reload(state, &plan.names, &keys, || write(&dir, &plan.changes));
+    let result = customize::with_owned_reload(state, &plan.names, &keys, || {
+        write(&dir, &plan.changes).map(Some)
+    });
     match result {
         Ok(()) => {
             overlay::close(state, client);
@@ -265,9 +255,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join(write::FILE);
         fs::write(&f, "a = 1\n").unwrap();
-        let saved = write(d.path(), &[set("b", 2), set("c", 3)])
-            .unwrap()
-            .unwrap();
+        let saved = write(d.path(), &[set("b", 2), set("c", 3)]).unwrap();
         assert_ne!(fs::read(&f).unwrap(), b"a = 1\n");
         saved.rollback().unwrap();
         assert_eq!(fs::read(&f).unwrap(), b"a = 1\n");

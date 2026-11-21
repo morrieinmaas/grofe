@@ -40,11 +40,12 @@ pub enum Act {
     Layout { name: String, toml: String },
 }
 
-/// An option as it was before the menu first set it: its value, and
-/// whether a runtime `set -g` held it, so a reload left it alone.
-pub struct Before {
-    pub value: String,
+/// An option the menu set: its value before the menu first did, whether a
+/// runtime `set -g` held it then, and the value the menu last set.
+pub struct Edit {
+    pub before: String,
     pub runtime: bool,
+    pub last: String,
 }
 
 fn place(src: &Source, dir: Option<&Path>) -> String {
@@ -99,38 +100,65 @@ pub fn apply(state: &mut State, client: ClientId, changes: &[(&'static str, &str
         return;
     };
     for &(name, to) in changes {
-        let before = Before {
-            value: value(state, name),
-            runtime: state.model.options.is_runtime(name),
-        };
+        let before = value(state, name);
+        let runtime = state.model.options.is_runtime(name);
         let argv = set(state, name, to);
         match dispatch::run(state, &ctx, &argv) {
-            Ok(_) => overlay::note_set(state, client, name, before),
+            Ok(_) => {
+                let last = value(state, name);
+                let edit = Edit {
+                    before,
+                    runtime,
+                    last,
+                };
+                overlay::note_set(state, client, name, edit);
+            }
             Err(e) => clients::show_message(state, client, e.trim_end()),
         }
     }
     clients::mark_dirty(state, client);
 }
 
-/// Sets each of `changed` back to its value before the menu set it. One
-/// the runtime did not hold then goes back to the config: the next reload
-/// applies it again.
-pub fn restore(
+/// Hands back the options of `set`, as Esc then `y` does, and returns those
+/// that go back to the config. One whose live value is no longer what this
+/// menu last set is left alone; another open menu that set it over this
+/// one's value takes this one's before instead. One a runtime `set -g` held
+/// before is set back to that value and stays runtime.
+pub fn discard(
     state: &mut State,
     client: ClientId,
     ctx: &ClientCtx,
-    changed: &BTreeMap<&'static str, Before>,
-) {
-    for (name, before) in changed {
-        let argv = set(state, name, &before.value);
-        if let Err(e) = dispatch::run(state, ctx, &argv) {
-            clients::show_message(state, client, e.trim_end());
-        }
-        if !before.runtime {
-            state.model.options.release_runtime(name);
+    set_by_menu: BTreeMap<&'static str, Edit>,
+) -> Vec<&'static str> {
+    let mut release = Vec::new();
+    for (name, edit) in set_by_menu {
+        let mine = state.model.options.is_runtime(name) && value(state, name) == edit.last;
+        if !mine {
+            hand_down(state, name, &edit);
+        } else if edit.runtime {
+            let argv = set(state, name, &edit.before);
+            if let Err(e) = dispatch::run(state, ctx, &argv) {
+                clients::show_message(state, client, e.trim_end());
+            }
+        } else {
+            release.push(name);
         }
     }
-    clients::mark_dirty(state, client);
+    release
+}
+
+/// Gives `edit`'s before to each open menu that set `name` over the value
+/// `edit` last set.
+fn hand_down(state: &mut State, name: &str, edit: &Edit) {
+    for menu in state.settings_menus.open.values_mut() {
+        if let Some(e) = menu.set.get_mut(name)
+            && e.runtime
+            && e.before == edit.last
+        {
+            e.before = edit.before.clone();
+            e.runtime = edit.runtime;
+        }
+    }
 }
 
 /// What Enter on `row` does: a flag toggles, a choice cycles, the rest ask.
@@ -157,7 +185,10 @@ pub fn enter(state: &mut State, client: ClientId, row: &Row) {
         "command",
         false,
         Box::new(move |state, client, text| {
-            apply(state, client, &[(name, text)]);
+            // The menu may have closed (Esc elsewhere, a resize) meanwhile.
+            if state.settings_menus.is_open(client) {
+                apply(state, client, &[(name, text)]);
+            }
             Routed::Consumed
         }),
     );

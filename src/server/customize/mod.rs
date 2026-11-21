@@ -18,8 +18,8 @@ mod table;
 
 // The rest is the settings menu's too (PR 3).
 pub(crate) use save::{
-    Fields, binding_fields, binding_refusal, failed, persist, reset, settings_dir, toml_item,
-    with_owned_reload,
+    Fields, binding_fields, binding_refusal, persist, release_and_reload, reset, settings_dir,
+    toml_item, with_owned_reload,
 };
 
 use std::collections::BTreeMap;

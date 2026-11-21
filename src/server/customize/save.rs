@@ -262,6 +262,16 @@ pub(crate) fn with_owned_reload(
     }
 }
 
+/// Hands options `names` and key bindings `keys` back to the config as it
+/// is: [`with_owned_reload`] with no file to change.
+pub(crate) fn release_and_reload(
+    state: &mut State,
+    names: &[&str],
+    keys: &[(&str, Key)],
+) -> Result<(), String> {
+    with_owned_reload(state, names, keys, || Ok(None))
+}
+
 /// `error`, with what went wrong putting settings.toml back, if anything.
 pub(crate) fn failed(error: String, rollback: Result<(), String>) -> String {
     match rollback {

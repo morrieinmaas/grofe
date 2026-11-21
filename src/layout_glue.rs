@@ -62,8 +62,14 @@ pub fn apply_default_layout_to(globals: &Globals, id: &str) {
     apply_default_layout(&mut server, id);
 }
 
+/// The layouts are the server's: those next to the config file it loaded,
+/// else this CLI's own.
 fn apply_default_layout(server: &mut Host, id: &str) {
-    match layouts::build_default(server, &Dirs::from_process(), id) {
+    let mut dirs = Dirs::from_process();
+    if let Some(dir) = super::config_glue::server_config_dir(&server.socket) {
+        dirs.layouts = Some(dir.join("layouts"));
+    }
+    match layouts::build_default(server, &dirs, id) {
         Ok(report) => {
             for w in &report.warnings {
                 eprintln!("grofe: warning: {w}");

@@ -234,7 +234,7 @@ fn resolve(path: &Path) -> PathBuf {
 
 /// Reads the file, applies `f`, and writes when `f` says it changed
 /// something.
-fn edit(
+pub(crate) fn edit(
     dir: &Path,
     f: impl FnOnce(&mut DocumentMut) -> Result<bool, String>,
 ) -> Result<Saved, String> {

@@ -756,3 +756,139 @@ fn shrinking_the_client_restores_what_the_menu_changed() {
     try_wait_until(|| opt(&srv, "mouse") == mouse0, WAIT)
         .unwrap_or_else(|e| panic!("not restored: {e}\n{}", h.text()));
 }
+
+/// Sets `history-limit` to `n` through the menu's value prompt.
+fn set_history(srv: &TestServer, h: &mut Harness, n: &str) {
+    type_query(h, "history-limit");
+    h.send(format!("\r\x15{n}\r"));
+    try_wait_until(|| opt(srv, "history-limit") == n, WAIT)
+        .unwrap_or_else(|e| panic!("history-limit not {n}: {e}\n{}", h.text()));
+    clear_query(h, "history-limit".len());
+}
+
+/// Esc then `y` on a menu with changes.
+fn esc_y(h: &mut Harness, n: usize) {
+    h.send(ESC);
+    h.wait_until("asks", WAIT, |t| {
+        t.contains(&format!("discard {n} changes? (y/n)"))
+    });
+    h.send("y");
+    h.wait_until("closed", WAIT, |t| !t.contains("Appearance"));
+}
+
+/// Two menus change one option, the first discards, then the second: the
+/// option is the config's again, so a config edit applies at the reload.
+#[test]
+fn two_menus_discarding_one_option_hand_it_back_to_the_config() {
+    let srv = TestServer::start();
+    let mut a = open_menu(&srv);
+    let mut b = second_menu(&srv);
+    set_history(&srv, &mut a, "3000");
+    set_history(&srv, &mut b, "4000");
+    esc_y(&mut a, 1);
+    assert_eq!(opt(&srv, "history-limit"), "4000", "A undid B's change");
+    esc_y(&mut b, 1);
+    try_wait_until(|| opt(&srv, "history-limit") == "2000", WAIT)
+        .unwrap_or_else(|e| panic!("not the config value: {e}"));
+    write(&srv, "config.toml", "history-limit = 5000\n");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(opt(&srv, "history-limit"), "5000", "still runtime");
+}
+
+/// A key moved by one menu and unbound by another is the config's again
+/// after both discard: a reload binds both keys from the config.
+#[test]
+fn two_menus_discarding_one_key_hand_it_back_to_the_config() {
+    let srv = TestServer::unstarted();
+    write(&srv, "config.toml", KEYS);
+    let mut a = open_menu(&srv);
+    let mut b = second_menu(&srv);
+    rebind_new_window(&srv, &mut a);
+    b.send("\t\t");
+    type_query(&mut b, "C-t");
+    b.wait_until("C-t row", WAIT, |t| t.contains("new-window"));
+    b.send("\x04");
+    try_wait_until(|| !bound_to(&srv, "C-t", "new-window"), WAIT)
+        .unwrap_or_else(|e| panic!("C-t still bound: {e}\n{}", b.text()));
+    esc_y(&mut a, 2);
+    esc_y(&mut b, 1);
+    try_wait_until(
+        || bound_to(&srv, "c", "new-window") && !bound_to(&srv, "C-t", "new-window"),
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("not the config's: {e}"));
+    write(
+        &srv,
+        "config.toml",
+        &format!("{KEYS}c = \"display-message cee\"\nC-t = \"display-message tee\"\n"),
+    );
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(
+        bound_to(&srv, "c", "display-message cee"),
+        "c still runtime"
+    );
+    assert!(
+        bound_to(&srv, "C-t", "display-message tee"),
+        "C-t still runtime unbound"
+    );
+}
+
+/// A config edit reloaded while the menu holds its own value of the option
+/// shows once the menu discards.
+#[test]
+fn esc_y_shows_a_config_value_reloaded_under_the_menus_edit() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    set_history(&srv, &mut h, "3000");
+    write(&srv, "config.toml", "history-limit = 5000\n");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(opt(&srv, "history-limit"), "3000");
+    esc_y(&mut h, 1);
+    try_wait_until(|| opt(&srv, "history-limit") == "5000", WAIT)
+        .unwrap_or_else(|e| panic!("not the new config value: {e}"));
+}
+
+/// A value prompt the menu opened does nothing once the menu has closed.
+#[test]
+fn a_value_prompt_answered_after_the_menu_closed_changes_nothing() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    type_query(&mut h, "history-limit");
+    h.send("\r");
+    h.wait_until("prompt", WAIT, |t| t.contains("(history-limit)"));
+    // The prompt covers the message line, so there is no `window too small`.
+    h.resize(20, 5);
+    std::thread::sleep(Duration::from_millis(500));
+    h.send("\x153000\r");
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(opt(&srv, "history-limit"), "2000");
+}
+
+/// `default-layout` is looked up in the server's config folder: a client
+/// without `--config` builds the layout next to the server's file.
+#[test]
+fn default_layout_is_found_in_the_servers_config_folder() {
+    let srv = TestServer::unstarted();
+    let dir = srv.home.join("a");
+    fs::create_dir_all(dir.join("layouts")).unwrap();
+    let file = dir.join("x.toml");
+    fs::write(&file, "default-layout = \"dev\"\n").unwrap();
+    fs::write(
+        dir.join("layouts/dev.toml"),
+        "[[window]]\nname = \"dev\"\nsplit = \"h\"\n[[window.pane]]\n[[window.pane]]\n",
+    )
+    .unwrap();
+    let out = srv.run(&[
+        "--config",
+        file.to_str().expect("utf8"),
+        "new-session",
+        "-d",
+        "-s",
+        "first",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    srv.cmd(&["new-session", "-d", "-s", "d"])
+        .expect("new-session");
+    let panes = srv.cmd(&["list-panes", "-t", "d"]).unwrap();
+    assert_eq!(panes.lines().count(), 2, "{panes}");
+}

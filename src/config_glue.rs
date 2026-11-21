@@ -82,6 +82,14 @@ pub fn warn_if_other(socket: &Path) {
     }
 }
 
+/// The folder of the config file the server on `socket` loaded, or `None`
+/// when no server answers or it loaded none.
+pub fn server_config_dir(socket: &Path) -> Option<PathBuf> {
+    let stream = UnixStream::connect(socket).ok()?;
+    let files = ask_files(stream)?;
+    files.first()?.parent().map(Path::to_path_buf)
+}
+
 /// The files the server loaded, asked in grofe's dialect whatever name this
 /// CLI runs as.
 fn ask_files(stream: UnixStream) -> Option<Vec<PathBuf>> {

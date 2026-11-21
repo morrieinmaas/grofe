@@ -1,6 +1,6 @@
 //! The settings menu overlay: the options in the list widget, one tab per
-//! section. Every change applies at once; Esc asks before it puts back what
-//! this menu changed. `C-s` and the Keys and Layouts rows are the apply,
+//! section. Every change applies at once; Esc asks before it hands what
+//! this menu changed back. `C-s` and the Keys and Layouts rows are the apply,
 //! keys and layouts tasks'.
 
 use std::collections::BTreeMap;
@@ -19,7 +19,7 @@ use crate::types::{ClientId, Rect};
 use super::apply;
 use super::keys::{self, Touched};
 use super::layouts;
-use super::rows::{self, Act, Before, Entry, Row};
+use super::rows::{self, Act, Edit, Entry, Row};
 use super::sections::Section;
 
 /// The smallest client the menu is drawn on.
@@ -46,10 +46,12 @@ pub(super) struct Menu {
     extra: Vec<Entry>,
     /// How many of `extra` are key rows.
     nkeys: usize,
-    /// The options this menu set, as they were before it first did. Another
-    /// client's change or a reload is not the menu's.
-    pub(super) set: BTreeMap<&'static str, Before>,
-    /// The keys this menu rebound or unbound, as they were before.
+    /// The options this menu set, as they were before it first did and as
+    /// it last set them. Another client's change or a reload is not the
+    /// menu's.
+    pub(super) set: BTreeMap<&'static str, Edit>,
+    /// The keys this menu rebound or unbound, as they were before and as it
+    /// last left them.
     pub(super) keys: Vec<Touched>,
     /// The key row waiting for the key to bind it to.
     pending: Option<(String, Key)>,
@@ -116,10 +118,16 @@ pub fn resized(state: &mut State, id: ClientId, size: (u16, u16)) {
     }
 }
 
-/// Notes that this menu set `name`; the first time, what it was before.
-pub(super) fn note_set(state: &mut State, client: ClientId, name: &'static str, before: Before) {
+/// Notes that this menu set `name` as `edit` says; a name already noted
+/// keeps what it was before.
+pub(super) fn note_set(state: &mut State, client: ClientId, name: &'static str, edit: Edit) {
     if let Some(menu) = state.settings_menus.open.get_mut(&client) {
-        menu.set.entry(name).or_insert(before);
+        match menu.set.get_mut(name) {
+            Some(noted) => noted.last = edit.last,
+            None => {
+                menu.set.insert(name, edit);
+            }
+        }
     }
 }
 
@@ -144,7 +152,10 @@ pub(super) fn record(state: &mut State, client: ClientId, touched: Vec<Touched>)
                 .iter_mut()
                 .find(|k| k.table == t.table && k.key == t.key);
             match noted {
-                Some(existing) => existing.refusal = existing.refusal.or(t.refusal),
+                Some(existing) => {
+                    existing.refusal = existing.refusal.or(t.refusal);
+                    existing.last = t.last;
+                }
                 None => menu.keys.push(t),
             }
         }
@@ -242,7 +253,7 @@ fn escape(state: &mut State, client: ClientId) {
     );
 }
 
-/// Closes the menu and puts back every value and binding it changed.
+/// Closes the menu and hands back every value and binding it changed.
 fn discard(state: &mut State, client: ClientId) {
     let Some(ctx) = state.clients.get(&client).map(|c| c.ctx.clone()) else {
         return;
@@ -255,8 +266,15 @@ fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx) {
         return;
     };
     clients::mark_dirty(state, client);
-    keys::restore(state, &menu.keys);
-    rows::restore(state, client, ctx, &menu.set);
+    let keys = keys::discard(state, menu.keys);
+    let names = rows::discard(state, client, ctx, menu.set);
+    if names.is_empty() && keys.is_empty() {
+        return;
+    }
+    let keys: Vec<(&str, Key)> = keys.iter().map(|(t, k)| (t.as_str(), *k)).collect();
+    if let Err(e) = customize::release_and_reload(state, &names, &keys) {
+        clients::show_message(state, client, e.trim_end());
+    }
 }
 
 /// Takes a client's keys while its settings menu is open.
