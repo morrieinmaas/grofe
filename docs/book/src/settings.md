@@ -34,7 +34,10 @@ Typing goes to the search, so the actions use control keys.
 ## Preview and cancel
 
 Every change applies to the running server at once. `Esc` then `y` puts every
-option and key binding back as it was when the menu opened.
+option and key binding back as it was when the menu opened. A menu closed any
+other way than `C-s` does the same: when the client detaches, or is resized
+below 50 by 10, it puts back what it changed, runtime marks and unbound keys
+included, exactly as `Esc` then `y` does.
 
 ## Saving
 
@@ -65,7 +68,8 @@ drawing of the first window's panes beside the list. `Enter` sets
 `default-layout` to the selected layout; save it with `C-s`.
 
 With `default-layout` set, `new-session` without a command builds that
-layout. An unknown name makes a plain session and logs
-`default-layout: no layout <name>`. The `grofe` command line builds the layout, not the server, so a session the
-server makes by itself, such as from a key binding, stays plain. `-P` and `-A`
+layout. An unknown name makes a plain session; the `grofe` command line
+prints `grofe: default-layout: no layout <name>` and logs it for
+`show-messages`. The command line builds the layout, not the server, so a
+session the server makes by itself, such as from a key binding, stays plain. `-P` and `-A`
 also make a plain session.

@@ -4,7 +4,6 @@ use crate::layouts::{self, Dirs, schema};
 use crate::server::listdraw;
 use crate::server::render::Screen;
 use crate::server::status::Style;
-use crate::server::{State, clients};
 use crate::types::Rect;
 
 use super::rows::{Act, Entry};
@@ -38,24 +37,6 @@ pub fn draw_preview(screen: &mut Screen, area: Rect, layout_toml: &str) {
         let end = usize::from(area.x + area.cols);
         let y = usize::from(area.y) + i;
         listdraw::put_text(screen, usize::from(area.x), y, end, line, &Style::default());
-    }
-}
-
-/// Logs `default-layout: no layout <name>` when the option names no layout
-/// file; the client then builds nothing and the session stays plain.
-pub fn log_unknown_default_layout(state: &mut State) {
-    let name = state
-        .model
-        .options
-        .lookup("default-layout", &[])
-        .unwrap_or_default()
-        .to_string();
-    if !name.is_empty() && layouts::find(&Dirs::from_process(), &name).is_none() {
-        clients::log_error(
-            state,
-            "new-session",
-            &format!("default-layout: no layout {name}"),
-        );
     }
 }
 

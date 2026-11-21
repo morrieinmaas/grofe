@@ -1317,7 +1317,7 @@ pub(super) fn remove(state: &mut State, id: ClientId, reason: Option<String>) {
     crate::server::sidebar::client_gone(state, id);
     crate::server::grid::client_gone(state, id);
     crate::server::keymenu::client_gone(state, id);
-    crate::server::settings::overlay::client_gone(state, id);
+    crate::server::settings::overlay::client_gone(state, id, &c.ctx);
     crate::server::mouse::client_gone(state, id);
     if let (Some(tx), Some(reason)) = (c.exit.take(), reason) {
         let _ = tx.send(reason);

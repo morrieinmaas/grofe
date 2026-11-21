@@ -20,7 +20,7 @@ pub(super) fn key_of(name: &str, idx: Option<u32>) -> Option<&'static str> {
 /// Why `name` at `scope` cannot be saved, if it cannot: it has no scalar
 /// TOML key (a `@user` option, a list option or an array element), or the
 /// value is a session's, window's or pane's own rather than the global one.
-pub(crate) fn refusal(scope: Scope, name: &str, idx: Option<u32>) -> Option<&'static str> {
+pub(super) fn refusal(scope: Scope, name: &str, idx: Option<u32>) -> Option<&'static str> {
     if key_of(name, idx).is_none() {
         Some("it has no TOML key")
     } else if !is_global(scope) {
@@ -263,7 +263,7 @@ pub(crate) fn with_owned_reload(
 }
 
 /// `error`, with what went wrong putting settings.toml back, if anything.
-fn failed(error: String, rollback: Result<(), String>) -> String {
+pub(crate) fn failed(error: String, rollback: Result<(), String>) -> String {
     match rollback {
         Ok(()) => error,
         Err(r) => format!("{error} (restoring settings.toml failed: {r})"),

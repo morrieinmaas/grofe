@@ -17,9 +17,8 @@ mod save;
 mod table;
 
 // The rest is the settings menu's too (PR 3).
-#[allow(unused_imports)]
 pub(crate) use save::{
-    Fields, binding_fields, binding_refusal, persist, refusal, reset, settings_dir, toml_item,
+    Fields, binding_fields, binding_refusal, failed, persist, reset, settings_dir, toml_item,
     with_owned_reload,
 };
 

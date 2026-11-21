@@ -30,13 +30,6 @@ pub fn new_session(state: &mut State, ctx: &ClientCtx, c: NewSession) -> Result<
         attach_existing(state, ctx, id);
         return Ok(String::new());
     }
-    if c.command.is_none()
-        && c.group.is_none()
-        && !c.attach
-        && ctx.dialect == crate::protocol::Dialect::Grofe
-    {
-        super::super::settings::layouts::log_unknown_default_layout(state);
-    }
     let model = &mut state.model;
     let tmux = ctx.dialect == crate::protocol::Dialect::Tmux;
     let mut c = c;

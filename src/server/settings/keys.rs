@@ -1,9 +1,9 @@
 //! The settings menu's Keys section: bindings listed, rebound and unbound
 //! live, and put back when the menu is cancelled.
 
-use crate::server::State;
-use crate::server::input::{Binding, BindingSource, Key, KeyCode, Routed};
+use crate::server::input::{Binding, BindingSource, Key, KeyCode, KeyTables, Routed};
 use crate::server::prompt;
+use crate::server::{State, clients};
 use crate::types::ClientId;
 use crate::util::quote;
 
@@ -21,6 +21,8 @@ pub struct Touched {
     pub table: String,
     pub key: Key,
     was: Option<Binding>,
+    /// A runtime `unbind-key` held the key unbound before the menu came.
+    held_unbound: bool,
     pub refusal: Option<&'static str>,
 }
 
@@ -92,11 +94,18 @@ pub fn pressed(state: &mut State, client: ClientId, table: String, old: Key, new
     );
 }
 
-fn touched(table: &str, key: Key, was: Option<Binding>, refusal: Option<&'static str>) -> Touched {
+fn touched(
+    tables: &KeyTables,
+    table: &str,
+    key: Key,
+    was: Option<Binding>,
+    refusal: Option<&'static str>,
+) -> Touched {
     Touched {
         table: table.to_string(),
         key,
         was,
+        held_unbound: tables.is_runtime_unbound(table, &key),
         refusal,
     }
 }
@@ -106,12 +115,13 @@ fn rebind(state: &mut State, client: ClientId, table: &str, old: Key, new: Key) 
     let refusal = overlay::refusal(state, client, table, &old);
     let tables = &mut state.registry.key_tables;
     let Some(mut b) = tables.exact(table, &old).cloned() else {
+        clients::show_message(state, client, "no longer bound");
         return;
     };
     let was_new = tables.exact(table, &new).cloned();
     let touched = vec![
-        touched(table, old, Some(b.clone()), refusal),
-        touched(table, new, was_new, refusal),
+        touched(tables, table, old, Some(b.clone()), refusal),
+        touched(tables, table, new, was_new, refusal),
     ];
     tables.unbind_runtime(table, &old);
     b.source = BindingSource::Runtime;
@@ -124,10 +134,12 @@ pub fn unbind(state: &mut State, client: ClientId, table: &str, key: Key) {
     let refusal = overlay::refusal(state, client, table, &key);
     let tables = &mut state.registry.key_tables;
     let Some(b) = tables.exact(table, &key).cloned() else {
+        clients::show_message(state, client, "no longer bound");
         return;
     };
+    let touched = touched(tables, table, key, Some(b), refusal);
     tables.unbind_runtime(table, &key);
-    overlay::record(state, client, vec![touched(table, key, Some(b), refusal)]);
+    overlay::record(state, client, vec![touched]);
 }
 
 /// Puts every key back as it was before the menu touched it; a key that
@@ -140,6 +152,7 @@ pub fn restore(state: &mut State, touched: &[Touched]) {
                 tables.release_runtime(&t.table, &t.key);
                 tables.insert(&t.table, t.key, b.clone());
             }
+            None if t.held_unbound => tables.unbind_runtime(&t.table, &t.key),
             None => {
                 tables.unbind(&t.table, &t.key);
             }

@@ -46,10 +46,7 @@ pub fn write(dir: &Path, changes: &[Change]) -> Result<Option<Saved>, String> {
                 first.get_or_insert(s);
             }
             Err(e) => {
-                return Err(match first.map_or(Ok(()), Saved::rollback) {
-                    Ok(()) => e,
-                    Err(r) => format!("{e} (restoring settings.toml failed: {r})"),
-                });
+                return Err(customize::failed(e, first.map_or(Ok(()), Saved::rollback)));
             }
         }
     }

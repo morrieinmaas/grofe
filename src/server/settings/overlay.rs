@@ -13,7 +13,7 @@ use crate::server::listdraw::{self, Rows};
 use crate::server::listview::{self, ListAction, ListState};
 use crate::server::prompt;
 use crate::server::render::{Overlay, OverlayCtx, Screen};
-use crate::server::{State, clients};
+use crate::server::{ClientCtx, State, clients};
 use crate::types::{ClientId, Rect};
 
 use super::apply;
@@ -101,15 +101,17 @@ pub(super) fn close(state: &mut State, client: ClientId) {
     clients::mark_dirty(state, client);
 }
 
-/// A client that detached takes its menu with it.
-pub fn client_gone(state: &mut State, id: ClientId) {
-    state.settings_menus.open.remove(&id);
+/// A client that detached takes its menu with it, and what the menu
+/// changed, as Esc then `y` would.
+pub fn client_gone(state: &mut State, id: ClientId, ctx: &ClientCtx) {
+    discard_with(state, id, ctx);
 }
 
-/// A client resized below [`MIN_SIZE`] loses its menu, and is told why.
+/// A client resized below [`MIN_SIZE`] loses its menu, as Esc then `y`
+/// would close it, and is told why.
 pub fn resized(state: &mut State, id: ClientId, size: (u16, u16)) {
     if state.settings_menus.is_open(id) && too_small(size) {
-        close(state, id);
+        discard(state, id);
         clients::show_message(state, id, "window too small");
     }
 }
@@ -121,20 +123,29 @@ pub(super) fn note_set(state: &mut State, client: ClientId, name: &'static str, 
     }
 }
 
-/// Notes the keys a rebind or unbind touched and lists the keys again.
-pub(super) fn record(state: &mut State, client: ClientId, touched: Vec<Touched>) {
+/// Lists the keys again, as the tables hold them now.
+fn refresh_keys(state: &mut State, client: ClientId) {
     let fresh = keys::entries(state);
     if let Some(menu) = state.settings_menus.open.get_mut(&client) {
         let n = fresh.len();
         menu.extra.splice(..menu.nkeys, fresh);
         menu.nkeys = n;
+    }
+}
+
+/// Notes the keys a rebind or unbind touched and lists the keys again. A key
+/// already noted keeps what it was before, and gains a refusal.
+pub(super) fn record(state: &mut State, client: ClientId, touched: Vec<Touched>) {
+    refresh_keys(state, client);
+    if let Some(menu) = state.settings_menus.open.get_mut(&client) {
         for t in touched {
-            if !menu
+            let noted = menu
                 .keys
-                .iter()
-                .any(|k| k.table == t.table && k.key == t.key)
-            {
-                menu.keys.push(t);
+                .iter_mut()
+                .find(|k| k.table == t.table && k.key == t.key);
+            match noted {
+                Some(existing) => existing.refusal = existing.refusal.or(t.refusal),
+                None => menu.keys.push(t),
             }
         }
     }
@@ -233,12 +244,19 @@ fn escape(state: &mut State, client: ClientId) {
 
 /// Closes the menu and puts back every value and binding it changed.
 fn discard(state: &mut State, client: ClientId) {
+    let Some(ctx) = state.clients.get(&client).map(|c| c.ctx.clone()) else {
+        return;
+    };
+    discard_with(state, client, &ctx);
+}
+
+fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx) {
     let Some(menu) = state.settings_menus.open.remove(&client) else {
         return;
     };
     clients::mark_dirty(state, client);
     keys::restore(state, &menu.keys);
-    rows::restore(state, client, &menu.set);
+    rows::restore(state, client, ctx, &menu.set);
 }
 
 /// Takes a client's keys while its settings menu is open.
@@ -280,6 +298,8 @@ impl InputHook for SettingsHook {
 /// A key for the list: it moves, filters, switches tabs, or acts on the
 /// selected row.
 fn on_key(state: &mut State, client: ClientId, key: Key, size: (u16, u16)) {
+    // A reload or another client's rebind may have changed the bindings.
+    refresh_keys(state, client);
     let Some(menu) = state.settings_menus.open.get(&client) else {
         return;
     };

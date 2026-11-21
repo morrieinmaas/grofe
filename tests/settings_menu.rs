@@ -659,3 +659,100 @@ fn a_rebound_key_is_saved_with_its_command() {
         "{text}"
     );
 }
+
+/// In Keys, moves the binding that matches `query` to `key`.
+fn move_binding(h: &mut Harness, query: &str, key: &str) {
+    type_query(h, query);
+    h.send("\r");
+    std::thread::sleep(Duration::from_millis(400));
+    h.send(key);
+    std::thread::sleep(Duration::from_millis(400));
+    clear_query(h, query.len());
+}
+
+/// Esc then `y` puts a key back as a runtime `unbind-key` had left it: a
+/// reload leaves it unbound.
+#[test]
+fn esc_y_restores_a_runtime_unbind() {
+    let srv = TestServer::unstarted();
+    write(&srv, "config.toml", KEYS);
+    let mut h = attached(&srv, 100, 30);
+    srv.cmd(&["unbind-key", "c"]).expect("unbind-key");
+    h.send(format!("{PREFIX}C"));
+    h.wait_until("menu open", WAIT, |t| t.contains("Appearance"));
+    h.send("\t\t");
+    move_binding(&mut h, "split-window -h", "c");
+    try_wait_until(|| bound_to(&srv, "c", "split-window"), WAIT)
+        .unwrap_or_else(|e| panic!("c not bound: {e}\n{}", h.text()));
+    h.send(ESC);
+    h.wait_until("asks", WAIT, |t| t.contains("discard 2 changes? (y/n)"));
+    h.send("y");
+    try_wait_until(|| bound_to(&srv, "%", "split-window"), WAIT)
+        .unwrap_or_else(|e| panic!("% not back: {e}\n{}", h.text()));
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(!bound_to(&srv, "c", ""), "the reload bound c again");
+}
+
+/// A plugin's binding moved onto a key the menu freed is refused at C-s,
+/// though the key was noted before the move.
+#[test]
+fn a_plugin_binding_moved_onto_a_freed_key_is_refused() {
+    let srv = TestServer::unstarted();
+    write(
+        &srv,
+        "init.luau",
+        "grofe.bind('prefix', 'g', function() grofe.cmd{'split-window'} end)\n",
+    );
+    let mut h = open_menu(&srv);
+    h.send("\t\t");
+    type_query(&mut h, "new-window");
+    h.send("\x04");
+    try_wait_until(|| !bound_to(&srv, "c", "new-window"), WAIT)
+        .unwrap_or_else(|e| panic!("c still bound: {e}\n{}", h.text()));
+    clear_query(&mut h, "new-window".len());
+    move_binding(&mut h, "lua", "c");
+    h.send(CTRL_S);
+    h.wait_until("refused", WAIT, |t| t.contains("bound by a plugin"));
+    assert!(!h.text().contains("write settings.toml"), "{}", h.text());
+}
+
+/// A key bound while the menu is open is listed at the next key.
+#[test]
+fn a_binding_made_while_open_is_listed() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    srv.cmd(&["bind-key", "-T", "prefix", "F8", "display-message", "hello"])
+        .expect("bind-key");
+    h.send("\t\t");
+    type_query(&mut h, "F8");
+    h.wait_until("F8 row", WAIT, |t| t.contains("display-message hello"));
+}
+
+/// A string option can be set to nothing.
+#[test]
+fn a_string_option_can_be_emptied() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    type_query(&mut h, "default-layout");
+    h.send("\r\x15dev\r");
+    try_wait_until(|| opt(&srv, "default-layout") == "dev", WAIT)
+        .unwrap_or_else(|e| panic!("{e}\n{}", h.text()));
+    h.send("\r\x15\r");
+    try_wait_until(|| opt(&srv, "default-layout").is_empty(), WAIT)
+        .unwrap_or_else(|e| panic!("{e}\n{}", h.text()));
+}
+
+/// A menu closed by a resize below the minimum discards like Esc then `y`.
+#[test]
+fn shrinking_the_client_restores_what_the_menu_changed() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    let mouse0 = opt(&srv, "mouse");
+    type_query(&mut h, "mouse");
+    h.send("\r");
+    try_wait_until(|| opt(&srv, "mouse") != mouse0, WAIT).expect("mouse applied");
+    h.resize(20, 5);
+    h.wait_until("too small", WAIT, |t| t.contains("window too small"));
+    try_wait_until(|| opt(&srv, "mouse") == mouse0, WAIT)
+        .unwrap_or_else(|e| panic!("not restored: {e}\n{}", h.text()));
+}

@@ -69,7 +69,14 @@ fn apply_default_layout(server: &mut Host, id: &str) {
                 eprintln!("grofe: warning: {w}");
             }
         }
-        Err(e) => eprintln!("grofe: default-layout: {e}"),
+        Err(e) => {
+            let line = format!("grofe: default-layout: {e}");
+            eprintln!("{line}");
+            // `-p -l` only prints, but the server logs the command it was
+            // sent, so `show-messages` has the line.
+            let log = ["display-message", "-p", "-l", "-t", id, &line].map(String::from);
+            let _ = layouts::Server::run(server, &log);
+        }
     }
 }
 
