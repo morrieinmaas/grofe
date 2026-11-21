@@ -56,7 +56,7 @@
 - AC3.7 Every change applies to the running server at once (preview).
 - AC3.8 Esc with no changes closes. Esc with changes asks `discard N changes? (y/n)`; `y` restores every value and binding captured at open.
 - AC3.9 `C-s` shows the exact settings.toml diff; `y` writes and reloads, `n` returns to the menu.
-- AC3.10 In Keys, Enter waits for a key press and rebinds the selected command to it; a key that is already bound shows `replaces <command>` and needs `y`; `d` unbinds.
+- AC3.10 In Keys, Enter waits for a key press and rebinds the selected command to it; a key that is already bound shows `replaces <command>` and needs `y`; `C-d` unbinds (the query is typed live, so a plain `d` would search).
 - AC3.11 In Layouts, each file in `layouts/` is a row with a drawn preview of its first window's panes; Enter sets `default-layout`.
 - AC3.12 With `default-layout` set, `new-session` without a command builds that layout; an unknown name creates a plain session and shows `default-layout: no layout <name>`.
 - AC3.13 The book has a Settings page, the configuration page covers `--config`, `GROFE_CONFIG` and the settings.toml layer, and the options reference lists `default-layout`.
@@ -98,7 +98,7 @@
 - T24 (e2e) Enter on `status` toggles it; entering `abc` for `history-limit` shows the error and the value is unchanged. AC3.6, AC3.7
 - T25 (e2e) change two options, Esc, `y`: both values equal the values at open. AC3.8
 - T26 (e2e) change one option, `C-s`: the diff names it; `y` writes settings.toml and the value survives `reload`. AC3.9
-- T27 (e2e) Keys: rebind `new-window` to `C-t`; then rebind to `%` shows `replaces split-window -h` and needs `y`. AC3.10
+- T27 (e2e) Keys: rebind `new-window` to `C-t`; then rebind to `%` shows `replaces split-window -h` and needs `y`; `C-d` unbinds it. AC3.10
 - T28 (unit) the layout preview of a two-pane vertical split draws two boxes side by side. AC3.11
 - T29 (e2e) `default-layout = "dev"` with `layouts/dev.toml` of two panes: `new-session -d` makes a session with two panes; `"nope"` makes one pane and the message. AC3.12
 - T30 (e2e) the existing docs test (`just docs` options reference) passes with `default-layout`. AC3.13

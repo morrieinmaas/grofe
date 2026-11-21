@@ -217,12 +217,12 @@ fn ctrl_s_shows_the_diff_and_y_writes_it() {
     h.send("y");
     let file = grofe_dir(&srv).join("settings.toml");
     try_wait_until(
-        || fs::read_to_string(&file).is_ok_and(|t| t.contains("mouse") && t.contains("true")),
+        || fs::read_to_string(&file).is_ok_and(|t| t.contains("mouse") && t.contains("false")),
         WAIT,
     )
     .unwrap_or_else(|e| panic!("{e}\n{}", h.text()));
     srv.cmd(&["reload"]).expect("reload");
-    assert_eq!(opt(&srv, "mouse"), "on");
+    assert_eq!(opt(&srv, "mouse"), "off");
 }
 
 /// AC3.9: `n` after C-s returns to the menu and writes nothing.
@@ -240,7 +240,7 @@ fn n_after_the_diff_returns_to_the_menu() {
 }
 
 /// T27: rebind `new-window` to `C-t`; then rebind to `%`, which is taken by
-/// `split-window -h` and needs `y`.
+/// `split-window -h` and needs `y`; `C-d` unbinds it.
 #[test]
 fn keys_rebind_and_conflict() {
     let srv = TestServer::start();
@@ -254,7 +254,12 @@ fn keys_rebind_and_conflict() {
         srv.cmd(&["list-keys", "-T", "prefix"])
             .unwrap_or_default()
             .lines()
-            .any(|l| l.contains(&format!(" {k} ")) && l.contains("new-window"))
+            .any(|l| {
+                // list-keys backslash-escapes a lone `%`.
+                let shown =
+                    |k: &str| l.contains(&format!(" {k} ")) || l.contains(&format!(" \\{k} "));
+                shown(k) && l.contains("new-window")
+            })
     };
     try_wait_until(|| bound("C-t"), WAIT)
         .unwrap_or_else(|e| panic!("C-t not bound: {e}\n{}", h.text()));
@@ -267,6 +272,10 @@ fn keys_rebind_and_conflict() {
     h.send("y");
     try_wait_until(|| bound("%"), WAIT)
         .unwrap_or_else(|e| panic!("% not bound: {e}\n{}", h.text()));
+
+    h.send("\x04");
+    try_wait_until(|| !bound("%"), WAIT)
+        .unwrap_or_else(|e| panic!("% still bound: {e}\n{}", h.text()));
 }
 
 /// T29: `default-layout = "dev"` builds the layout for a plain
