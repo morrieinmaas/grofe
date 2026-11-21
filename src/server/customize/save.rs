@@ -10,6 +10,7 @@ use crate::config::write::{self, Saved};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::State;
 use crate::server::dispatch::options;
+use crate::server::input::Key;
 use crate::types::ClientId;
 
 /// The TOML key of option `name`; an array element has none.
@@ -65,24 +66,44 @@ fn settings_dir() -> Result<PathBuf, String> {
 }
 
 /// A binding as `[keys.<table>]` writes it: the command in the config's
-/// spelling (a command string spells tmux's ` \; ` as ` ; `), its note and
-/// whether it repeats.
-fn binding_fields(
-    state: &State,
-    table: &str,
-    key: &crate::server::input::Key,
-) -> (String, Option<String>, bool) {
+/// spelling (a command string spells tmux's ` \; ` as ` ; `), and its note,
+/// repeat flag, group and name.
+struct Fields {
+    cmd: String,
+    desc: Option<String>,
+    repeat: bool,
+    group: Option<String>,
+    name: Option<String>,
+}
+
+fn binding_fields(state: &State, table: &str, key: &crate::server::input::Key) -> Fields {
     let cmd = key_command_text(state, table, key).replace(" \\; ", " ; ");
     match state.registry.key_tables.exact(table, key) {
-        Some(b) => (cmd, b.desc.clone(), b.repeat),
-        None => (cmd, None, false),
+        Some(b) => Fields {
+            cmd,
+            desc: b.desc.clone(),
+            repeat: b.repeat,
+            group: b.group.clone(),
+            name: b.name.clone(),
+        },
+        None => Fields {
+            cmd,
+            desc: None,
+            repeat: false,
+            group: None,
+            name: None,
+        },
     }
 }
 
 /// `P` in customize-mode: writes `entry` to settings.toml, then reloads the
-/// config. When the reload fails the file is put back and the error
-/// returned. On success, what was saved.
+/// config. When the reload fails the file is put back, the runtime marks stay
+/// and the error is returned. On success, what was saved, and settings.toml
+/// owns it: a hand edit of the file and a `reload` apply.
 pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String> {
+    // What the reload is to hand over to the config, until it succeeds.
+    let mut option = None;
+    let mut binding = None;
     let (what, saved) = match entry {
         Entry::Option { scope, name, idx } => {
             if let Some(why) = refusal(*scope, name, *idx) {
@@ -90,65 +111,114 @@ pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String
             }
             let (key, item) = toml_item(state, *scope, name, *idx)?;
             let saved = write::set(&settings_dir()?, key, item)?;
-            // settings.toml owns the value now: a reload skips runtime names.
-            state.model.options.forget_runtime(name);
+            option = Some(name.as_str());
             (name.clone(), saved)
         }
         Entry::Key { table, key } | Entry::Field { table, key, .. } => {
-            let (cmd, desc, repeat) = binding_fields(state, table, key);
+            let f = binding_fields(state, table, key);
             let name = key.to_string();
             let saved = write::set_binding(
                 &settings_dir()?,
                 table,
                 &name,
-                &cmd,
-                desc.as_deref(),
-                Some(repeat),
+                &f.cmd,
+                &write::BindingFields {
+                    desc: f.desc.as_deref(),
+                    repeat: Some(f.repeat),
+                    group: f.group.as_deref(),
+                    name: f.name.as_deref(),
+                },
             )?;
+            // A binding made at runtime would outlive the reload and hide the
+            // file's: take it out so the reload builds it from settings.toml.
+            let live = state.registry.key_tables.exact(table, key).cloned();
+            if let Some(b) = live.filter(|b| !b.source.is_config()) {
+                state.registry.key_tables.unbind(table, key);
+                binding = Some((table, *key, b));
+            }
             (name, saved)
         }
         Entry::Group => return Err("nothing to save here".to_string()),
     };
-    reload_or_roll_back(state, saved)?;
-    Ok(format!("Saved {what} to settings.toml"))
+    match reload_or_roll_back(state, saved) {
+        Ok(()) => {
+            // settings.toml owns the value now: a reload skips runtime names.
+            if let Some(name) = option {
+                state.model.options.forget_runtime(name);
+            }
+            Ok(format!("Saved {what} to settings.toml"))
+        }
+        Err(e) => {
+            if let Some((table, key, b)) = binding {
+                state.registry.key_tables.insert(table, key, b);
+            }
+            Err(e)
+        }
+    }
 }
 
-/// `d` and `D` on options `names`: runs `cmds`, which unset them at every
-/// scope, then hands them back to the config layers: the keys leave
-/// settings.toml, and the reload applies the value from below. When the
-/// reload fails the file is put back. With no settings.toml to change, only
+/// `d` and `D` on options `names` and key bindings `keys`: runs `cmds`,
+/// which unset the options at every scope and reset the keys, then hands
+/// them back to the config layers: they leave settings.toml, and the reload
+/// applies what is below. When the reload fails the file is put back and the
+/// options keep their runtime marks. With no settings.toml to change, only
 /// `cmds` run.
 pub(crate) fn reset(
     state: &mut State,
     client: ClientId,
     cmds: &[Vec<String>],
     names: &[String],
+    keys: &[(String, Key)],
 ) -> Result<(), String> {
     crate::server::clients::run_binding(state, client, cmds, Dialect::Tmux, None);
     let keyed: Vec<(&String, &str)> = names
         .iter()
         .filter_map(|n| Some((n, crate::config::toml_key(n)?)))
         .collect();
-    let (Some(_), Ok(dir)) = (keyed.first(), settings_dir()) else {
+    if keyed.is_empty() && keys.is_empty() {
+        return Ok(());
+    }
+    let Ok(dir) = settings_dir() else {
         return Ok(());
     };
-    // The first unset holds the file as it was, whatever the later ones do.
+    // The first write holds the file as it was, whatever the later ones do.
     let mut first: Option<Saved> = None;
-    for (_, key) in &keyed {
-        match write::unset(&dir, key) {
+    let writes = keyed.iter().map(|(_, key)| write::unset(&dir, key)).chain(
+        keys.iter()
+            .map(|(table, key)| write::unset_binding(&dir, table, &key.to_string())),
+    );
+    for write in writes {
+        match write {
             Ok(saved) => {
                 first.get_or_insert(saved);
             }
             Err(e) => return Err(failed(e, first.map_or(Ok(()), Saved::rollback))),
         }
     }
-    for (name, _) in &keyed {
-        state.model.options.forget_runtime(name);
+    let held: Vec<&String> = keyed
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| state.model.options.forget_runtime(name))
+        .collect();
+    // A key reset to nothing is unbound at runtime, which a reload keeps;
+    // the config below may bind it, so it must not.
+    let unbound: Vec<&(String, Key)> = keys
+        .iter()
+        .filter(|(table, key)| state.registry.key_tables.forget_unbound(table, key))
+        .collect();
+    let Some(saved) = first else {
+        return Ok(());
+    };
+    let result = reload_or_roll_back(state, saved);
+    if result.is_err() {
+        for name in held {
+            state.model.options.remember_runtime(name);
+        }
+        for (table, key) in unbound {
+            state.registry.key_tables.remember_unbound(table, key);
+        }
     }
-    match first {
-        Some(saved) => reload_or_roll_back(state, saved),
-        None => Ok(()),
-    }
+    result
 }
 
 /// Reloads the config; when that fails, puts the file back and returns the

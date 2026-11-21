@@ -13,15 +13,18 @@ ones before:
 without overriding you. `settings.toml` is the one grofe writes: it loads
 last and overrides everything above it, so a value saved there always wins.
 Do not expect to edit it by hand; grofe re-reads it before each save and
-keeps your comments and other keys, but its layout is its own. Resetting a
-setting removes its key, and the value from the layer below applies again.
+keeps your comments and other keys, but its layout is its own. Resetting an
+option or a key binding removes its entry, and the value or binding from
+the layer below applies again.
 
 ## Saving from customize-mode
 
 In customize-mode (`prefix C` in the tmux identity), `P` writes the selected
 option or key binding to `settings.toml` and reloads the config. `S` is not
 used for this: as in tmux, it sets the option globally. A key binding is
-saved with its command, its note (`desc`) and its repeat flag.
+saved with its command, its note (`desc`), its repeat flag, its `group` and
+its `name`. Once saved, `settings.toml` owns it: a hand edit of the file and a
+`reload` apply, even for a value or binding first set at runtime.
 
 Only global values are saveable: a value set on one session, window or pane
 answers `only global values are saveable`. An option with no TOML key (a
@@ -30,9 +33,10 @@ customize-mode says so. If the reload fails, the file is put back as it was
 and the error is shown. A missing `settings.toml` or config folder is created
 on the first save.
 
-`d` and `D` (reset) take the option out of `settings.toml` as well as
-resetting it, and reload: the value from the layer below, such as
-`user.toml`, applies again.
+`d` and `D` (reset) take the option, or the key binding's `[keys.<table>]`
+entry, out of `settings.toml` as well as resetting it, and reload: the value
+or binding from the layer below, such as `user.toml`, applies again. If the
+reload fails, the file is put back and the option keeps the value it had.
 
 A server started with `tmux -f <file>` reads only the files you name, never
 `settings.toml`, so `P` there answers that nothing was saved.

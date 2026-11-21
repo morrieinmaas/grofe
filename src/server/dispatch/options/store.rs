@@ -206,8 +206,15 @@ impl Options {
 
     /// Hands a global option back to the config: `reload` sets it again
     /// (a reset in customize-mode, after the key left settings.toml).
-    pub fn forget_runtime(&mut self, name: &str) {
-        self.runtime.remove(name);
+    /// Whether it was marked.
+    pub fn forget_runtime(&mut self, name: &str) -> bool {
+        self.runtime.remove(name)
+    }
+
+    /// Puts back a mark [`Self::forget_runtime`] took, when the reload that
+    /// was to hand the option to the config failed.
+    pub fn remember_runtime(&mut self, name: &str) {
+        self.runtime.insert(name.to_string());
     }
 
     /// Sets `name` at `owner`. Returns whether the value changed: setting

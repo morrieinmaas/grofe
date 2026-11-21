@@ -70,17 +70,25 @@ pub fn unset(dir: &Path, key: &str) -> Result<Saved, String> {
     })
 }
 
+/// The fields of a binding besides its command, for [`set_binding`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BindingFields<'a> {
+    pub desc: Option<&'a str>,
+    /// `Some(true)` writes the flag, `Some(false)` removes it.
+    pub repeat: Option<bool>,
+    pub group: Option<&'a str>,
+    pub name: Option<&'a str>,
+}
+
 /// Binds `key` in `[keys.<table>]` to `cmd`; an empty `cmd` unbinds it
 /// (`key = ""`). The fields of an entry already there (`desc`, `repeat`,
-/// `group`, `name`) stay, except those given: `desc` sets the note, and
-/// `repeat` writes the flag (true) or removes it (false).
+/// `group`, `name`) stay, except those given in `fields`.
 pub fn set_binding(
     dir: &Path,
     table: &str,
     key: &str,
     cmd: &str,
-    desc: Option<&str>,
-    repeat: Option<bool>,
+    fields: &BindingFields,
 ) -> Result<Saved, String> {
     edit(dir, |doc| {
         let root = doc.as_table_mut();
@@ -90,12 +98,19 @@ pub fn set_binding(
             put(t, key, value(""));
             return Ok(true);
         }
+        let texts = [
+            ("desc", fields.desc),
+            ("group", fields.group),
+            ("name", fields.name),
+        ];
         if let Some(entry) = t.get_mut(key).and_then(Item::as_table_like_mut) {
             put(entry, "cmd", value(cmd));
-            if let Some(d) = desc {
-                put(entry, "desc", value(d));
+            for (field, text) in texts {
+                if let Some(text) = text {
+                    put(entry, field, value(text));
+                }
             }
-            match repeat {
+            match fields.repeat {
                 Some(true) => put(entry, "repeat", value(true)),
                 Some(false) => {
                     entry.remove("repeat");
@@ -106,14 +121,24 @@ pub fn set_binding(
         }
         let mut inline = InlineTable::new();
         inline.insert("cmd", cmd.into());
-        if let Some(d) = desc {
-            inline.insert("desc", d.into());
+        for (field, text) in texts {
+            if let Some(text) = text {
+                inline.insert(field, text.into());
+            }
         }
-        if repeat == Some(true) {
+        if fields.repeat == Some(true) {
             inline.insert("repeat", Value::from(true));
         }
         put(t, key, value(inline));
         Ok(true)
+    })
+}
+
+/// Removes `key` of `[keys.<table>]` from settings.toml, so the lower layers
+/// bind it again. A key that is not there is not an error.
+pub fn unset_binding(dir: &Path, table: &str, key: &str) -> Result<Saved, String> {
+    edit(dir, |doc| {
+        Ok(remove(doc.as_table_mut(), &["keys", table, key]))
     })
 }
 

@@ -92,6 +92,7 @@ pub(super) fn custom_change(
         }
         let mut cmds = Vec::new();
         let mut reset_names = Vec::new();
+        let mut reset_keys = Vec::new();
         for (entry, fs) in entries {
             match entry {
                 Entry::Option { scope, name, idx } => {
@@ -107,6 +108,7 @@ pub(super) fn custom_change(
                 }
                 Entry::Key { table, key } | Entry::Field { table, key, .. } if reset => {
                     customize::reset_key(state, &table, &key);
+                    reset_keys.push((table, key));
                 }
                 Entry::Key { table, key } | Entry::Field { table, key, .. } => {
                     customize::unbind_key(state, &table, &key);
@@ -115,10 +117,10 @@ pub(super) fn custom_change(
             }
         }
         rebuild(state, client, None);
-        // A reset also takes the option out of settings.toml, so the layer
-        // below applies again (AC2.7).
-        if !reset_names.is_empty() {
-            if let Err(e) = customize::reset(state, client, &cmds, &reset_names) {
+        // A reset also takes the option or key out of settings.toml, so the
+        // layer below applies again (AC2.7).
+        if !reset_names.is_empty() || !reset_keys.is_empty() {
+            if let Err(e) = customize::reset(state, client, &cmds, &reset_names, &reset_keys) {
                 error_message(state, client, &e);
             }
             return Routed::Consumed;

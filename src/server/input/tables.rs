@@ -131,6 +131,20 @@ impl KeyTables {
         }
     }
 
+    /// Ends a runtime unbind of `key`, so a reload may bind it from the
+    /// config again. Whether there was one.
+    pub fn forget_unbound(&mut self, table: &str, key: &Key) -> bool {
+        let before = self.runtime_unbound.len();
+        self.runtime_unbound
+            .retain(|(t, k)| !(t == table && k == key));
+        self.runtime_unbound.len() != before
+    }
+
+    /// Records a runtime unbind of `key` that [`Self::forget_unbound`] ended.
+    pub fn remember_unbound(&mut self, table: &str, key: &Key) {
+        self.runtime_unbound.push((table.to_string(), *key));
+    }
+
     /// The binding `key` has in `table` on a fresh server: grofe's default
     /// tables, made tmux's stock ones as this server's are.
     pub fn default_of(&self, table: &str, key: &Key) -> Option<Binding> {

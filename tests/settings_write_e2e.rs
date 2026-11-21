@@ -16,8 +16,8 @@ use harness::Harness;
 const WAIT: Duration = Duration::from_secs(10);
 
 /// T17: with `status` at 3 lines, customize-mode on `status` and `P` writes
-/// settings.toml. The spec writes `status = false` for an off status; the
-/// TOML key of the option is `status.lines`, so this checks `status.lines = 3`.
+/// settings.toml: the TOML key of the option is `status.lines`, so this
+/// checks `status.lines = 3`.
 #[test]
 fn p_in_customize_mode_saves_the_selected_option() {
     let srv = TestServer::start();
@@ -292,4 +292,159 @@ fn a_failed_reload_after_p_keeps_the_file_and_shows_the_error() {
         before
     );
     assert!(!h.text().contains("Saved status"), "{}", h.text());
+}
+
+/// The `list-keys` line of `key` in the prefix table, or an empty string.
+fn key_line(srv: &TestServer, key: &str) -> String {
+    srv.cmd(&["list-keys", "-T", "prefix"])
+        .expect("list-keys")
+        .lines()
+        .find(|l| l.split_whitespace().any(|w| w == key))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Opens customize-mode on the prefix table's `F5` and puts the cursor on it.
+fn open_f5(h: &mut Harness) {
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Key Table - prefix")
+    });
+    for _ in 0..5 {
+        h.send("j");
+    }
+    h.send("l");
+    h.wait_until("key listed", WAIT, |t| t.contains("F5"));
+    h.send("j");
+}
+
+/// `P` on a key from user.toml with a `group` and a `name` keeps both, in the
+/// file and after the reload.
+#[test]
+fn p_on_a_key_keeps_its_group_and_name() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{key},F5}", 100);
+    fs::write(
+        user_file(&srv),
+        "[keys.prefix]\nF5 = { cmd = \"display-message hi\", group = \"g\", name = \"n\" }\n",
+    )
+    .expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    open_f5(&mut h);
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        let e = t.get("keys").and_then(|k| k.get("prefix")?.get("F5"));
+        e.and_then(|e| e.get("group")?.as_str()) == Some("g")
+            && e.and_then(|e| e.get("name")?.as_str()) == Some("n")
+    });
+    assert!(
+        saved.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(&srv)),
+        h.text()
+    );
+    assert!(key_line(&srv, "F5").contains("display-message hi"));
+}
+
+/// After `P` on a key, settings.toml owns the binding: a hand edit of the
+/// file and a `reload` show the new command, though the first was bound at
+/// runtime.
+#[test]
+fn a_hand_edit_of_a_key_after_p_shows_on_reload() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{key},F5}", 100);
+    srv.cmd(&["bind-key", "F5", "display-message", "one"])
+        .expect("bind-key");
+    open_f5(&mut h);
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        t.get("keys")
+            .and_then(|k| k.get("prefix")?.get("F5"))
+            .is_some()
+    });
+    assert!(
+        saved.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(&srv)),
+        h.text()
+    );
+    fs::write(
+        settings_file(&srv),
+        "[keys.prefix]\nF5 = { cmd = \"display-message two\" }\n",
+    )
+    .expect("hand edit");
+    srv.cmd(&["reload"]).expect("reload");
+    let shown = try_wait_until(|| key_line(&srv, "F5").contains("two"), WAIT);
+    assert!(shown.is_ok(), "F5: {}\n{}", key_line(&srv, "F5"), h.text());
+}
+
+/// `d` on a saved key takes its entry out of settings.toml and the binding
+/// from user.toml shows again.
+#[test]
+fn d_on_a_saved_key_removes_its_entry() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{key},F5}", 100);
+    fs::write(
+        user_file(&srv),
+        "[keys.prefix]\nF5 = \"display-message user\"\n",
+    )
+    .expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    srv.cmd(&["bind-key", "F5", "display-message", "mine"])
+        .expect("bind-key");
+    open_f5(&mut h);
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        t.get("keys")
+            .and_then(|k| k.get("prefix")?.get("F5"))
+            .is_some()
+    });
+    assert!(
+        saved.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(&srv)),
+        h.text()
+    );
+    h.send("d");
+    h.wait_until("reset asked", WAIT, |t| t.contains("Reset F5"));
+    h.send("y");
+    let gone = wait_settings(&srv, |t| {
+        t.get("keys")
+            .and_then(|k| k.get("prefix")?.get("F5"))
+            .is_none()
+    });
+    assert!(
+        gone.is_ok(),
+        "{:?}\n{}",
+        fs::read_to_string(settings_file(&srv)),
+        h.text()
+    );
+    let shown = try_wait_until(|| key_line(&srv, "F5").contains("user"), WAIT);
+    assert!(shown.is_ok(), "F5: {}\n{}", key_line(&srv, "F5"), h.text());
+}
+
+/// When the reload after `P` fails, the option keeps its runtime mark: a
+/// later good reload leaves its live value alone.
+#[test]
+fn a_failed_reload_after_p_keeps_the_runtime_value() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 200);
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("history-limit listed", WAIT, |t| {
+        t.contains("history-limit:")
+    });
+    h.send("j");
+    fs::write(user_file(&srv), "history-limit = = oops\n").expect("user.toml");
+    h.send("P");
+    h.wait_until("error shown", WAIT, |t| t.contains("user.toml"));
+    fs::write(user_file(&srv), "history-limit = 111\n").expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(global(&srv, "history-limit"), "222", "{}", h.text());
 }
