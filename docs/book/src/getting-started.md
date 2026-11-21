@@ -57,6 +57,10 @@ reboot. To get rid of a session for good, close it (`kill-session`, or exit
 its last pane) before stopping the server. To always start empty, set
 `restore-on-start = false` in `config.toml`.
 
+When the last pane is killed by a signal (as a reboot does), the server
+waits up to half a second before it exits: if it was sent the signal too, it
+keeps the sessions instead of saving an empty state.
+
 Panes come back in the same layout and directory. A pane that knows how to
 resume comes back running its program; the others come back as a shell.
 

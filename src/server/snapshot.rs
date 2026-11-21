@@ -19,8 +19,10 @@
 //!   state built before the signal; each then **freezes** the writer, so
 //!   the panes dying and sessions closing after the signal never reach the
 //!   file. The signal is seen in its handler ([`terminating`]), before the
-//!   runtime delivers it or any pane exit it caused, so the actor never
-//!   folds such an exit into the state;
+//!   runtime delivers it. A pane exit it caused can still reach the actor
+//!   before the handler runs (another thread runs first), so the state
+//!   from before a pane went is kept for [`LOSS_HOLD`], and a signal in
+//!   that time writes it;
 //! - an empty state is written only once the model had sessions and lost
 //!   them with no termination signal seen (the last pane exiting, or the
 //!   last session killed): an empty server that never had a session never
@@ -36,7 +38,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, mpsc};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use serde::{Deserialize, Serialize};
@@ -361,6 +363,13 @@ fn by_uid(g: LayoutGeometry, uid: &impl Fn(PaneId) -> String) -> LayoutGeometry<
 /// How often the writer samples and writes at most.
 const DEBOUNCE: Duration = Duration::from_secs(1);
 
+/// How long the state from before a pane went is kept for a termination
+/// signal. The signal reaches the server before the panes it kills die,
+/// but the thread running its handler can lose the CPU to the one that
+/// hands the actor their exits.
+// ponytail: a handler later than this after the exits misses them.
+const LOSS_HOLD: Duration = Duration::from_millis(500);
+
 /// What the actor, the writer thread and the signal task share.
 struct Io {
     path: PathBuf,
@@ -369,6 +378,9 @@ struct Io {
     disk: Mutex<Disk>,
     /// The last state built that may be written, for a signal.
     latest: Mutex<Option<Snapshot>>,
+    /// When the first pane in the last [`LOSS_HOLD`] went, and the state
+    /// built before it.
+    before_loss: Mutex<Option<(Instant, Snapshot)>>,
 }
 
 #[derive(Default)]
@@ -432,6 +444,48 @@ impl Io {
         }
         self.frozen.store(true, Ordering::SeqCst);
     }
+
+    /// Keeps `snap` as the last state built. When a pane of the one before
+    /// is missing from it, that one is held for [`LOSS_HOLD`] too: the
+    /// pane may have died of a signal the server has not handled yet.
+    fn keep(&self, snap: Option<Snapshot>) {
+        let mut latest = lock(&self.latest);
+        if let (Some(old), Some(new)) = (latest.as_ref(), snap.as_ref())
+            && lost_pane(old, new)
+        {
+            let mut held = lock(&self.before_loss);
+            if !held
+                .as_ref()
+                .is_some_and(|(at, _)| at.elapsed() < LOSS_HOLD)
+            {
+                *held = Some((Instant::now(), old.clone()));
+            }
+        }
+        *latest = snap;
+    }
+
+    /// What a termination signal writes: the state from before the first
+    /// pane that went in the last [`LOSS_HOLD`], else the last one built.
+    fn pre_signal(&self) -> Option<Snapshot> {
+        match lock(&self.before_loss).as_ref() {
+            Some((at, snap)) if at.elapsed() < LOSS_HOLD => return Some(snap.clone()),
+            _ => {}
+        }
+        lock(&self.latest).clone()
+    }
+}
+
+/// Whether a pane of `old` is missing from `new`.
+fn lost_pane(old: &Snapshot, new: &Snapshot) -> bool {
+    let uids = |s: &Snapshot| -> HashSet<String> { panes(s).map(|p| p.uid.clone()).collect() };
+    !uids(old).is_subset(&uids(new))
+}
+
+fn panes(snap: &Snapshot) -> impl Iterator<Item = &PaneSnap> {
+    snap.sessions
+        .iter()
+        .flat_map(|s| &s.windows)
+        .flat_map(|w| &w.panes)
 }
 
 /// The actor's side of the writer, kept in `State::snapshot_writer`.
@@ -442,6 +496,8 @@ pub(crate) struct Writer {
     /// The model had a session at some look: from then on an empty model
     /// is a state the user chose, and is written.
     had_sessions: bool,
+    /// When a pane's process last died of a signal ([`pane_killed`]).
+    killed_at: Option<Instant>,
     thread: mpsc::Sender<Snapshot>,
 }
 
@@ -453,6 +509,7 @@ impl Writer {
             frozen: AtomicBool::new(false),
             disk: Mutex::new(Disk::default()),
             latest: Mutex::new(None),
+            before_loss: Mutex::new(None),
         });
         let (tx, rx) = mpsc::channel::<Snapshot>();
         let thread_io = Arc::clone(&io);
@@ -478,6 +535,7 @@ impl Writer {
             io,
             cwds: HashMap::new(),
             had_sessions: false,
+            killed_at: None,
             thread: tx,
         }
     }
@@ -488,7 +546,7 @@ impl Writer {
         let snap = build(model, &self.cwds);
         let writable = !snap.sessions.is_empty() || self.had_sessions;
         let snap = writable.then_some(snap);
-        *lock(&self.io.latest) = snap.clone();
+        self.io.keep(snap.clone());
         snap
     }
 }
@@ -609,8 +667,7 @@ fn spawn_signals(io: Arc<Io>) {
     tokio::spawn(async move {
         let any = futures_util::future::select_all(signals.iter_mut().map(|s| Box::pin(s.recv())));
         let _ = any.await;
-        let latest = lock(&io.latest).clone();
-        io.write_final(latest.as_ref());
+        io.write_final(io.pre_signal().as_ref());
     });
 }
 
@@ -653,16 +710,25 @@ pub fn track(state: &mut State, output: bool) {
     if terminating() {
         // What this message changed came after the signal: the state
         // built before it is the one to keep.
-        let latest = lock(&w.io.latest).clone();
-        w.io.write_final(latest.as_ref());
+        w.io.write_final(w.io.pre_signal().as_ref());
         return;
     }
     if state.exit {
         // `kill-server` (or any exit that leaves sessions) writes them;
-        // the last session going writes the empty state.
+        // the last session going writes the empty state. When its panes
+        // died of a signal, the server may have been sent it too (a
+        // reboot) with its handler not run yet: it gets the rest of the
+        // hold to show.
         // ponytail: a pane killed by a reboot's signal before the server
         // gets its own (the panes signalled first) is an ordinary exit
         // here, and the last one writes the empty state.
+        if state.model.sessions.is_empty()
+            && let Some(at) = w.killed_at
+            && wait_terminating(LOSS_HOLD.saturating_sub(at.elapsed()))
+        {
+            w.io.write_final(w.io.pre_signal().as_ref());
+            return;
+        }
         let snap = w.build(&state.model);
         w.io.write_final(snap.as_ref());
         return;
@@ -670,6 +736,23 @@ pub fn track(state: &mut State, output: bool) {
     if !output {
         w.build(&state.model);
     }
+}
+
+/// A pane's process died of a signal (its exit has no code): kept for the
+/// last session going, see [`track`].
+pub fn pane_killed(state: &mut State) {
+    if let Some(w) = state.snapshot_writer.as_mut() {
+        w.killed_at = Some(Instant::now());
+    }
+}
+
+/// Whether a termination signal is seen within `within`.
+fn wait_terminating(within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    while !terminating() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    terminating()
 }
 
 /// The `uid` of each pane whose entry the writer would change at its next
@@ -826,6 +909,7 @@ mod tests {
             frozen: AtomicBool::new(false),
             disk: Mutex::new(Disk::default()),
             latest: Mutex::new(None),
+            before_loss: Mutex::new(None),
         };
         let mut snap = sample();
         snap.written_at.clear();
@@ -838,5 +922,87 @@ mod tests {
         snap.options.clear();
         io.write(&mut lock(&io.disk), &snap);
         assert_eq!(read(&io.path).unwrap().options.len(), 1);
+    }
+
+    /// One session with a window for each pane `uid`.
+    fn with_panes(uids: &[&str]) -> Snapshot {
+        let window = |(i, uid): (usize, &&str)| WindowSnap {
+            index: i as u32,
+            name: format!("w{i}"),
+            automatic_rename: false,
+            cols: 80,
+            rows: 24,
+            layout: LayoutGeometry {
+                x: 0,
+                y: 0,
+                cols: 80,
+                rows: 24,
+                cell: GeometryCell::Pane(uid.to_string()),
+            },
+            active_pane: uid.to_string(),
+            zoomed: false,
+            options: Vec::new(),
+            panes: vec![PaneSnap {
+                uid: uid.to_string(),
+                cwd: PathBuf::from("/"),
+                argv: None,
+                resume: None,
+                options: Vec::new(),
+            }],
+        };
+        Snapshot {
+            sessions: vec![SessionSnap {
+                name: "main".to_string(),
+                cwd: PathBuf::from("/"),
+                active_window: 0,
+                options: Vec::new(),
+                windows: uids.iter().enumerate().map(window).collect(),
+            }],
+            ..sample()
+        }
+    }
+
+    fn unwritten_io() -> Io {
+        Io {
+            path: PathBuf::from("/nonexistent/state.json"),
+            frozen: AtomicBool::new(false),
+            disk: Mutex::new(Disk::default()),
+            latest: Mutex::new(None),
+            before_loss: Mutex::new(None),
+        }
+    }
+
+    /// The race a reboot runs: the panes the signal killed reach the actor
+    /// before the signal's handler runs. The signal writes the state from
+    /// before the first of them went; a pane added is no loss.
+    #[test]
+    fn a_signal_just_after_panes_went_writes_the_state_before_them() {
+        let io = unwritten_io();
+        let two = with_panes(&["a", "b"]);
+        io.keep(Some(with_panes(&["a"])));
+        io.keep(Some(two.clone()));
+        assert_eq!(io.pre_signal(), Some(two.clone()));
+        io.keep(Some(with_panes(&["a"])));
+        io.keep(Some(with_panes(&[])));
+        assert_eq!(io.pre_signal(), Some(two));
+    }
+
+    /// A pane gone longer than [`LOSS_HOLD`] did not die of the signal.
+    #[test]
+    fn a_pane_gone_before_the_hold_stays_gone() {
+        let io = unwritten_io();
+        let one = with_panes(&["a"]);
+        io.keep(Some(with_panes(&["a", "b"])));
+        io.keep(Some(one.clone()));
+        let age = |io: &Io| {
+            if let Some((at, _)) = lock(&io.before_loss).as_mut() {
+                *at = at.checked_sub(LOSS_HOLD).expect("an instant a hold ago");
+            }
+        };
+        age(&io);
+        assert_eq!(io.pre_signal(), Some(one.clone()));
+        // The next pane going is held anew.
+        io.keep(Some(with_panes(&[])));
+        assert_eq!(io.pre_signal(), Some(one));
     }
 }
