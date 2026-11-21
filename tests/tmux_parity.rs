@@ -217,9 +217,6 @@ const NOT_PROVIDED: &[&str] = &[
     // Data grofe does not keep.
     "session_last_attached",
     "sixel_support",
-    "window_active_clients",
-    "window_cell_height",
-    "window_cell_width",
 ];
 
 fn names(text: &str) -> Vec<String> {

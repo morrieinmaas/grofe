@@ -1,0 +1,77 @@
+$ new-session -d -s main -x 80 -y 24 'printf "first line\n\033]8;;http://example.com/\007link\033]8;;\007\n"; cat'
+? 0
+$ new-window -d -t main cat
+? 0
+$ run-shell 'sleep 0.3'
+? 0
+$ display-message -p -t main:1 'active=[#{session_active}] clients=[#{window_active_clients}] list=[#{window_active_clients_list}] bigger=[#{window_bigger}] offset=[#{window_offset_x},#{window_offset_y}]'
+active=[] clients=[0] list=[] bigger=[] offset=[,]
+? 0
+$ display-message -p -t main:1 'window cell=[#{window_cell_width}x#{window_cell_height}] client cell=[#{client_cell_width}x#{client_cell_height}]'
+window cell=[16x32] client cell=[x]
+? 0
+$ display-message -p -t main 'buffer=[#{buffer_full}]'
+buffer=[]
+? 0
+$ set-buffer 'hello world'
+? 0
+$ display-message -p -t main 'buffer=[#{buffer_full}]'
+buffer=[hello world]
+? 0
+client 80x24 attach -t main
+$ display-message -p -t main:1 'active=[#{session_active}] clients=[#{window_active_clients}] list=[#{window_active_clients_list}] bigger=[#{window_bigger}] offset=[#{window_offset_x},#{window_offset_y}]'
+active=[1] clients=[1] list=[<TTY>] bigger=[0] offset=[,]
+? 0
+$ display-message -p -t main:2 'clients=[#{window_active_clients}] list=[#{window_active_clients_list}]'
+clients=[0] list=[]
+? 0
+$ display-message -p -t main:1 'window cell=[#{window_cell_width}x#{window_cell_height}]'
+window cell=[16x32]
+? 0
+$ new-session -d -s other -x 80 -y 24 cat
+? 0
+$ display-message -p -t other 'active=[#{session_active}]'
+active=[0]
+? 0
+$ set -g mouse on
+? 0
+$ bind -n MouseDown1Status set -gF @ms 'status line [#{mouse_status_line}]'
+? 0
+$ bind -n MouseDown1StatusLeft set -gF @ms 'status left [#{mouse_status_line}]'
+? 0
+$ bind -n MouseDown1Pane set -gF @ms 'pane [#{mouse_status_line}]'
+? 0
+keys Escape '[<0;5;24M'
+keys Escape '[<0;5;24m'
+$ show -gv @ms
+status left [0]
+? 0
+keys Escape '[<0;12;24M'
+keys Escape '[<0;12;24m'
+$ show -gv @ms
+status line [0]
+? 0
+keys Escape '[<0;5;5M'
+keys Escape '[<0;5;5m'
+$ show -gv @ms
+pane []
+? 0
+$ copy-mode -t main:1
+? 0
+$ send-keys -X -t main:1 top-line
+? 0
+$ display-message -p -t main:1 'line=[#{copy_cursor_line}] link=[#{copy_cursor_hyperlink}]'
+line=[first line] link=[]
+? 0
+$ send-keys -X -t main:1 cursor-down
+? 0
+$ display-message -p -t main:1 'line=[#{copy_cursor_line}] link=[#{copy_cursor_hyperlink}]'
+line=[link] link=[http://example.com/]
+? 0
+$ send-keys -X -t main:1 cancel
+? 0
+$ resize-window -t main:1 -x 100 -y 40
+? 0
+$ display-message -p -t main:1 'bigger=[#{window_bigger}] offset=[#{window_offset_x},#{window_offset_y}]'
+bigger=[1] offset=[0,0]
+? 0

@@ -20,7 +20,7 @@ pub(super) fn terminal_features(model: &Model, term: &str, mut caps: Caps) -> Ca
 
 /// Client `c`'s current window, and whether it fits the client (then
 /// there is nothing to pan).
-pub(super) fn window_fits(
+pub(crate) fn window_fits(
     state: &State,
     id: ClientId,
     c: &ClientEntry,

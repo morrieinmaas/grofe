@@ -277,6 +277,11 @@ impl FormatVars for BufferVars<'_> {
             "buffer_size" => Some(b.data.len().to_string()),
             "buffer_sample" => Some(sample(&b.data)),
             "buffer_created" => Some(b.created.to_string()),
+            // The text up to its first NUL, as tmux's `xstrndup`.
+            "buffer_full" => {
+                let text = b.data.split(|c| *c == 0).next().unwrap_or_default();
+                Some(String::from_utf8_lossy(text).into_owned())
+            }
             _ => None,
         }
     }

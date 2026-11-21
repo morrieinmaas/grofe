@@ -147,6 +147,19 @@ impl FormatVars for ServerVars<'_> {
                     _ => names.join(","),
                 })
             }
+            "session_active"
+            | "window_active_clients"
+            | "window_active_clients_list"
+            | "window_bigger"
+            | "window_offset_x"
+            | "window_offset_y"
+            | "window_cell_width"
+            | "window_cell_height"
+            | "client_cell_width"
+            | "client_cell_height"
+            | "mouse_status_line"
+            | "copy_cursor_line"
+            | "copy_cursor_hyperlink" => self.client_var(name),
             _ => self.inner.vars().get(name),
         }
     }

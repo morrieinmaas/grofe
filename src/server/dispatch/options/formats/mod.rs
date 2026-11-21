@@ -1,5 +1,6 @@
 use super::*;
 
+mod client;
 mod ctx;
 mod server;
 mod vars;

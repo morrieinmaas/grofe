@@ -95,7 +95,10 @@ to your main server.
 grofe sets `TMUX` and `TMUX_PANE` in its panes and answers the commands,
 aliases and formats that scripts and tools send, so things like `fzf --tmux`
 and vim-tmux-navigator keep working. A command it does not support fails
-with `<command>: not supported (<reason>)`.
+with `<command>: not supported (<reason>)`. Formats can use every variable
+in tmux 3.7b's format table except a few that read state grofe does not keep,
+such as a client's creation time or bytes written; those expand to nothing.
+The repository's `docs/compat-coverage.md` lists them, each with its reason.
 
 ## Running grofe as `tmux`
 

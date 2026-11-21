@@ -1,0 +1,39 @@
+# Issue 4: the format variables of tmux 3.7b's format_table that grofe
+# answers from state it keeps: the client's view of the session and window,
+# the cell sizes, the top buffer, the copy-mode cursor's line and link, and
+# the status row under the mouse.
+$ new-session -d -s main -x 80 -y 24 'printf "first line\n\033]8;;http://example.com/\007link\033]8;;\007\n"; cat'
+$ new-window -d -t main cat
+$ run-shell 'sleep 0.3'
+$ display-message -p -t main:1 'active=[#{session_active}] clients=[#{window_active_clients}] list=[#{window_active_clients_list}] bigger=[#{window_bigger}] offset=[#{window_offset_x},#{window_offset_y}]'
+$ display-message -p -t main:1 'window cell=[#{window_cell_width}x#{window_cell_height}] client cell=[#{client_cell_width}x#{client_cell_height}]'
+$ display-message -p -t main 'buffer=[#{buffer_full}]'
+$ set-buffer 'hello world'
+$ display-message -p -t main 'buffer=[#{buffer_full}]'
+client 80x24 attach -t main
+$ display-message -p -t main:1 'active=[#{session_active}] clients=[#{window_active_clients}] list=[#{window_active_clients_list}] bigger=[#{window_bigger}] offset=[#{window_offset_x},#{window_offset_y}]'
+$ display-message -p -t main:2 'clients=[#{window_active_clients}] list=[#{window_active_clients_list}]'
+$ display-message -p -t main:1 'window cell=[#{window_cell_width}x#{window_cell_height}]'
+$ new-session -d -s other -x 80 -y 24 cat
+$ display-message -p -t other 'active=[#{session_active}]'
+$ set -g mouse on
+$ bind -n MouseDown1Status set -gF @ms 'status line [#{mouse_status_line}]'
+$ bind -n MouseDown1StatusLeft set -gF @ms 'status left [#{mouse_status_line}]'
+$ bind -n MouseDown1Pane set -gF @ms 'pane [#{mouse_status_line}]'
+keys Escape '[<0;5;24M'
+keys Escape '[<0;5;24m'
+$ show -gv @ms
+keys Escape '[<0;12;24M'
+keys Escape '[<0;12;24m'
+$ show -gv @ms
+keys Escape '[<0;5;5M'
+keys Escape '[<0;5;5m'
+$ show -gv @ms
+$ copy-mode -t main:1
+$ send-keys -X -t main:1 top-line
+$ display-message -p -t main:1 'line=[#{copy_cursor_line}] link=[#{copy_cursor_hyperlink}]'
+$ send-keys -X -t main:1 cursor-down
+$ display-message -p -t main:1 'line=[#{copy_cursor_line}] link=[#{copy_cursor_hyperlink}]'
+$ send-keys -X -t main:1 cancel
+$ resize-window -t main:1 -x 100 -y 40
+$ display-message -p -t main:1 'bigger=[#{window_bigger}] offset=[#{window_offset_x},#{window_offset_y}]'
