@@ -179,12 +179,50 @@ fn enter_changes_a_value_and_a_bad_number_is_refused() {
     assert_eq!(opt(&srv, "history-limit"), "2000");
 }
 
-/// T25: Esc after two changes asks, and `y` restores both.
+/// `key` in the prefix table runs `cmd`.
+fn bound_to(srv: &TestServer, key: &str, cmd: &str) -> bool {
+    srv.cmd(&["list-keys", "-T", "prefix"])
+        .unwrap_or_default()
+        .lines()
+        .any(|l| {
+            // list-keys backslash-escapes a lone `%`.
+            let shown = l.contains(&format!(" {key} ")) || l.contains(&format!(" \\{key} "));
+            shown && l.contains(cmd)
+        })
+}
+
+/// In Keys, moves `new-window` from `c` to `C-t`.
+fn rebind_new_window(srv: &TestServer, h: &mut Harness) {
+    h.send("\t\t");
+    type_query(h, "new-window");
+    h.send("\r");
+    std::thread::sleep(Duration::from_millis(400));
+    h.send("\x14");
+    try_wait_until(|| bound_to(srv, "C-t", "new-window"), WAIT)
+        .unwrap_or_else(|e| panic!("C-t not bound: {e}\n{}", h.text()));
+}
+
+/// A config that binds a key, so `reload` rebuilds the key tables.
+const KEYS: &str = "[keys.prefix]\nF9 = \"display-message hi\"\n";
+
+/// One more client on session `s`, with the menu open.
+fn second_menu(srv: &TestServer) -> Harness {
+    let mut h = Harness::spawn_attach_with_env(srv.command(), "s", &[], 100, 30);
+    h.send(format!("{PREFIX}C"));
+    h.wait_until("menu open", WAIT, |t| t.contains("Appearance"));
+    h
+}
+
+/// T25: Esc after two option changes, a rebind and an unbind asks, and `y`
+/// restores all of them. They are the config's again: a reload applies a
+/// config edit and keeps the keys.
 #[test]
 fn esc_discards_every_change_after_confirming() {
-    let srv = TestServer::start();
-    let (status0, mouse0) = (opt(&srv, "status"), opt(&srv, "mouse"));
+    let srv = TestServer::unstarted();
+    write(&srv, "config.toml", KEYS);
     let mut h = open_menu(&srv);
+    let (status0, mouse0) = (opt(&srv, "status"), opt(&srv, "mouse"));
+    assert!(bound_to(&srv, "c", "new-window"));
     type_query(&mut h, "status");
     h.send("\r");
     clear_query(&mut h, 6);
@@ -192,14 +230,161 @@ fn esc_discards_every_change_after_confirming() {
     h.send("\r");
     try_wait_until(|| opt(&srv, "mouse") != mouse0, WAIT).expect("mouse applied");
     assert_ne!(opt(&srv, "status"), status0);
+    clear_query(&mut h, 5);
+    rebind_new_window(&srv, &mut h);
+    h.send("\x04");
+    try_wait_until(|| !bound_to(&srv, "C-t", "new-window"), WAIT)
+        .unwrap_or_else(|e| panic!("C-t still bound: {e}\n{}", h.text()));
     h.send(ESC);
-    h.wait_until("asks", WAIT, |t| t.contains("discard 2 changes? (y/n)"));
+    h.wait_until("asks", WAIT, |t| t.contains("discard 4 changes? (y/n)"));
     h.send("y");
     try_wait_until(
-        || opt(&srv, "status") == status0 && opt(&srv, "mouse") == mouse0,
+        || {
+            opt(&srv, "status") == status0
+                && opt(&srv, "mouse") == mouse0
+                && bound_to(&srv, "c", "new-window")
+                && !bound_to(&srv, "C-t", "new-window")
+        },
         WAIT,
     )
     .unwrap_or_else(|e| panic!("not restored: {e}\n{}", h.text()));
+    write(&srv, "config.toml", &format!("mouse = false\n{KEYS}"));
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(opt(&srv, "mouse"), "off", "mouse kept its runtime mark");
+    assert!(bound_to(&srv, "c", "new-window"), "the reload unbound c");
+}
+
+/// A key the menu moved or unbound stays so over a `reload`, and its rows
+/// are marked as changed.
+#[test]
+fn a_reload_keeps_the_menus_key_edits() {
+    let srv = TestServer::unstarted();
+    write(&srv, "config.toml", KEYS);
+    let mut h = open_menu(&srv);
+    rebind_new_window(&srv, &mut h);
+    h.wait_until("C-t row marked", WAIT, |t| {
+        t.lines()
+            .any(|l| l.contains("* prefix") && l.contains("C-t"))
+    });
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(
+        !bound_to(&srv, "c", "new-window"),
+        "the reload bound c again"
+    );
+    assert!(bound_to(&srv, "C-t", "new-window"));
+    h.send("\x04");
+    try_wait_until(|| !bound_to(&srv, "C-t", "new-window"), WAIT)
+        .unwrap_or_else(|e| panic!("C-t still bound: {e}\n{}", h.text()));
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(!bound_to(&srv, "C-t", "new-window"));
+    assert!(!bound_to(&srv, "c", "new-window"));
+}
+
+/// Edge concurrent: each menu undoes only what it set, so B's Esc `y`
+/// leaves A's change.
+#[test]
+fn two_menus_each_discard_only_their_own_changes() {
+    let srv = TestServer::start();
+    let (status0, mouse0) = (opt(&srv, "status"), opt(&srv, "mouse"));
+    let mut a = open_menu(&srv);
+    let mut b = second_menu(&srv);
+    type_query(&mut a, "mouse");
+    a.send("\r");
+    try_wait_until(|| opt(&srv, "mouse") != mouse0, WAIT).expect("mouse applied");
+    type_query(&mut b, "status");
+    b.send("\r");
+    try_wait_until(|| opt(&srv, "status") != status0, WAIT).expect("status applied");
+    b.send(ESC);
+    b.wait_until("asks", WAIT, |t| t.contains("discard 1 changes? (y/n)"));
+    b.send("y");
+    try_wait_until(|| opt(&srv, "status") == status0, WAIT)
+        .unwrap_or_else(|e| panic!("status not restored: {e}\n{}", b.text()));
+    assert_ne!(opt(&srv, "mouse"), mouse0, "B undid A's change");
+}
+
+/// Edge concurrent: a reload while the menu is open is not the menu's
+/// change, and Esc `y` does not undo it.
+#[test]
+fn esc_y_keeps_a_reload_made_while_open() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    write(&srv, "config.toml", "status.left = \"R\"\n");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(opt(&srv, "status-left"), "R");
+    type_query(&mut h, "mouse");
+    h.send("\r");
+    try_wait_until(|| opt(&srv, "mouse") == "off", WAIT).expect("mouse applied");
+    h.send(ESC);
+    h.wait_until("asks", WAIT, |t| t.contains("discard 1 changes? (y/n)"));
+    h.send("y");
+    try_wait_until(|| opt(&srv, "mouse") == "on", WAIT)
+        .unwrap_or_else(|e| panic!("mouse not restored: {e}\n{}", h.text()));
+    assert_eq!(opt(&srv, "status-left"), "R", "Esc y undid the reload");
+}
+
+/// Edge concurrent: after a reload while the menu is open, C-s writes only
+/// what the menu set.
+#[test]
+fn ctrl_s_after_a_reload_writes_only_the_menus_changes() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    write(&srv, "config.toml", "status.left = \"R\"\n");
+    srv.cmd(&["reload"]).expect("reload");
+    save_mouse(&srv, &mut h, |t| t.contains("saved settings.toml"));
+    let text = fs::read_to_string(settings_file(&srv)).expect("settings.toml");
+    assert!(text.contains("mouse = false"), "{text}");
+    assert!(!text.contains("status"), "{text}");
+}
+
+/// A client that goes with its menu open leaves nothing behind: the next
+/// client's menu is fresh, and its Esc closes without asking.
+#[test]
+fn a_client_closing_with_the_menu_open_leaves_no_menu_behind() {
+    let srv = TestServer::start();
+    let mut a = open_menu(&srv);
+    type_query(&mut a, "mouse");
+    a.send("\r");
+    a.wait_until("mouse marked", WAIT, |t| t.contains("* mouse"));
+    srv.cmd(&["detach-client", "-s", "s"]).expect("detach");
+    a.wait_exit();
+    let mut b = second_menu(&srv);
+    type_query(&mut b, "mouse");
+    b.wait_until("mouse row", WAIT, |t| t.contains("mouse"));
+    assert!(!b.text().contains("* mouse"), "{}", b.text());
+    b.send(ESC);
+    b.wait_until("closed", WAIT, |t| !t.contains("Appearance"));
+    assert!(!b.text().contains("discard"), "{}", b.text());
+}
+
+/// `settings` on a client whose menu is open keeps that menu and what it
+/// changed.
+#[test]
+fn settings_again_keeps_the_open_menu() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    type_query(&mut h, "mouse");
+    h.send("\r");
+    try_wait_until(|| opt(&srv, "mouse") == "off", WAIT).expect("mouse applied");
+    // A resize runs `settings` again, on this client.
+    srv.cmd(&["set-hook", "-g", "client-resized", "settings"])
+        .expect("set-hook");
+    h.resize(99, 30);
+    std::thread::sleep(Duration::from_millis(400));
+    h.send(ESC);
+    h.wait_until("asks", WAIT, |t| t.contains("discard 1 changes? (y/n)"));
+}
+
+/// Edge small window: a client resized below the menu's size closes it and
+/// says so, and keys reach the pane again.
+#[test]
+fn resizing_below_the_menu_closes_it() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    h.resize(20, 5);
+    h.wait_until("too small", WAIT, |t| t.contains("window too small"));
+    h.send("hello\r");
+    try_wait_until(|| srv.capture("s").contains("hello"), WAIT)
+        .unwrap_or_else(|e| panic!("input did not reach the pane: {e}\n{}", h.text()));
 }
 
 /// T26: C-s shows the diff, `y` writes settings.toml and the value

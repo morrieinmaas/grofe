@@ -1213,6 +1213,7 @@ pub fn frame(state: &mut State, id: ClientId, frame: Frame) {
     match frame {
         Frame::Input(bytes) => input(state, id, &bytes, Instant::now()),
         Frame::Resize(cols, rows) => {
+            crate::server::settings::overlay::resized(state, id, (cols, rows));
             let Some(c) = state.clients.get_mut(&id) else {
                 return;
             };

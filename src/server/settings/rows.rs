@@ -1,8 +1,9 @@
 //! The option rows of the settings menu: what each shows and what Enter does.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::config::{self, Layer, Provenance, Source};
+use crate::config::{Layer, Provenance, Source};
 use crate::server::customize::{Scope, set_command};
 use crate::server::dispatch::options::{Kind, option_docs};
 use crate::server::input::{Key, Routed};
@@ -10,14 +11,13 @@ use crate::server::prompt;
 use crate::server::{State, clients, dispatch};
 use crate::types::ClientId;
 
+use super::overlay;
 use super::sections::{Section, section_of};
 
 /// One listed option. Its value is read from the server each time.
 #[derive(Clone)]
 pub struct Row {
     pub name: &'static str,
-    /// The key in settings.toml.
-    pub toml: &'static str,
     pub section: Section,
     pub doc: &'static str,
     pub default: &'static str,
@@ -40,11 +40,11 @@ pub enum Act {
     Layout { name: String, toml: String },
 }
 
-/// `v`, the text of option `toml_key`, as the TOML value settings.toml
-/// holds.
-pub fn item(toml_key: &str, v: &str) -> toml_edit::Item {
-    let text = config::literal(toml_key, v);
-    toml_edit::Item::Value(text.parse().unwrap_or_else(|_| v.into()))
+/// An option as it was before the menu first set it: its value, and
+/// whether a runtime `set -g` held it, so a reload left it alone.
+pub struct Before {
+    pub value: String,
+    pub runtime: bool,
 }
 
 fn place(src: &Source, dir: Option<&Path>) -> String {
@@ -64,7 +64,6 @@ pub fn build(prov: &Provenance, dir: Option<&Path>) -> Vec<Row> {
             };
             Row {
                 name: o.name,
-                toml: o.toml,
                 section: section_of(o.name),
                 doc: o.doc,
                 default: o.default,
@@ -92,16 +91,52 @@ pub fn set(state: &State, name: &str, to: &str) -> Vec<String> {
     set_command(state, Scope::GlobalSession, name, None, to)
 }
 
-/// Runs `set-option -g` of each of `changes` for `client`; a refusal shows
-/// the option's own error and changes nothing.
-pub fn apply(state: &mut State, client: ClientId, changes: &[(&str, &str)]) {
+/// Whether a runtime `set -g` holds global option `name`.
+// ponytail: the option store has no getter for the mark; releasing it and
+// putting it back leaves the store as it was.
+fn runtime_marked(state: &mut State, name: &str) -> bool {
+    let marked = state.model.options.release_runtime(name);
+    if marked {
+        state.model.options.restore_runtime(name);
+    }
+    marked
+}
+
+/// Runs `set-option -g` of each of `changes` for `client`, and notes each
+/// one that applied as the menu's; a refusal shows the option's own error
+/// and changes nothing.
+pub fn apply(state: &mut State, client: ClientId, changes: &[(&'static str, &str)]) {
     let Some(ctx) = state.clients.get(&client).map(|c| c.ctx.clone()) else {
         return;
     };
-    for (name, to) in changes {
+    for &(name, to) in changes {
+        let before = Before {
+            value: value(state, name),
+            runtime: runtime_marked(state, name),
+        };
         let argv = set(state, name, to);
+        match dispatch::run(state, &ctx, &argv) {
+            Ok(_) => overlay::note_set(state, client, name, before),
+            Err(e) => clients::show_message(state, client, e.trim_end()),
+        }
+    }
+    clients::mark_dirty(state, client);
+}
+
+/// Sets each of `changed` back to its value before the menu set it. One
+/// the runtime did not hold then goes back to the config: the next reload
+/// applies it again.
+pub fn restore(state: &mut State, client: ClientId, changed: &BTreeMap<&'static str, Before>) {
+    let Some(ctx) = state.clients.get(&client).map(|c| c.ctx.clone()) else {
+        return;
+    };
+    for (name, before) in changed {
+        let argv = set(state, name, &before.value);
         if let Err(e) = dispatch::run(state, &ctx, &argv) {
             clients::show_message(state, client, e.trim_end());
+        }
+        if !before.runtime {
+            state.model.options.release_runtime(name);
         }
     }
     clients::mark_dirty(state, client);
