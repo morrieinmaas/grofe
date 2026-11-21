@@ -5,6 +5,8 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use super::flow::scan_id;
+
 /// How often tmux checks subscriptions.
 const EVERY: Duration = Duration::from_secs(1);
 
@@ -19,21 +21,19 @@ enum What {
 }
 
 impl What {
-    /// tmux's reading: `%*`, `%<n>`, `@*`, `@<n>`, anything else is the
-    /// session.
+    /// tmux's reading: `%*`, `@*`, else `%<n>` or `@<n>` as
+    /// `sscanf("%%%d")` reads it (`%0x` is `%0`), and anything else, a
+    /// negative id included, is the session.
     fn parse(what: &str) -> What {
-        let id = |prefix: char| {
-            what.strip_prefix(prefix)
-                .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-                .map(|_| what.to_string())
-        };
+        let id = |sigil: char| scan_id(what, sigil).filter(|n| *n >= 0);
         match what {
             "%*" => What::AllPanes,
             "@*" => What::AllWindows,
-            _ => id('%')
-                .map(What::Pane)
-                .or_else(|| id('@').map(What::Window))
-                .unwrap_or(What::Session),
+            _ => match (id('%'), id('@')) {
+                (Some(n), _) => What::Pane(format!("%{n}")),
+                (_, Some(n)) => What::Window(format!("@{n}")),
+                _ => What::Session,
+            },
         }
     }
 
@@ -206,6 +206,9 @@ mod tests {
         assert_eq!(What::parse("@12"), What::Window("@12".into()));
         assert_eq!(What::parse(""), What::Session);
         assert_eq!(What::parse("%x"), What::Session);
+        assert_eq!(What::parse("%0x"), What::Pane("%0".into()));
+        assert_eq!(What::parse("%00"), What::Pane("%0".into()));
+        assert_eq!(What::parse("%-1"), What::Session);
     }
 
     #[test]

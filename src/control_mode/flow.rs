@@ -20,28 +20,42 @@ pub fn escape_output(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// What a pane's output does for this client.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PaneState {
-    On,
-    /// `-A %p:off`: held, and sent at `:on`.
-    Off,
-    /// `-A %p:pause`: dropped until `:continue`.
-    Paused,
+/// A pane's flow state for this client: control.c's two flags.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PaneFlags {
+    /// `-A %p:off`: output held, and sent at `:on`.
+    off: bool,
+    /// `-A %p:pause` or `pause-after`: output dropped until `:continue`.
+    paused: bool,
 }
 
 /// A client's flow control: which pane output is written, and how.
 #[derive(Debug, Default)]
 pub(super) struct Flow {
-    pub(super) panes: BTreeMap<String, PaneState>,
+    panes: BTreeMap<String, PaneFlags>,
     held: BTreeMap<String, Vec<u8>>,
     no_output: bool,
     pause_after: Option<u64>,
     pub(super) wait_exit: bool,
 }
 
+/// `<sigil><n>` read as tmux's `sscanf("%%%d")` reads it: an optional
+/// sign, then the leading digits (`%0x` is 0, `%00` is 0).
+pub(super) fn scan_id(text: &str, sigil: char) -> Option<i64> {
+    let rest = text.strip_prefix(sigil)?;
+    let (sign, digits) = match rest.strip_prefix('-') {
+        Some(d) => (-1, d),
+        None => (1, rest.strip_prefix('+').unwrap_or(rest)),
+    };
+    let end = digits
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits.len());
+    digits[..end].parse::<i64>().ok().map(|n| sign * n)
+}
+
 impl Flow {
-    /// `refresh-client -f` / `attach -f`: comma-separated flags, `!` clears.
+    /// `refresh-client -f` / `-F` / `attach -f`: comma-separated flags, `!`
+    /// clears.
     pub(super) fn set_flags(&mut self, list: &str) {
         for flag in list.split(',').filter(|f| !f.is_empty()) {
             let (on, name) = match flag.strip_prefix('!') {
@@ -59,32 +73,39 @@ impl Flow {
         }
     }
 
-    /// `refresh-client -A %p:state`: the lines the command prints, or its
-    /// error.
-    pub(super) fn set_pane(&mut self, arg: &str) -> Result<Vec<String>, String> {
-        let (pane, state) = arg
-            .split_once(':')
-            .filter(|(p, _)| p.starts_with('%'))
-            .ok_or_else(|| format!("bad pane argument: {arg}"))?;
-        let mut printed = Vec::new();
+    /// `refresh-client -A %p:state` for a pane in `live`: the lines it
+    /// prints. As tmux, a bad argument or an unknown pane changes nothing,
+    /// and `%pause`/`%continue` are printed only when the state changes.
+    pub(super) fn set_pane(&mut self, arg: &str, live: &BTreeSet<String>) -> Vec<String> {
+        let Some((pane, state)) = arg.split_once(':') else {
+            return Vec::new();
+        };
+        let Some(pane) = scan_id(pane, '%')
+            .filter(|n| *n >= 0)
+            .map(|n| format!("%{n}"))
+            .filter(|p| live.contains(p))
+        else {
+            return Vec::new();
+        };
+        let flags = self.panes.entry(pane.clone()).or_default();
         match state {
-            "on" | "continue" => {
-                self.panes.insert(pane.to_string(), PaneState::On);
-                if state == "continue" {
-                    printed.push(format!("%continue {pane}"));
-                }
-            }
+            "on" => flags.off = false,
             "off" => {
-                self.panes.insert(pane.to_string(), PaneState::Off);
+                flags.off = true;
+                self.held.remove(&pane);
             }
-            "pause" => {
-                self.panes.insert(pane.to_string(), PaneState::Paused);
-                self.held.remove(pane);
-                printed.push(format!("%pause {pane}"));
+            "continue" if flags.paused => {
+                flags.paused = false;
+                return vec![format!("%continue {pane}")];
             }
-            _ => return Err(format!("bad pane argument: {arg}")),
+            "pause" if !flags.paused => {
+                flags.paused = true;
+                self.held.remove(&pane);
+                return vec![format!("%pause {pane}")];
+            }
+            _ => {}
         }
-        Ok(printed)
+        Vec::new()
     }
 
     /// Forgets the state of panes that are gone, so it cannot outgrow the
@@ -101,28 +122,36 @@ impl Flow {
         if self.no_output {
             return None;
         }
-        match self.panes.get(pane).copied().unwrap_or(PaneState::On) {
-            PaneState::Paused => None,
-            PaneState::Off => {
-                let held = self.held.entry(pane.to_string()).or_default();
-                // ponytail: a pane held off keeps its first HELD_MAX bytes
-                // and drops the rest.
-                let room = HELD_MAX.saturating_sub(held.len());
-                held.extend_from_slice(&data[..data.len().min(room)]);
-                None
-            }
-            PaneState::On if self.pause_after.is_some_and(|s| age_ms / 1000 >= s.max(1)) => {
-                self.panes.insert(pane.to_string(), PaneState::Paused);
-                Some(format!("%pause {pane}\n").into_bytes())
-            }
-            PaneState::On => Some(self.frame(pane, data, age_ms)),
+        let flags = self.panes.get(pane).copied().unwrap_or_default();
+        if flags.paused {
+            None
+        } else if flags.off {
+            let held = self.held.entry(pane.to_string()).or_default();
+            // ponytail: a pane held off keeps its first HELD_MAX bytes and
+            // drops the rest.
+            let room = HELD_MAX.saturating_sub(held.len());
+            held.extend_from_slice(&data[..data.len().min(room)]);
+            None
+        } else if self.pause_after.is_some_and(|s| age_ms / 1000 >= s.max(1)) {
+            self.panes.entry(pane.to_string()).or_default().paused = true;
+            Some(format!("%pause {pane}\n").into_bytes())
+        } else {
+            Some(self.frame(pane, data, age_ms))
         }
     }
 
-    /// The data held for `pane` while it was off, framed.
-    pub(super) fn release(&mut self, pane: &str) -> Option<Vec<u8>> {
-        let data = self.held.remove(pane)?;
-        Some(self.frame(pane, &data, 0))
+    /// The data held for panes that are no longer off, framed.
+    pub(super) fn release(&mut self) -> Vec<Vec<u8>> {
+        let ready: Vec<String> = self
+            .held
+            .keys()
+            .filter(|p| self.panes.get(*p).is_none_or(|f| !f.off && !f.paused))
+            .cloned()
+            .collect();
+        ready
+            .into_iter()
+            .filter_map(|p| self.held.remove(&p).map(|d| self.frame(&p, &d, 0)))
+            .collect()
     }
 
     fn frame(&self, pane: &str, data: &[u8], age_ms: u64) -> Vec<u8> {
@@ -141,11 +170,15 @@ impl Flow {
 mod tests {
     use super::*;
 
+    fn live() -> BTreeSet<String> {
+        BTreeSet::from(["%0".to_string(), "%1".to_string()])
+    }
+
     #[test]
     fn flow_state_follows_live_panes_and_held_output_is_capped() {
         let mut flow = Flow::default();
-        flow.set_pane("%0:off").unwrap();
-        flow.set_pane("%1:pause").unwrap();
+        flow.set_pane("%0:off", &live());
+        flow.set_pane("%1:pause", &live());
         assert!(flow.output("%0", &vec![b'x'; HELD_MAX + 10], 0).is_none());
         assert_eq!(flow.held["%0"].len(), HELD_MAX);
         flow.retain(&BTreeSet::from(["%1".to_string()]));
@@ -172,24 +205,45 @@ mod tests {
     }
 
     #[test]
-    fn pause_drops_off_holds_and_no_output_drops() {
+    fn ids_scan_as_sscanf_does() {
+        assert_eq!(scan_id("%0x", '%'), Some(0));
+        assert_eq!(scan_id("%00", '%'), Some(0));
+        assert_eq!(scan_id("%-1", '%'), Some(-1));
+        assert_eq!(scan_id("%+7", '%'), Some(7));
+        assert_eq!(scan_id("%x", '%'), None);
+        assert_eq!(scan_id("@3", '%'), None);
+    }
+
+    /// Recorded on tmux 3.7b: off and paused are two flags; `:on` clears
+    /// only off, `:continue` only paused, and a notice only on a change.
+    #[test]
+    fn off_and_paused_are_separate_flags() {
         let mut flow = Flow::default();
-        assert_eq!(flow.output("%0", b"a", 0).unwrap(), b"%output %0 a\n");
+        let none: Vec<String> = Vec::new();
+        assert_eq!(flow.set_pane("%0:bogus", &live()), none);
+        assert_eq!(flow.set_pane("%9:pause", &live()), none);
+        assert_eq!(flow.set_pane("x:pause", &live()), none);
+        assert_eq!(flow.set_pane("%0:continue", &live()), none);
+        assert_eq!(flow.set_pane("%0:pause", &live()), ["%pause %0"]);
+        assert_eq!(flow.set_pane("%00:pause", &live()), none);
+        assert_eq!(flow.set_pane("%0:on", &live()), none);
+        assert!(flow.output("%0", b"lost", 0).is_none());
+        flow.set_pane("%0:off", &live());
+        assert_eq!(flow.set_pane("%0:continue", &live()), ["%continue %0"]);
+        assert!(flow.output("%0", b"held", 0).is_none());
+        assert!(flow.release().is_empty());
+        flow.set_pane("%0:on", &live());
+        assert_eq!(flow.release(), [b"%output %0 held\n".to_vec()]);
+        assert_eq!(flow.output("%0", b"x", 0).unwrap(), b"%output %0 x\n");
+    }
+
+    #[test]
+    fn no_output_drops_and_pause_after_frames_extended() {
+        let mut flow = Flow::default();
         flow.set_flags("pause-after=1");
         assert_eq!(
             flow.output("%0", b"a", 7).unwrap(),
             b"%extended-output %0 7 : a\n"
-        );
-        assert_eq!(flow.set_pane("%0:pause").unwrap(), ["%pause %0"]);
-        assert!(flow.output("%0", b"lost", 0).is_none());
-        assert_eq!(flow.set_pane("%0:continue").unwrap(), ["%continue %0"]);
-        assert!(flow.output("%0", b"b", 0).is_some());
-        flow.set_pane("%0:off").unwrap();
-        assert!(flow.output("%0", b"held", 0).is_none());
-        flow.set_pane("%0:on").unwrap();
-        assert_eq!(
-            flow.release("%0").unwrap(),
-            b"%extended-output %0 0 : held\n"
         );
         flow.set_flags("no-output");
         assert!(flow.output("%0", b"x", 0).is_none());

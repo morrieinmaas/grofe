@@ -29,7 +29,7 @@ mod subscribe;
 
 use command::session_target;
 use conn::{ctx, exchange, subscribe};
-use flow::{Flow, PaneState};
+use flow::Flow;
 use subscribe::Subs;
 
 pub use flow::escape_output;
@@ -207,21 +207,7 @@ impl<W: Write> Bridge<'_, W> {
 
     /// Sends what `-A %p:on` released.
     fn release_all(&mut self) -> bool {
-        let on: Vec<String> = self
-            .flow
-            .panes
-            .iter()
-            .filter(|(_, s)| **s == PaneState::On)
-            .map(|(p, _)| p.clone())
-            .collect();
-        for pane in on {
-            if let Some(line) = self.flow.release(&pane)
-                && !self.write(&line)
-            {
-                return false;
-            }
-        }
-        true
+        self.flow.release().iter().all(|line| self.write(line))
     }
 
     /// Ends the stream: `%exit`, then the ST of `-CC`.
@@ -229,6 +215,98 @@ impl<W: Write> Bridge<'_, W> {
         self.line("%exit");
         if self.opts.double {
             self.write(DCS_CLOSE);
+        }
+    }
+}
+
+/// What the main loop does after a message.
+enum Step {
+    Go,
+    /// The client leaves: `%exit`.
+    Leave,
+    /// The output is gone: stop at once.
+    Gone,
+}
+
+impl<W: Write> Bridge<'_, W> {
+    /// The attach: the `-CC` DCS, the attach block, what a new session
+    /// sends, `%session-changed`, and the event connection. `Err` is the
+    /// exit status of a refused attach.
+    fn attach(&mut self) -> Result<UnixStream, i32> {
+        if self.opts.double {
+            self.write(DCS_OPEN);
+        }
+        if let Some(flags) = &self.opts.flags {
+            self.flow.set_flags(flags);
+        }
+        let created = match start(self) {
+            Ok(created) => created,
+            Err(e) => {
+                self.block(0, &Err(e));
+                self.exit();
+                return Err(1);
+            }
+        };
+        self.block(0, &Ok(String::new()));
+        for l in created {
+            self.line(&l);
+        }
+        let name = self
+            .snap
+            .sessions
+            .get(&self.attached)
+            .cloned()
+            .unwrap_or_default();
+        let session = format!("%session-changed {} {name}", self.attached);
+        self.line(&session);
+        subscribe(self.opts).map_err(|e| {
+            self.line(&format!("%exit {e}"));
+            if self.opts.double {
+                self.write(DCS_CLOSE);
+            }
+            1
+        })
+    }
+
+    /// A command line from the client.
+    fn on_line(&mut self, line: &str) -> Step {
+        if line.trim().is_empty() {
+            return Step::Go;
+        }
+        let Some(detach) = self.command_line(line) else {
+            return Step::Gone;
+        };
+        for l in std::mem::take(&mut self.after) {
+            self.line(&l);
+        }
+        if detach || !self.notify() {
+            Step::Leave
+        } else {
+            Step::Go
+        }
+    }
+
+    /// An event from the server.
+    fn on_event(&mut self, event: Event, since: Instant) -> Step {
+        match event {
+            Event::PaneOutput { pane, data } => {
+                if self.pane_output(&pane.to_string(), &data, since) {
+                    Step::Go
+                } else {
+                    Step::Gone
+                }
+            }
+            _ if self.notify() => Step::Go,
+            _ => Step::Leave,
+        }
+    }
+
+    /// The poll: changes no event announced, and subscriptions.
+    fn on_tick(&mut self) -> Step {
+        if self.notify() && self.check_subs() {
+            Step::Go
+        } else {
+            Step::Leave
         }
     }
 }
@@ -247,42 +325,9 @@ pub fn run(opts: &Options, input: impl BufRead + Send + 'static, output: impl Wr
         after_block: Vec::new(),
         subs: Subs::default(),
     };
-    if opts.double {
-        bridge.write(DCS_OPEN);
-    }
-    if let Some(flags) = &opts.flags {
-        bridge.flow.set_flags(flags);
-    }
-    let created = match start(&mut bridge) {
-        Ok(created) => created,
-        Err(e) => {
-            bridge.block(0, &Err(e));
-            bridge.exit();
-            return 1;
-        }
-    };
-    bridge.block(0, &Ok(String::new()));
-    for l in created {
-        bridge.line(&l);
-    }
-    let name = bridge
-        .snap
-        .sessions
-        .get(&bridge.attached)
-        .cloned()
-        .unwrap_or_default();
-    let session = format!("%session-changed {} {name}", bridge.attached);
-    bridge.line(&session);
-
-    let events = match subscribe(opts) {
-        Ok(s) => s,
-        Err(e) => {
-            bridge.line(&format!("%exit {e}"));
-            if bridge.opts.double {
-                bridge.write(DCS_CLOSE);
-            }
-            return 1;
-        }
+    let events = match bridge.attach() {
+        Ok(events) => events,
+        Err(status) => return status,
     };
     let (tx, rx) = mpsc::channel();
     spawn_input(input, tx.clone());
@@ -291,37 +336,19 @@ pub fn run(opts: &Options, input: impl BufRead + Send + 'static, output: impl Wr
     spawn_ticks(tx);
 
     while let Ok(msg) = rx.recv() {
-        match msg {
-            Msg::Line(line) if line.trim().is_empty() => {}
-            Msg::Line(line) => {
-                let Some(detach) = bridge.command_line(&line) else {
-                    return 0;
-                };
-                for l in std::mem::take(&mut bridge.after) {
-                    bridge.line(&l);
-                }
-                if detach || !bridge.notify() {
-                    break;
-                }
-            }
-            Msg::Eof => break,
-            Msg::Event(Event::PaneOutput { pane, data }, since) => {
-                queued.fetch_sub(data.len(), Ordering::Relaxed);
-                if !bridge.pane_output(&pane.to_string(), &data, since) {
-                    return 0;
-                }
-            }
-            Msg::Event(e, _) => {
+        let step = match msg {
+            Msg::Line(line) => bridge.on_line(&line),
+            Msg::Eof => Step::Leave,
+            Msg::Event(e, since) => {
                 queued.fetch_sub(weight(&e), Ordering::Relaxed);
-                if !bridge.notify() {
-                    break;
-                }
+                bridge.on_event(e, since)
             }
-            Msg::Tick => {
-                if !bridge.notify() || !bridge.check_subs() {
-                    break;
-                }
-            }
+            Msg::Tick => bridge.on_tick(),
+        };
+        match step {
+            Step::Go => {}
+            Step::Leave => break,
+            Step::Gone => return 0,
         }
     }
     bridge.exit();

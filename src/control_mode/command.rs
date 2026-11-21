@@ -12,10 +12,14 @@ use crate::compat::tmux::{Getopt, resolve};
 use super::Bridge;
 use super::conn::exchange;
 
-/// `target` as a session target: `display-message -t` reads a bare word as a
-/// pane, so a word with no `:` gets one.
+/// The smallest and largest window size, tmux's WINDOW_MINIMUM and
+/// WINDOW_MAXIMUM.
+const SIZES: std::ops::RangeInclusive<u32> = 1..=10000;
+
+/// `target` as a session target: `display-message -t` reads a bare name as a
+/// pane, so a name with no `:` gets one; a `%`, `@` or `$` id stays as it is.
 pub(super) fn session_target(target: &str) -> String {
-    if target.contains(':') {
+    if target.contains(':') || target.starts_with(['%', '@', '$']) {
         target.to_string()
     } else {
         format!("{target}:")
@@ -32,6 +36,21 @@ fn parse_error_text(err: &str) -> String {
     } else {
         err.to_string()
     }
+}
+
+/// The leading digits of `text` as `sscanf("%u")` reads them, and the rest.
+fn uint(text: &str) -> Option<(u32, &str)> {
+    let end = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    Some((text[..end].parse().ok()?, &text[end..]))
+}
+
+/// `<w><sep><h>`, `sep` one of `seps`, as `sscanf("%u<sep>%u")` reads it.
+fn size(text: &str, seps: &[char]) -> Option<(u32, u32)> {
+    let (w, rest) = uint(text)?;
+    let rest = rest.strip_prefix(seps)?;
+    Some((w, uint(rest)?.0))
 }
 
 /// A config file's error, `<path>:<line>: <message>`, which tmux gives a
@@ -77,6 +96,12 @@ impl<W: Write> Bridge<'_, W> {
         if cmds.is_empty() {
             return self.block(1, &Ok(String::new())).then_some(false);
         }
+        // tmux parses the whole line, flags included, before running any of it.
+        for argv in &cmds {
+            if let Err(e) = resolve(&argv[0]).and_then(|s| s.check_flags(&argv[1..])) {
+                return self.block(1, &Err(parse_error_text(&e.0))).then_some(false);
+            }
+        }
         for argv in cmds {
             let (result, detach) = match self.command(&argv) {
                 Outcome::Ok(out) => (Ok(out), false),
@@ -104,15 +129,14 @@ impl<W: Write> Bridge<'_, W> {
     }
 
     fn command(&mut self, argv: &[String]) -> Outcome {
-        let spec = resolve(&argv[0]).ok();
-        if let Some(Err(e)) = spec.map(|s| s.check_flags(&argv[1..])) {
-            return Outcome::Err(parse_error_text(&e.0));
-        }
-        let verb = spec.map_or(argv[0].as_str(), |s| s.name);
+        let verb = resolve(&argv[0]).map_or(argv[0].as_str(), |s| s.name);
         let getopt = flags(argv);
         match verb {
             // With a target it detaches other clients, on the server.
             "detach-client" if !"ast".chars().any(|f| getopt.has(f)) => Outcome::Detach,
+            "detach-client" if getopt.has('a') && !getopt.has('s') && !getopt.has('t') => {
+                self.detach_others()
+            }
             // `-c` switches another client, on the server.
             "switch-client" if !getopt.has('c') => self.switch_client(getopt.value('t')),
             "refresh-client" => self.refresh_client(&getopt),
@@ -174,52 +198,84 @@ impl<W: Write> Bridge<'_, W> {
         }
     }
 
-    /// `refresh-client`: the flags of control mode are the bridge's own
-    /// (`-C`, `-f`, `-A`, `-B`).
-    fn refresh_client(&mut self, getopt: &Getopt<'_>) -> Outcome {
-        let mut printed = String::new();
-        for &(flag, value) in &getopt.flags {
-            let Some(value) = value else {
-                continue;
-            };
-            match flag {
-                'C' => {
-                    if let Err(e) = self.resize(value) {
-                        return Outcome::Err(e);
-                    }
-                }
-                'f' => self.flow.set_flags(value),
-                'A' => match self.flow.set_pane(value) {
-                    Ok(lines) => {
-                        for l in lines {
-                            printed.push_str(&l);
-                            printed.push('\n');
-                        }
-                    }
-                    Err(e) => return Outcome::Err(e),
-                },
-                'B' => self.subs.update(value, Instant::now()),
-                // ponytail: `-r` (colour reports), `-l` (clipboard), `-S`
-                // and the scroll flags are not control-mode features of the
-                // bridge.
-                'r' => return Outcome::Err("refresh-client -r: not supported yet".into()),
-                _ => {}
+    /// `detach-client -a`: every other client detaches. The bridge is not
+    /// a server client, so that is every client the server has.
+    fn detach_others(&self) -> Outcome {
+        let names = match self.ask(&["list-clients", "-F", "#{client_name}"]) {
+            Ok(out) => out,
+            Err(e) => return Outcome::Err(e),
+        };
+        for name in names.lines() {
+            if let Err(e) = self.ask(&["detach-client", "-t", name]) {
+                return Outcome::Err(e);
             }
         }
-        Outcome::Ok(printed)
+        Outcome::Ok(String::new())
     }
 
-    /// `-C <w>x<h>` or `-C @<id>:<w>x<h>`: windows resize.
-    fn resize(&self, arg: &str) -> Result<(), String> {
-        let (window, size) = match arg.split_once(':') {
-            Some((w, s)) if w.starts_with('@') => (Some(w), s),
-            _ => (None, arg),
+    /// `refresh-client`: the flags of control mode are the bridge's own,
+    /// taken in tmux's order: `-F`/`-f`, then the first of `-A`, `-B`, `-C`.
+    fn refresh_client(&mut self, getopt: &Getopt<'_>) -> Outcome {
+        // ponytail: the control client is not a server client, so no `-t`
+        // names it.
+        if let Some(t) = getopt.value('t') {
+            return Outcome::Err(format!("can't find client: {t}"));
+        }
+        let values = |f: char| {
+            getopt
+                .flags
+                .iter()
+                .filter(move |(g, _)| *g == f)
+                .filter_map(|(_, v)| *v)
         };
-        let (w, h) = size
-            .split_once('x')
-            .or_else(|| size.split_once(','))
-            .filter(|(w, h)| w.parse::<u16>().is_ok() && h.parse::<u16>().is_ok())
-            .ok_or_else(|| format!("bad size argument: {arg}"))?;
+        // `-F` is an alias of `-f`.
+        for v in values('F').chain(values('f')) {
+            self.flow.set_flags(v);
+        }
+        // ponytail: `-r` (colour reports), `-l` (clipboard), `-S` and the
+        // scroll flags are not control-mode features of the bridge.
+        if getopt.has('r') {
+            return Outcome::Err("refresh-client -r: not supported yet".into());
+        }
+        if getopt.has('A') {
+            let mut printed = String::new();
+            for v in values('A') {
+                for l in self.flow.set_pane(v, &self.snap.panes) {
+                    printed.push_str(&l);
+                    printed.push('\n');
+                }
+            }
+            return Outcome::Ok(printed);
+        }
+        if getopt.has('B') {
+            for v in values('B') {
+                self.subs.update(v, Instant::now());
+            }
+            return Outcome::Ok(String::new());
+        }
+        match getopt.value('C').map(|size| self.resize(size)) {
+            Some(Err(e)) => Outcome::Err(e),
+            _ => Outcome::Ok(String::new()),
+        }
+    }
+
+    /// `-C <w>x<h>` (or `<w>,<h>`) or `-C @<id>:<w>x<h>`: windows resize,
+    /// with tmux's errors. `-C @<id>:` alone (no size) changes nothing here.
+    fn resize(&self, arg: &str) -> Result<(), String> {
+        let (window, (w, h)) = match arg.strip_prefix('@').and_then(uint) {
+            Some((id, rest)) if rest.starts_with(':') => match size(&rest[1..], &['x']) {
+                Some(wh) => (Some(format!("@{id}")), wh),
+                None => return Ok(()),
+            },
+            _ => (
+                None,
+                size(arg, &[',', 'x']).ok_or_else(|| "bad size argument".to_string())?,
+            ),
+        };
+        if !SIZES.contains(&w) || !SIZES.contains(&h) {
+            return Err("size too small or too big".into());
+        }
+        let (w, h) = (w.to_string(), h.to_string());
         let targets: Vec<String> = match window {
             Some(w) => vec![w.to_string()],
             None => self
@@ -230,7 +286,7 @@ impl<W: Write> Bridge<'_, W> {
                 .collect(),
         };
         for t in targets {
-            self.ask(&["resize-window", "-t", &t, "-x", w, "-y", h])?;
+            self.ask(&["resize-window", "-t", &t, "-x", &w, "-y", &h])?;
         }
         Ok(())
     }

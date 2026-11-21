@@ -53,6 +53,13 @@ const CASES: &[Case] = &[
             "send-keys -t %0 hi Enter",
             "bogus",
             "display -p a ; kill-window -t @99 ; display -p c",
+            "display -p a ; bogus ; display -p c",
+            "display -p a ; refresh-client -Z",
+            "display -p a ; switch-client -X ; display -p c",
+            "refresh-client -t nosuch -C 90x20",
+            "switch-client -t %0",
+            "switch-client -t @0",
+            "switch-client -t '$0'",
             "refresh-client -Z",
             "refresh-client -C",
             "refresh-client -B",
@@ -75,6 +82,9 @@ const CASES: &[Case] = &[
             "select-pane -t %0",
             "kill-pane -t %1",
             "refresh-client -C 100x30",
+            "refresh-client -C 0x0",
+            "refresh-client -C abc",
+            "refresh-client -C @0:90x25",
             "refresh-client -f pause-after=1",
             "send-keys -t %0 abc Enter",
             "refresh-client -A '%0:pause'",
@@ -88,6 +98,23 @@ const CASES: &[Case] = &[
             "send-keys -t %0 jkl Enter",
             "refresh-client -f '!no-output'",
             "send-keys -t %0 JKL Enter",
+            "refresh-client -F no-output",
+            "send-keys -t %0 mno Enter",
+            "refresh-client -F '!no-output'",
+            "refresh-client -A '%0:bogus'",
+            "refresh-client -A '%99:pause'",
+            "refresh-client -A 'x:pause'",
+            "refresh-client -A '%0:continue'",
+            "refresh-client -A '%0:pause'",
+            "refresh-client -A '%0:pause'",
+            "refresh-client -A '%0:on'",
+            "send-keys -t %0 pqr Enter",
+            "refresh-client -A '%0:off'",
+            "refresh-client -A '%0:continue'",
+            "send-keys -t %0 stu Enter",
+            "refresh-client -A '%0:on'",
+            "refresh-client -A '%0:continue'",
+            "send-keys -t %0 vwx Enter",
             "detach-client",
         ],
     },
@@ -166,7 +193,8 @@ const CASES: &[Case] = &[
             "refresh-client -B sname -B allp -B allw",
             "rename-window -t @1 again ; rename-session third",
             "!wait",
-            "refresh-client -B 'bad:%x:#{pane_id}' -B nosuch -B 'one:%*' -B 'dash::-#{session_name}'",
+            "refresh-client -B 'bad:%x:#{pane_id}' -B nosuch -B 'one:%*' -B 'dash::-#{session_name}' \
+             -B 'p0x:%0x:#{pane_id}' -B 'p00:%00:#{pane_index}' -B 'neg:%-1:#{session_id}'",
             "!wait",
         ],
     },
@@ -182,6 +210,14 @@ const CASES: &[Case] = &[
             "display-message -c {client} hello",
             "detach-client -s two",
         ],
+    },
+    // `detach-client -a` detaches every other client.
+    Case {
+        name: "clients-all",
+        setup: &["new-session -d -s two -x 80 -y 24 -n t0 'sleep 99'"],
+        pty: Some("two"),
+        start: ATTACH,
+        script: &["detach-client -a"],
     },
 ];
 
@@ -241,6 +277,11 @@ fn golden_subscriptions() {
 #[test]
 fn golden_clients() {
     assert_golden("clients");
+}
+
+#[test]
+fn golden_clients_all() {
+    assert_golden("clients-all");
 }
 
 /// Records every case from real tmux 3.7b. `scripts/record-compat-goldens.sh

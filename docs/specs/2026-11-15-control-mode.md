@@ -125,9 +125,14 @@ the CLI process (`src/control_mode/`). It holds
 own flow controller: `pause-after`, `-A`, and `no-output` drop or hold data before it is written.
 
 Client-bound commands are answered in the bridge: `detach-client` with no `-a`, `-s` or `-t`,
-`switch-client -t` (the attached session) and `refresh-client` (`-C` as `resize-window` on the
-attached session's windows, `-f`, `-A`, `-B`). tmux's flag checks run first, so a flag the usage does not list
-is `unknown flag` and a value flag with no value `expects an argument`, as parse errors. `display-message` without `-p` runs with it and
+`detach-client -a` (every server client detaches, as the bridge is none of them),
+`switch-client -t` (the attached session; a `%`, `@` or `$` id names the session holding it)
+and `refresh-client` (`-F` or `-f`, then the first of `-A`, `-B` and `-C`, as tmux takes them;
+`-C` as `resize-window` on the attached session's windows). `refresh-client -t <name>` is
+`can't find client: <name>`, since no server client is the bridge. tmux parses a whole line,
+flags included, before running any of it, and so does the bridge: an unknown command or flag
+anywhere in a `;` chain is one parse-error block and nothing runs (a flag the usage does not
+list is `unknown flag`, a value flag with no value `expects an argument`). `display-message` without `-p` runs with it and
 prints `%message`; `source-file` errors of the `<file>:<line>:` form become `%config-error`
 lines after a successful block. `display-message -p` formats naming `client_*` go to the
 server, which has no such client.
@@ -151,6 +156,10 @@ where the snapshot diff becomes direct emission at the places the model changes.
 `%pause %<p>`; `refresh-client -A %<p>:continue` resumes with `%continue %<p>`. Data produced
 while paused is discarded for that client (recorded). `refresh-client -A %<p>:off` stops sending
 a pane's output (what was produced is sent on `:on`, recorded), `:pause` and `:continue` do it by hand.
+Off and paused are two separate states, as in control.c (recorded): `:on` clears only off and
+`:continue` only paused, `%pause` and `%continue` are printed only when the state changes, and a
+bad argument or an unknown pane (`%<n>` read as `sscanf` reads it, so `%00` is `%0`) changes
+nothing and succeeds.
 `-f no-output` drops all output while set, and `-f '!no-output'` resumes it (recorded: the output of
 the `no-output` span is lost). `-f wait-exit` makes the client wait for an empty input line before
 `%exit`.
@@ -163,14 +172,17 @@ not read): it writes `%pause %<p>` and drops that pane's output until `:continue
 
 `refresh-client -C <w>x<h>` sets the client size, which sets the size of the session's windows
 (recorded: `%layout-change @0 a87d,100x30,...`). `refresh-client -C @<w>:<w>x<h>` sets one window.
-The bridge turns both into `resize-window -x -y`.
+The bridge turns both into `resize-window -x -y`. A size that does not read as
+`<w>x<h>` (or `<w>,<h>`) is `bad size argument`, one outside 1 to 10000 `size too small or too
+big` (recorded), and `-C @<w>:` alone changes nothing.
 
 ## 7. Subscriptions
 
 `refresh-client -B <name>:<what>:<format>` (recorded, and read from tmux's control.c) adds a
 subscription, replacing one of the same name; `-B <name>` alone removes it, and a value with
 one `:` is ignored. `<what>` is `%<n>` (one pane), `%*` (every pane of the session), `@<n>` (one
-window), `@*` (every window), and anything else the session (so `%x` watches the session). `-B`
+window), `@*` (every window), and anything else the session (so `%x` watches the session). `%<n>` and `@<n>` read as
+`sscanf("%%%d")` reads them: `%0x` and `%00` are `%0`, and a negative id is the session. `-B`
 may be given more than once.
 
 Once a second, starting a second after the first subscription, each subscription's format is

@@ -115,6 +115,7 @@ impl Drop for Side {
         if self.real {
             let _ = self.command().arg("kill-server").output();
         }
+        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 

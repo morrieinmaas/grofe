@@ -32,6 +32,27 @@ a
 can't find window: @99
 %error T N 1
 %begin T N 1
+parse error: unknown command: bogus
+%error T N 1
+%begin T N 1
+parse error: command refresh-client: unknown flag -Z
+%error T N 1
+%begin T N 1
+parse error: command switch-client: unknown flag -X
+%error T N 1
+%begin T N 1
+can't find client: nosuch
+%error T N 1
+%begin T N 1
+%end T N 1
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%session-changed $0 main
+%begin T N 1
 parse error: command refresh-client: unknown flag -Z
 %error T N 1
 %begin T N 1
