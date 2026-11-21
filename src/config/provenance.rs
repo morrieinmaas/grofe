@@ -64,6 +64,8 @@ pub fn tilde(path: &Path, home: Option<&Path>) -> String {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Provenance {
     options: BTreeMap<String, Source>,
+    /// The highest non-default source each winner replaced.
+    replaced: BTreeMap<String, Source>,
 }
 
 impl Provenance {
@@ -72,7 +74,20 @@ impl Provenance {
     }
 
     pub fn set(&mut self, toml_key: &str, source: Source) {
-        self.options.insert(toml_key.to_string(), source);
+        if let Some(old) = self.options.insert(toml_key.to_string(), source)
+            && old.layer != Layer::Defaults
+        {
+            self.replaced.insert(toml_key.to_string(), old);
+        }
+    }
+
+    /// The source `settings.toml` replaced for `toml_key`, if the winner is
+    /// a settings value that hides a non-default lower one.
+    pub fn overridden(&self, toml_key: &str) -> Option<&Source> {
+        match self.options.get(toml_key) {
+            Some(w) if w.layer == Layer::Settings => self.replaced.get(toml_key),
+            _ => None,
+        }
     }
 }
 
@@ -89,5 +104,34 @@ mod tests {
         );
         assert_eq!(tilde(Path::new("/h/meow/x"), Some(home)), "/h/meow/x");
         assert_eq!(tilde(Path::new("/h/me/x"), None), "/h/me/x");
+    }
+
+    fn src(layer: Layer, line: usize) -> Source {
+        Source {
+            layer,
+            file: Some(PathBuf::from("f.toml")),
+            line,
+        }
+    }
+
+    #[test]
+    fn overridden_reports_the_replaced_source_under_settings() {
+        let mut p = Provenance::default();
+        p.set("k", Source::defaults());
+        p.set("k", src(Layer::ConfD, 7));
+        p.set("k", src(Layer::Settings, 2));
+        assert_eq!(p.overridden("k"), Some(&src(Layer::ConfD, 7)));
+    }
+
+    #[test]
+    fn overridden_is_none_without_a_replaced_source_or_settings_winner() {
+        let mut p = Provenance::default();
+        p.set("a", Source::defaults());
+        p.set("a", src(Layer::Settings, 1));
+        assert_eq!(p.overridden("a"), None);
+        p.set("b", Source::defaults());
+        p.set("b", src(Layer::ConfD, 3));
+        p.set("b", src(Layer::User, 4));
+        assert_eq!(p.overridden("b"), None);
     }
 }
