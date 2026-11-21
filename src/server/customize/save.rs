@@ -20,7 +20,7 @@ pub(super) fn key_of(name: &str, idx: Option<u32>) -> Option<&'static str> {
 /// Why `name` at `scope` cannot be saved, if it cannot: it has no scalar
 /// TOML key (a `@user` option, a list option or an array element), or the
 /// value is a session's, window's or pane's own rather than the global one.
-pub(super) fn refusal(scope: Scope, name: &str, idx: Option<u32>) -> Option<&'static str> {
+pub(crate) fn refusal(scope: Scope, name: &str, idx: Option<u32>) -> Option<&'static str> {
     if key_of(name, idx).is_none() {
         Some("it has no TOML key")
     } else if !is_global(scope) {
@@ -53,7 +53,7 @@ pub(crate) fn toml_item(
 
 /// The folder settings.toml lives in. Not with `tmux -f`: the server reads
 /// only those files then, so a save would change nothing.
-fn settings_dir() -> Result<PathBuf, String> {
+pub(crate) fn settings_dir() -> Result<PathBuf, String> {
     if crate::compat::start_config().is_some() {
         return Err(
             "not saved: the server was started with -f, so settings.toml is not read".into(),
@@ -67,15 +67,31 @@ fn settings_dir() -> Result<PathBuf, String> {
 /// A binding as `[keys.<table>]` writes it: the command in the config's
 /// spelling (a command string spells tmux's ` \; ` as ` ; `), and its note,
 /// repeat flag, group and name.
-struct Fields {
-    cmd: String,
-    desc: Option<String>,
-    repeat: bool,
-    group: Option<String>,
-    name: Option<String>,
+#[derive(Default)]
+pub struct Fields {
+    pub(crate) cmd: String,
+    pub(crate) desc: Option<String>,
+    pub(crate) repeat: bool,
+    pub(crate) group: Option<String>,
+    pub(crate) name: Option<String>,
 }
 
-fn binding_fields(state: &State, table: &str, key: &crate::server::input::Key) -> Fields {
+impl Fields {
+    pub fn as_write(&self) -> write::BindingFields<'_> {
+        write::BindingFields {
+            desc: self.desc.as_deref(),
+            repeat: self.repeat,
+            group: self.group.as_deref(),
+            name: self.name.as_deref(),
+        }
+    }
+}
+
+pub(crate) fn binding_fields(
+    state: &State,
+    table: &str,
+    key: &crate::server::input::Key,
+) -> Fields {
     match state.registry.key_tables.exact(table, key) {
         Some(b) => Fields {
             cmd: options::tmux_command_line(&b.cmds).replace(" \\; ", " ; "),
@@ -84,13 +100,7 @@ fn binding_fields(state: &State, table: &str, key: &crate::server::input::Key) -
             group: b.group.clone(),
             name: b.name.clone(),
         },
-        None => Fields {
-            cmd: String::new(),
-            desc: None,
-            repeat: false,
-            group: None,
-            name: None,
-        },
+        None => Fields::default(),
     }
 }
 
@@ -114,6 +124,17 @@ fn binding_is_grofe(state: &State, table: &str, key: &crate::server::input::Key)
         .is_none_or(|b| b.dialect == Dialect::Grofe)
 }
 
+/// Why the binding of `key` in `table` cannot be saved, if it cannot.
+pub(crate) fn binding_refusal(state: &State, table: &str, key: &Key) -> Option<&'static str> {
+    if binding_is_plugin(state, table, key) {
+        Some("bound by a plugin, not saveable")
+    } else if !binding_is_grofe(state, table, key) {
+        Some("only grofe-dialect bindings are saveable")
+    } else {
+        None
+    }
+}
+
 /// `P` in customize-mode: writes `entry` to settings.toml, then reloads the
 /// config. A key's entry is replaced as a whole: a field its live binding
 /// lacks goes. When the reload fails the file is put back, the runtime marks
@@ -133,29 +154,14 @@ pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String
             Ok(format!("Saved {name} to settings.toml"))
         }
         Entry::Key { table, key } | Entry::Field { table, key, .. } => {
-            if binding_is_plugin(state, table, key) {
-                return Err("bound by a plugin, not saveable".to_string());
-            }
-            if !binding_is_grofe(state, table, key) {
-                return Err("only grofe-dialect bindings are saveable".to_string());
+            if let Some(why) = binding_refusal(state, table, key) {
+                return Err(why.to_string());
             }
             let f = binding_fields(state, table, key);
             let name = key.to_string();
             let dir = settings_dir()?;
             with_owned_reload(state, &[], &[(table, *key)], || {
-                write::set_binding(
-                    &dir,
-                    table,
-                    &name,
-                    &f.cmd,
-                    &write::BindingFields {
-                        desc: f.desc.as_deref(),
-                        repeat: f.repeat,
-                        group: f.group.as_deref(),
-                        name: f.name.as_deref(),
-                    },
-                )
-                .map(Some)
+                write::set_binding(&dir, table, &name, &f.cmd, &f.as_write()).map(Some)
             })?;
             Ok(format!("Saved {name} to settings.toml"))
         }

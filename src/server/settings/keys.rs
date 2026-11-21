@@ -14,12 +14,20 @@ use super::sections::Section;
 /// The tables the menu lists.
 const TABLES: [&str; 2] = ["prefix", "root"];
 
-/// One rebind or unbind: what each key held before, and what settings.toml
-/// needs to say to keep it (table, key, command; an empty command unbinds).
+/// A key a rebind or unbind touched, and why settings.toml cannot say so
+/// (its binding was a plugin's or not grofe-dialect), if it cannot.
+pub struct Touched {
+    pub table: String,
+    pub key: Key,
+    pub refusal: Option<&'static str>,
+}
+
+/// One rebind or unbind: what each key held before, and the keys whose
+/// entries settings.toml needs to follow.
 #[derive(Default)]
 pub struct Edit {
     undo: Vec<(String, Key, Option<Binding>)>,
-    pub binds: Vec<(String, String, String)>,
+    pub binds: Vec<Touched>,
 }
 
 fn command(b: &Binding) -> String {
@@ -90,21 +98,26 @@ pub fn pressed(state: &mut State, client: ClientId, table: String, old: Key, new
     );
 }
 
+fn touched(table: &str, key: Key, refusal: Option<&'static str>) -> Touched {
+    Touched {
+        table: table.to_string(),
+        key,
+        refusal,
+    }
+}
+
 fn rebind(state: &mut State, client: ClientId, table: &str, old: Key, new: Key) {
+    let refusal = overlay::refusal(state, client, table, &old);
     let tables = &mut state.registry.key_tables;
     let Some(mut b) = tables.exact(table, &old).cloned() else {
         return;
     };
-    let cmd = command(&b);
     let edit = Edit {
         undo: vec![
             (table.to_string(), new, tables.exact(table, &new).cloned()),
             (table.to_string(), old, Some(b.clone())),
         ],
-        binds: vec![
-            (table.to_string(), old.to_string(), String::new()),
-            (table.to_string(), new.to_string(), cmd),
-        ],
+        binds: vec![touched(table, old, refusal), touched(table, new, refusal)],
     };
     tables.unbind(table, &old);
     b.source = BindingSource::Runtime;
@@ -114,13 +127,14 @@ fn rebind(state: &mut State, client: ClientId, table: &str, old: Key, new: Key) 
 
 /// Unbinds `key` in `table`.
 pub fn unbind(state: &mut State, client: ClientId, table: &str, key: Key) {
+    let refusal = overlay::refusal(state, client, table, &key);
     let tables = &mut state.registry.key_tables;
     let Some(b) = tables.exact(table, &key).cloned() else {
         return;
     };
     let edit = Edit {
         undo: vec![(table.to_string(), key, Some(b))],
-        binds: vec![(table.to_string(), key.to_string(), String::new())],
+        binds: vec![touched(table, key, refusal)],
     };
     tables.unbind(table, &key);
     overlay::record(state, client, edit);

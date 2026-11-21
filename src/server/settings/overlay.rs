@@ -7,12 +7,13 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use crate::config::{self, Env};
+use crate::server::customize::{self, Scope};
 use crate::server::input::{Input, InputHook, Key, KeyCode, Routed};
 use crate::server::listdraw::{self, Rows};
 use crate::server::listview::{self, ListAction, ListState};
 use crate::server::prompt;
 use crate::server::render::{Overlay, OverlayCtx, Screen};
-use crate::server::{State, clients, dispatch};
+use crate::server::{State, clients};
 use crate::types::{ClientId, Rect};
 
 use super::apply::{self, Change};
@@ -196,50 +197,101 @@ fn escape(
     );
 }
 
-/// The edits to settings.toml that make the file say what the menu shows.
-fn collect(state: &State, menu: &Menu) -> Vec<Change> {
-    let options = menu.rows.iter().zip(&menu.base).filter_map(|(r, old)| {
+/// Why a key the menu rebound or unbound cannot be saved, if it cannot: its
+/// live binding, or what an earlier edit of the menu found about it.
+pub(super) fn refusal(
+    state: &State,
+    client: ClientId,
+    table: &str,
+    key: &Key,
+) -> Option<&'static str> {
+    customize::binding_refusal(state, table, key).or_else(|| {
+        let menu = state.settings_menus.open.get(&client)?;
+        let touched = menu.edits.iter().flat_map(|e| &e.binds);
+        let found = touched.filter(|b| b.table == table && b.key == *key);
+        found.filter_map(|b| b.refusal).next()
+    })
+}
+
+/// What C-s writes: the edits to settings.toml that make the file say what
+/// the menu shows, the options and keys they hand over to it, and the
+/// changes that stay live only, with why.
+#[derive(Default)]
+struct Plan {
+    changes: Vec<Change>,
+    names: Vec<&'static str>,
+    keys: Vec<(String, Key)>,
+    refused: Vec<String>,
+}
+
+fn collect(state: &State, menu: &Menu) -> Plan {
+    let mut plan = Plan::default();
+    for (r, old) in menu.rows.iter().zip(&menu.base) {
         let now = rows::value(state, r.name);
-        (now != *old).then(|| Change::Set {
-            key: r.toml.to_string(),
-            value: rows::item(r.toml, &now),
-        })
-    });
-    let binds = menu
-        .edits
-        .iter()
-        .flat_map(|e| &e.binds)
-        .map(|(t, k, c)| Change::Bind {
-            table: t.clone(),
-            key: k.clone(),
-            cmd: c.clone(),
-        });
-    options.chain(binds).collect()
+        if now == *old {
+            continue;
+        }
+        match customize::refusal(Scope::GlobalSession, r.name, None) {
+            Some(why) => plan.refused.push(format!("{}: not saved, {why}", r.name)),
+            None => {
+                plan.names.push(r.name);
+                plan.changes.push(Change::Set {
+                    key: r.toml.to_string(),
+                    value: rows::item(r.toml, &now),
+                });
+            }
+        }
+    }
+    let mut seen: Vec<(&str, Key)> = Vec::new();
+    for t in menu.edits.iter().flat_map(|e| &e.binds) {
+        if seen.contains(&(t.table.as_str(), t.key)) {
+            continue;
+        }
+        seen.push((t.table.as_str(), t.key));
+        let why = t
+            .refusal
+            .or_else(|| customize::binding_refusal(state, &t.table, &t.key));
+        match why {
+            Some(why) => plan
+                .refused
+                .push(format!("{} {}: not saved, {why}", t.table, t.key)),
+            None => {
+                plan.changes.push(Change::Bind {
+                    table: t.table.clone(),
+                    key: t.key.to_string(),
+                    fields: customize::binding_fields(state, &t.table, &t.key),
+                });
+                plan.keys.push((t.table.clone(), t.key));
+            }
+        }
+    }
+    plan
 }
 
 /// C-s: shows the diff and asks before writing.
 fn save(state: &mut State, client: ClientId) {
-    let Some(dir) = Env::from_process().config_dir else {
-        clients::show_message(state, client, "no config directory");
-        return;
-    };
     let Some(menu) = state.settings_menus.open.get(&client) else {
         return;
     };
-    let changes = collect(state, menu);
-    let text = match apply::diff(&dir, &changes) {
-        Ok(t) if t.is_empty() => {
-            clients::show_message(state, client, "nothing to save");
-            return;
-        }
-        Ok(t) => t,
-        Err(e) => {
-            clients::show_message(state, client, &e);
-            return;
-        }
-    };
+    let plan = collect(state, menu);
+    let mut lines = Vec::new();
+    match customize::settings_dir() {
+        Ok(dir) => match apply::diff(&dir, &plan.changes) {
+            Ok(t) => lines.extend(t.lines().map(str::to_string)),
+            Err(e) => {
+                clients::show_message(state, client, &e);
+                return;
+            }
+        },
+        Err(why) => lines.push(why),
+    }
+    lines.extend(plan.refused.iter().map(|l| format!("! {l}")));
+    if lines.is_empty() {
+        clients::show_message(state, client, "nothing to save");
+        return;
+    }
     if let Some(menu) = state.settings_menus.open.get_mut(&client) {
-        menu.diff = Some(text.lines().map(str::to_string).collect());
+        menu.diff = Some(lines);
     }
     prompt::ask(
         state,
@@ -253,7 +305,7 @@ fn save(state: &mut State, client: ClientId) {
                 menu.diff = None;
             }
             if text == "y" {
-                commit(state, client, &dir);
+                commit(state, client);
             }
             clients::mark_dirty(state, client);
             Routed::Consumed
@@ -262,30 +314,30 @@ fn save(state: &mut State, client: ClientId) {
     clients::mark_dirty(state, client);
 }
 
-/// Writes settings.toml and reloads; a reload that fails puts the file back.
-fn commit(state: &mut State, client: ClientId, dir: &std::path::Path) {
+/// Writes settings.toml, hands the changed options and keys to it and
+/// reloads. A reload that fails puts the file, the marks and the bindings
+/// back; what was refused stays live and is not written.
+fn commit(state: &mut State, client: ClientId) {
+    let Ok(dir) = customize::settings_dir() else {
+        return;
+    };
     let Some(menu) = state.settings_menus.open.get(&client) else {
         return;
     };
-    let changes = collect(state, menu);
-    let saved = match apply::write(dir, &changes) {
-        Ok(s) => s,
-        Err(e) => return clients::show_message(state, client, &e),
-    };
-    let Some(ctx) = state.clients.get(&client).map(|c| c.ctx.clone()) else {
+    let plan = collect(state, menu);
+    if plan.changes.is_empty() {
         return;
-    };
-    match dispatch::run(state, &ctx, &["reload".to_string()]) {
-        Ok(_) => {
+    }
+    let keys: Vec<(&str, Key)> = plan.keys.iter().map(|(t, k)| (t.as_str(), *k)).collect();
+    let result = customize::with_owned_reload(state, &plan.names, &keys, || {
+        apply::write(&dir, &plan.changes)
+    });
+    match result {
+        Ok(()) => {
             close(state, client);
             clients::show_message(state, client, "saved settings.toml");
         }
-        Err(e) => {
-            for s in saved.into_iter().rev() {
-                let _ = s.rollback();
-            }
-            clients::show_message(state, client, e.trim_end());
-        }
+        Err(e) => clients::show_message(state, client, e.trim_end()),
     }
 }
 

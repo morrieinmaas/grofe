@@ -1,10 +1,12 @@
 //! Previewing and writing a batch of settings changes (spec AC3.9): a diff
-//! computed on a scratch copy, then the real write through `config::write`.
+//! computed on a scratch copy, and the real write, which the caller hands
+//! to `customize::with_owned_reload`.
 
 use std::fs;
 use std::path::Path;
 
 use crate::config::write::{self, Saved};
+use crate::server::customize::Fields;
 
 /// One edit to `settings.toml`.
 pub enum Change {
@@ -15,37 +17,39 @@ pub enum Change {
     Unset {
         key: String,
     },
+    /// A key's whole entry; an empty `cmd` unbinds it.
     Bind {
         table: String,
         key: String,
-        cmd: String,
+        fields: Fields,
     },
 }
 
-fn apply(dir: &Path, changes: &[Change]) -> Result<Vec<Saved>, String> {
-    let mut saved = Vec::new();
+/// Writes `changes`. What puts the file back as it was is returned (`None`
+/// when there was nothing to change); the first error puts it back itself.
+pub fn write(dir: &Path, changes: &[Change]) -> Result<Option<Saved>, String> {
+    let mut first: Option<Saved> = None;
     for c in changes {
         let r = match c {
             Change::Set { key, value } => write::set(dir, key, value.clone()),
             Change::Unset { key } => write::unset(dir, key),
-            Change::Bind { table, key, cmd } => write::set_binding(dir, table, key, cmd),
+            Change::Bind { table, key, fields } => {
+                write::set_binding(dir, table, key, &fields.cmd, &fields.as_write())
+            }
         };
         match r {
-            Ok(s) => saved.push(s),
+            Ok(s) => {
+                first.get_or_insert(s);
+            }
             Err(e) => {
-                for s in saved.into_iter().rev() {
-                    let _ = s.rollback();
-                }
-                return Err(e);
+                return Err(match first.map_or(Ok(()), Saved::rollback) {
+                    Ok(()) => e,
+                    Err(r) => format!("{e} (restoring settings.toml failed: {r})"),
+                });
             }
         }
     }
-    Ok(saved)
-}
-
-/// Writes `changes`; the first error rolls back everything already written.
-pub fn write(dir: &Path, changes: &[Change]) -> Result<Vec<Saved>, String> {
-    apply(dir, changes)
+    Ok(first)
 }
 
 /// `-old` / `+new` lines of `settings.toml` before and after `changes`,
@@ -64,7 +68,7 @@ pub fn diff(dir: &Path, changes: &[Change]) -> Result<String, String> {
         if !before.is_empty() {
             fs::write(&file, &before).map_err(|e| e.to_string())?;
         }
-        apply(&scratch, changes)?;
+        write(&scratch, changes)?;
         let after = fs::read_to_string(&file).unwrap_or_default();
         Ok(line_diff(&before, &after))
     })();
@@ -129,12 +133,31 @@ mod tests {
         let d = tempfile_dir().unwrap();
         let f = d.join(write::FILE);
         fs::write(&f, "a = 1\n").unwrap();
-        let saved = write(&d, &[set("b", 2), set("c", 3)]).unwrap();
+        let saved = write(&d, &[set("b", 2), set("c", 3)]).unwrap().unwrap();
         assert_ne!(fs::read(&f).unwrap(), b"a = 1\n");
-        for s in saved.into_iter().rev() {
-            s.rollback().unwrap();
-        }
+        saved.rollback().unwrap();
         assert_eq!(fs::read(&f).unwrap(), b"a = 1\n");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_bind_writes_the_whole_entry() {
+        let d = tempfile_dir().unwrap();
+        let bind = Change::Bind {
+            table: "prefix".into(),
+            key: "C-t".into(),
+            fields: Fields {
+                cmd: "new-window".into(),
+                desc: Some("a note".into()),
+                repeat: true,
+                group: Some("window".into()),
+                name: Some("nw".into()),
+            },
+        };
+        let out = diff(&d, &[bind]).unwrap();
+        for part in ["new-window", "a note", "repeat = true", "window", "nw"] {
+            assert!(out.contains(part), "{part}: {out}");
+        }
         let _ = fs::remove_dir_all(&d);
     }
 }

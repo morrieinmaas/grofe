@@ -386,3 +386,91 @@ fn a_tiny_client_gets_window_too_small_and_the_menu_closes() {
     try_wait_until(|| srv.capture("s").contains("hello"), WAIT)
         .unwrap_or_else(|e| panic!("input did not reach the pane: {e}\n{}", h.text()));
 }
+
+fn settings_file(srv: &TestServer) -> PathBuf {
+    grofe_dir(srv).join("settings.toml")
+}
+
+/// Toggles `mouse` in the menu, then C-s and `y`, and waits for the menu to
+/// close or for `done` to show.
+fn save_mouse(srv: &TestServer, h: &mut Harness, done: impl Fn(&str) -> bool) {
+    h.send("mouse");
+    h.send("\r");
+    try_wait_until(|| opt(srv, "mouse") == "off", WAIT)
+        .unwrap_or_else(|e| panic!("mouse did not change: {e}\n{}", h.text()));
+    h.send(CTRL_S);
+    h.wait_until("diff", WAIT, |t| t.contains("write settings.toml"));
+    h.send("y");
+    h.wait_until("saved or failed", WAIT, |t| done(t));
+}
+
+/// C-s `y` hands the option to settings.toml: after the key is deleted by
+/// hand, `reload` brings the default back instead of keeping the menu's
+/// runtime value.
+#[test]
+fn a_saved_option_follows_a_hand_edit_of_settings_toml() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    save_mouse(&srv, &mut h, |t| t.contains("saved settings.toml"));
+    let text = fs::read_to_string(settings_file(&srv)).expect("settings.toml");
+    assert!(text.contains("mouse = false"), "{text}");
+    fs::write(settings_file(&srv), "# emptied by hand\n").expect("edit");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(opt(&srv, "mouse"), "on");
+}
+
+/// A reload that fails after C-s `y` leaves settings.toml and the live
+/// values as they were, and the option keeps its runtime mark.
+#[test]
+fn a_failed_reload_after_ctrl_s_changes_nothing() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    let before = "# mine\nmouse = true\n";
+    fs::write(settings_file(&srv), before).expect("settings.toml");
+    let user = grofe_dir(&srv).join("user.toml");
+    fs::write(&user, "history-limit = = oops\n").expect("user.toml");
+    save_mouse(&srv, &mut h, |t| t.contains("user.toml"));
+    assert_eq!(fs::read_to_string(settings_file(&srv)).unwrap(), before);
+    assert_eq!(opt(&srv, "mouse"), "off");
+    assert!(
+        h.text().contains("Appearance"),
+        "menu closed:\n{}",
+        h.text()
+    );
+    fs::remove_file(&user).expect("remove user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(opt(&srv, "mouse"), "off", "the runtime mark was lost");
+}
+
+/// A rebound key is written with its real command and handed to
+/// settings.toml.
+#[test]
+fn a_rebound_key_is_saved_with_its_command() {
+    let srv = TestServer::start();
+    let mut h = open_menu(&srv);
+    h.send("\t\t");
+    type_query(&mut h, "new-window");
+    h.send("\r");
+    std::thread::sleep(Duration::from_millis(400));
+    h.send("\x14");
+    std::thread::sleep(Duration::from_millis(400));
+    h.send(CTRL_S);
+    h.wait_until("diff", WAIT, |t| t.contains("write settings.toml"));
+    h.send("y");
+    let file = settings_file(&srv);
+    try_wait_until(
+        || fs::read_to_string(&file).is_ok_and(|t| t.contains("C-t")),
+        WAIT,
+    )
+    .unwrap_or_else(|e| panic!("{e}\n{}", h.text()));
+    let text = fs::read_to_string(&file).unwrap();
+    let t: toml::Table = text.parse().expect("toml");
+    let entry = &t["keys"]["prefix"]["C-t"];
+    let cmd = entry["cmd"].as_str().unwrap_or_default();
+    assert!(cmd.starts_with("new-window"), "{text}");
+    assert_eq!(
+        entry["desc"].as_str(),
+        Some("Create a new window"),
+        "{text}"
+    );
+}
