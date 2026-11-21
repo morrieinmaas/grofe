@@ -176,15 +176,38 @@ pub fn resolve_config_path(arg: &str, cwd: &Path, home: Option<&Path>) -> PathBu
     }
 }
 
-/// `$GROFE_CONFIG` as an absolute path, when set and not empty: the one
-/// place that reads it.
-pub fn env_config_file() -> Option<PathBuf> {
-    let arg = std::env::var("GROFE_CONFIG")
-        .ok()
-        .filter(|s| !s.is_empty())?;
+/// `arg` as an absolute config file path against this process's cwd and
+/// `$HOME`; an unreadable cwd is an error rather than a relative path.
+pub fn resolve_from_process(arg: &str) -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let cwd = std::env::current_dir().unwrap_or_default();
-    Some(resolve_config_path(&arg, &cwd, home.as_deref()))
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("--config: cannot resolve {arg}: {e}"))?;
+    Ok(resolve_config_path(arg, &cwd, home.as_deref()))
+}
+
+/// `$GROFE_CONFIG` as an absolute path, when set and not empty. One that
+/// names a directory is reported once on stderr and ignored.
+pub fn env_config_checked() -> Result<Option<PathBuf>, String> {
+    let Some(arg) = std::env::var("GROFE_CONFIG").ok().filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let path = resolve_from_process(&arg)?;
+    if path.is_dir() {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "grofe: GROFE_CONFIG: {} is a directory, ignoring it",
+                path.display()
+            );
+        });
+        return Ok(None);
+    }
+    Ok(Some(path))
+}
+
+/// [`env_config_checked`], an unresolvable path counting as unset.
+pub fn env_config_file() -> Option<PathBuf> {
+    env_config_checked().ok().flatten()
 }
 
 /// One config mistake. `Display` is `<file>:<line>: <key>: <message>`,

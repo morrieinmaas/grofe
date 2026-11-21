@@ -42,7 +42,9 @@ Options:
   -L socket-name   use the named server socket in grofe's socket directory
   -S socket-path   use the server socket at this path
   --config file    load this config file instead of ~/.config/grofe/config.toml
-                   (also $GROFE_CONFIG); conf.d, user.toml and layouts come from its folder
+                   (also $GROFE_CONFIG); its folder becomes the config dir: conf.d/,
+                   user.toml, settings.toml, layouts/, packs (pack-lock.toml),
+                   init.luau and machines.toml are read from there
   -r host          run the command on host over ssh (default: new-session -A -s main)
   --install        install grofe on the remote host if it has none (--no-install: never)
   --install-from p install the local binary p there instead of downloading a release
@@ -185,9 +187,7 @@ fn main() -> ExitCode {
     };
     let rest = rest.as_slice();
     let verb = grofe::cmd::parse::canonical_name(&rest[0]);
-    if !matches!(verb, "__server" | "show-config" | "import-tmux" | "pack") {
-        config_glue::warn_if_other(&globals.socket());
-    }
+    config_glue::warn_for(verb, &globals.socket());
 
     // The subcommand table: verbs the CLI handles itself. A later task that
     // adds one owns exactly one arm. Everything else is a server command.

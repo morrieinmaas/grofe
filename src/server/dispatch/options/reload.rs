@@ -13,7 +13,7 @@ pub(super) fn config_env() -> config::Env {
     config::Env::from_process()
 }
 
-/// `config-file` (internal, asked by a client given `--config`): the files
+/// `__config-file` (internal, asked by a client given `--config`): the files
 /// the config loads from, one per line: the config file, or under `tmux -f`
 /// those files that exist.
 pub fn config_files() -> String {

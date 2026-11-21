@@ -19,21 +19,19 @@ static FLAG: OnceLock<PathBuf> = OnceLock::new();
 /// environment this CLI forwards would carry it into every pane. A server
 /// this CLI starts gets it as an argument ([`server_args`]).
 pub fn apply(flag: Option<&str>) -> Result<(), String> {
-    let (path, source) = match flag {
+    let path = match flag {
         Some(arg) => {
-            let home = std::env::var_os("HOME").map(PathBuf::from);
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let path = config::resolve_config_path(arg, &cwd, home.as_deref());
-            (path, "--config")
+            let path = config::resolve_from_process(arg)?;
+            if path.is_dir() {
+                return Err(format!("--config: {} is a directory", path.display()));
+            }
+            path
         }
-        None => match config::env_config_file() {
-            Some(path) => (path, "GROFE_CONFIG"),
+        None => match config::env_config_checked()? {
+            Some(path) => path,
             None => return Ok(()),
         },
     };
-    if path.is_dir() {
-        return Err(format!("{source}: {} is a directory", path.display()));
-    }
     if flag.is_some() {
         let _ = FLAG.set(path.clone());
     }
@@ -46,6 +44,14 @@ pub fn server_args() -> Vec<std::ffi::OsString> {
     match config::process_config() {
         Some(file) => vec!["--config".into(), file.into()],
         None => Vec::new(),
+    }
+}
+
+/// Warns about a server on `socket` running other config than `--config`,
+/// except for the verbs that never need it.
+pub fn warn_for(verb: &str, socket: &Path) {
+    if !matches!(verb, "__server" | "show-config" | "import-tmux" | "pack") {
+        warn_if_other(socket);
     }
 }
 
@@ -91,7 +97,7 @@ fn ask_files(stream: UnixStream) -> Option<Vec<PathBuf>> {
     };
     let hello = encode_hello(&Hello::Control(ctx)).ok()?;
     let _done = super::HangUp(stream.try_clone().ok());
-    match request_with(stream, &hello, &["config-file".to_string()]) {
+    match request_with(stream, &hello, &["__config-file".to_string()]) {
         Ok(Reply::Ok { out, .. }) => Some(out.lines().map(PathBuf::from).collect()),
         _ => None,
     }

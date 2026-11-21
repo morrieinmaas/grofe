@@ -1835,7 +1835,7 @@ pub enum Command {
     ListScratchpads,
     /// `choose-scratchpad` (grofe's own): picks a hidden scratchpad to show.
     ChooseScratchpad,
-    /// `config-file` (internal): the files the server loaded its config from.
+    /// `__config-file` (internal): the files the server loaded its config from.
     ConfigFile,
     DisplayMenu(DisplayMenu),
     DisplayPanes(DisplayPanes),

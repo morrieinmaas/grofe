@@ -89,7 +89,7 @@ pub(super) static ROWS: &[Row] = &[
         Ok(Command::ListPlugins(ListPlugins))
     }),
     row("reload", "", "", 0, |_| Ok(Command::Reload(Reload))),
-    row("config-file", "", "", 0, |_| Ok(Command::ConfigFile)),
+    row("__config-file", "", "", 0, |_| Ok(Command::ConfigFile)),
     row("choose-agent", "", "", 0, |_| Ok(Command::ChooseAgent)),
     row("agent-grid", "", "", 0, |_| Ok(Command::AgentGrid)),
     row("choose-notification", "", "", 0, |_| {

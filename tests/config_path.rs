@@ -129,6 +129,30 @@ fn t3b_user_toml_comes_from_the_custom_folder() {
 }
 
 #[test]
+fn t3d_init_luau_comes_from_the_custom_folder() {
+    let srv = TestServer::unstarted();
+    let dir = custom_dir(&srv, "cust");
+    write(&dir.join("config.toml"), "");
+    let init = |v: &str| {
+        format!("grofe.every(100, function() grofe.cmd{{'set-option','-g','@from','{v}'}} end)\n")
+    };
+    write(&dir.join("init.luau"), &init("custom"));
+    write(
+        &srv.config_home.join("grofe").join("init.luau"),
+        &init("wrong"),
+    );
+    start_with(&srv, &dir.join("config.toml"));
+    srv.wait_for(
+        || {
+            let out = run(&srv, &["display-message", "-p", "#{@from}"]);
+            out.stdout.trim() == "custom"
+        },
+        std::time::Duration::from_secs(5),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+}
+
+#[test]
 fn t4_missing_file_loads_defaults() {
     let baseline = {
         let srv = TestServer::unstarted();
@@ -231,6 +255,20 @@ fn t33_config_naming_a_directory_is_refused() {
         "{out:?}"
     );
     assert!(!srv.is_running());
+}
+
+#[test]
+fn t33b_env_naming_a_directory_is_ignored_with_one_notice() {
+    let srv = TestServer::unstarted();
+    let dir = custom_dir(&srv, "adir");
+    fs::create_dir_all(&dir).expect("mkdir");
+    let out = run_env(&srv, Some(&dir), &["new-session", "-d"]);
+    assert!(out.status.success(), "{out:?}");
+    let notice = format!(
+        "grofe: GROFE_CONFIG: {} is a directory, ignoring it",
+        dir.display()
+    );
+    assert_eq!(out.stderr.matches(&notice).count(), 1, "{out:?}");
 }
 
 #[test]
@@ -371,7 +409,7 @@ fn t8f_under_tmux_f_the_notice_names_the_loaded_file() {
 }
 
 #[test]
-fn t9_layouts_come_from_the_custom_folder() {
+fn t3c_layouts_come_from_the_custom_folder() {
     let srv = TestServer::unstarted();
     let dir = custom_dir(&srv, "cust");
     write(&dir.join("a.toml"), "");

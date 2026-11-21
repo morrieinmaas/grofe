@@ -1,3 +1,24 @@
+__config-file none => ok d1f4bdf9
+__config-file one => err command __config-file: too many arguments (need at most 0)
+__config-file two => err command __config-file: too many arguments (need at most 0)
+__config-file many => err command __config-file: too many arguments (need at most 0)
+__config-file long => err command __config-file: invalid flag --
+__config-file dashdash => err command __config-file: too many arguments (need at most 0)
+__config-file target => err command __config-file: unknown flag -t
+__config-file target-extra => err command __config-file: unknown flag -t
+__config-file target-glued => err command __config-file: unknown flag -t
+__config-file target-num => err command __config-file: unknown flag -t
+__config-file combined-bool => err command __config-file: unknown flag -d
+__config-file combined-bool-rev => err command __config-file: unknown flag -P
+__config-file combined-value => err command __config-file: unknown flag -d
+__config-file combined-glued => err command __config-file: unknown flag -d
+__config-file repeated-bool => err command __config-file: unknown flag -d
+__config-file repeated-value => err command __config-file: unknown flag -t
+__config-file flag-after-positional => err command __config-file: too many arguments (need at most 0)
+__config-file value-after-positional => err command __config-file: too many arguments (need at most 0)
+__config-file dashdash-flag => err command __config-file: too many arguments (need at most 0)
+__config-file flag-dashdash-positional => err command __config-file: unknown flag -d
+__config-file letters => a=U a=U b=U b=U c=U c=U d=U d=U e=U e=U f=U f=U g=U g=U h=U h=U i=U i=U j=U j=U k=U k=U l=U l=U m=U m=U n=U n=U o=U o=U p=U p=U q=U q=U r=U r=U s=U s=U t=U t=U u=U u=U v=U v=U w=U w=U x=U x=U y=U y=U z=U z=U A=U A=U B=U B=U C=U C=U D=U D=U E=U E=U F=U F=U G=U G=U H=U H=U I=U I=U J=U J=U K=U K=U L=U L=U M=U M=U N=U N=U O=U O=U P=U P=U Q=U Q=U R=U R=U S=U S=U T=U T=U U=U U=U V=U V=U W=U W=U X=U X=U Y=U Y=U Z=U Z=U 
 __register-source none => err command __register-source: missing argument
 __register-source one => ok 925f67da
 __register-source two => err command __register-source: too many arguments (need at most 1)
