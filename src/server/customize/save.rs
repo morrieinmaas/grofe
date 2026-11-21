@@ -5,12 +5,12 @@
 
 use std::path::PathBuf;
 
-use super::{Entry, Scope, is_global, key_command_text, value_of};
+use super::{Entry, Scope, is_global, value_of};
 use crate::config::write::{self, Saved};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::State;
 use crate::server::dispatch::options;
-use crate::server::input::Key;
+use crate::server::input::{BindingSource, Key};
 
 /// The TOML key of option `name`; an array element has none.
 pub(super) fn key_of(name: &str, idx: Option<u32>) -> Option<&'static str> {
@@ -76,23 +76,32 @@ struct Fields {
 }
 
 fn binding_fields(state: &State, table: &str, key: &crate::server::input::Key) -> Fields {
-    let cmd = key_command_text(state, table, key).replace(" \\; ", " ; ");
     match state.registry.key_tables.exact(table, key) {
         Some(b) => Fields {
-            cmd,
+            cmd: options::tmux_command_line(&b.cmds).replace(" \\; ", " ; "),
             desc: b.desc.clone(),
             repeat: b.repeat,
             group: b.group.clone(),
             name: b.name.clone(),
         },
         None => Fields {
-            cmd,
+            cmd: String::new(),
             desc: None,
             repeat: false,
             group: None,
             name: None,
         },
     }
+}
+
+/// Whether a plugin (init.luau or a pack) bound the key: its commands are
+/// runtime `lua-call`s, not a config entry.
+fn binding_is_plugin(state: &State, table: &str, key: &Key) -> bool {
+    state
+        .registry
+        .key_tables
+        .exact(table, key)
+        .is_some_and(|b| matches!(b.source, BindingSource::Plugin(_)))
 }
 
 /// Whether the binding is grofe-dialect: a tmux-identity stock key or a
@@ -124,6 +133,9 @@ pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String
             Ok(format!("Saved {name} to settings.toml"))
         }
         Entry::Key { table, key } | Entry::Field { table, key, .. } => {
+            if binding_is_plugin(state, table, key) {
+                return Err("bound by a plugin, not saveable".to_string());
+            }
             if !binding_is_grofe(state, table, key) {
                 return Err("only grofe-dialect bindings are saveable".to_string());
             }
@@ -163,6 +175,10 @@ pub(crate) fn reset(
     keys: &[(String, Key)],
 ) -> Result<(), String> {
     let dir = settings_dir().ok();
+    let plugin_keys: Vec<bool> = keys
+        .iter()
+        .map(|(t, k)| binding_is_plugin(state, t, k))
+        .collect();
     let option_names: Vec<&str> = names.iter().map(String::as_str).collect();
     let key_names: Vec<(&str, Key)> = keys.iter().map(|(t, k)| (t.as_str(), *k)).collect();
     with_owned_reload(state, &option_names, &key_names, || {
@@ -177,7 +193,9 @@ pub(crate) fn reset(
             .map(|key| write::unset(&dir, key))
             .chain(
                 keys.iter()
-                    .map(|(table, key)| write::unset_binding(&dir, table, &key.to_string())),
+                    .zip(&plugin_keys)
+                    .filter(|(_, plugin)| !**plugin)
+                    .map(|((table, key), _)| write::unset_binding(&dir, table, &key.to_string())),
             );
         for write in writes {
             match write {
@@ -309,6 +327,36 @@ mod tests {
 
     /// A tmux-dialect binding (a tmux-identity stock key) has no `[keys]`
     /// spelling: `P` refuses it and writes nothing.
+    #[test]
+    fn a_plugin_binding_is_refused_and_a_shown_text_is_not_saved() {
+        let mut state = crate::server::test_state();
+        let key = crate::server::input::parse_key("c").expect("key");
+        let mut b = state
+            .registry
+            .key_tables
+            .exact("prefix", &key)
+            .cloned()
+            .expect("stock c");
+        b.source = BindingSource::Plugin("p".into());
+        state.registry.key_tables.insert("prefix", key, b.clone());
+        let entry = Entry::Key {
+            table: "prefix".to_string(),
+            key,
+        };
+        let e = persist(&mut state, &entry).expect_err("plugin");
+        assert_eq!(e, "bound by a plugin, not saveable");
+
+        b.source = BindingSource::Runtime;
+        b.shown = Some("a description".into());
+        state.registry.key_tables.insert("prefix", key, b.clone());
+        let f = binding_fields(&state, "prefix", &key);
+        assert_eq!(
+            f.cmd,
+            options::tmux_command_line(&b.cmds).replace(" \\; ", " ; ")
+        );
+        assert!(!f.cmd.contains("a description"));
+    }
+
     #[test]
     fn a_tmux_dialect_binding_is_not_saveable() {
         let mut state = crate::server::test_state();

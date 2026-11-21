@@ -30,7 +30,8 @@ no longer has (a note it was rebound without) leaves the file. Once saved, `sett
 Only global values are saveable: a value set on one session, window or pane
 answers `only global values are saveable`. A binding that is not grofe-dialect (a stock key of the
 tmux identity, or a `bind-key` from a tmux client) answers `only grofe-dialect
-bindings are saveable`. An option with no TOML key (a
+bindings are saveable`. A key bound by a plugin (`init.luau` or a pack) answers
+`bound by a plugin, not saveable`, and `d`/`D` leave `settings.toml` alone for it. An option with no TOML key (a
 `@user` option or a list option) answers `not saveable`, and its preview in
 customize-mode says so. If the reload fails, the file is put back as it was
 and the error is shown. A missing `settings.toml` or config folder is created
