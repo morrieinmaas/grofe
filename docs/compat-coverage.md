@@ -1067,26 +1067,57 @@ of target the verb wants, so `select-window -t +1` is a window and `select-pane 
 pane. `tests/tmux_parity.rs` holds the recorded results. The native grammar still refuses
 them. Not read: tmux's pane-position tokens (`{top}`, `{left-of}`, ...).
 
-Format variables tmux 3.7b lists in `display-message -a` for a detached session, which grofe
-has no value for, so they are left out of the list (`tests/tmux_parity.rs`, `NOT_PROVIDED`,
-fails on any other gap):
+### Format variables (issue 4)
+
+The list is tmux 3.7b's `format.c`: the 195 names of `format_table`, plus what
+the `format_defaults_*` callbacks add, which is only the current mode's
+variables (copy mode's `window_copy_formats`; `format_defaults_session` and
+the rest set the tree's pointers and add no names). `src/cmd/format/names.rs`
+holds the same table, and `display-message -a` lists every name of it that has
+a value. The gaps came from comparing tmux's `display-message -a` with grofe's
+detached, attached, with a buffer and in copy mode, and from each remaining
+name's callback (buffer, mouse, dead pane, window offset).
+
+34 names had no value in grofe. 14 now have one, replayed against tmux 3.7b
+by `tests/compat/fv.rs` (`golden/fv/variables`); the client cell size only
+with no client, as tmux reads it from the pty's pixel size, which the
+harness does not set. `client_control_mode`, the one control-mode name in the
+table, came with control mode.
+
+| Variable | Read from |
+|---|---|
+| `session_active` | whether the formats' client shows the session; empty with no client |
+| `window_active_clients`, `window_active_clients_list` | the clients whose session's current window it is, in client order |
+| `window_bigger`, `window_offset_x`, `window_offset_y` | the client's view of its window (`window_fits`, `viewport`); the offsets only when it is bigger |
+| `window_cell_width`, `window_cell_height` | the cell size of the client the session is sized for, else tmux's 16x32 |
+| `client_cell_width`, `client_cell_height` | the cell size the client's terminal answered to `CSI 16 t`, else 0 |
+| `mouse_status_line` | the status row under the mouse, on the status line only |
+| `copy_cursor_line`, `copy_cursor_hyperlink` | the copy-mode cursor's line and link target |
+| `buffer_full` | the buffer's text up to its first NUL |
+
+The other 20 are divergences: grofe has no value for them, so they expand to
+nothing and `display-message -a` leaves them out (`tests/tmux_parity.rs`,
+`NOT_PROVIDED`, fails on any other gap in the detached list):
 
 | Variable | Why not provided |
 |---|---|
 | `command` | grofe's `display-message` does not carry the running command |
 | `config_files` | the loaded files are not kept as a list |
 | `history_all_bytes` | tmux's grid accounting (per-cell allocation) is not modelled |
-| `pane_bg`, `pane_fg` | colours the terminal reported with OSC 10 and 11 are not kept |
+| `pane_bg`, `pane_fg` | a pane's default colours are resolved from its styles only when it is drawn |
 | `pane_key_mode` | grofe has no modifyOtherKeys state per pane |
 | `pane_pb_progress`, `pane_pb_state` | OSC 9;4 progress is not tracked |
 | `pane_tabs` | the emulator keeps its tab stops private |
 | `pane_unseen_changes` | no unseen-output flag per pane |
+| `pane_dead_signal` | a pane's death keeps its exit status, not the signal that killed it |
 | `scroll_region_lower`, `scroll_region_upper` | the emulator keeps the scroll region private |
 | `synchronized_output_flag` | the emulator does not expose mode 2026 |
 | `session_last_attached` | attach times are not recorded |
+| `client_created` | a client's attach time is not recorded |
+| `client_written` | grofe sends a client frames over its own protocol, not terminal bytes it could count as tmux does |
+| `client_termfeatures` | grofe detects a client's features by asking its terminal, not from `terminal-features`, so there is no tmux feature list |
+| `client_theme` | the terminal's dark or light theme (mode 2031) is not asked for |
 | `sixel_support` | grofe's graphics support is the `graphics` option, not a build flag |
-| `window_active_clients` | clients are not counted per window |
-| `window_cell_height`, `window_cell_width` | tmux's fallback cell size is not reported |
 
 Provided with a simplification: `cursor_shape` reads `default` for a steady block (grofe cannot tell it
 from one never set), `cursor_colour` is always `none`, `alternate_saved_x` and
