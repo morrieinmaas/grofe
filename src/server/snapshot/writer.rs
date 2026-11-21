@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
-use super::hold::LOSS_HOLD;
+use super::hold::{LOSS_HOLD, Lost};
 use super::signals::{spawn_signals, terminating, wait_terminating, watch_termination};
 use super::{PaneSnap, Snapshot, build, read, rfc3339, write_atomic};
 use crate::paths::{self, Env};
@@ -25,9 +25,8 @@ pub(super) struct Io {
     pub(super) disk: Mutex<Disk>,
     /// The last state built that may be written, for a signal.
     pub(super) latest: Mutex<Option<Snapshot>>,
-    /// When the first pane in the last [`LOSS_HOLD`] went, and the state
-    /// built before it.
-    pub(super) before_loss: Mutex<Option<(Instant, Snapshot)>>,
+    /// The panes that died of a signal, by `uid`, for [`LOSS_HOLD`].
+    pub(super) lost: Mutex<HashMap<String, Lost>>,
 }
 
 #[derive(Default)]
@@ -101,8 +100,9 @@ pub(crate) struct Writer {
     /// The model had a session at some look: from then on an empty model
     /// is a state the user chose, and is written.
     had_sessions: bool,
-    /// When a pane's process last died of a signal ([`pane_killed`]).
-    killed_at: Option<Instant>,
+    /// The panes whose process died of a signal since the last build
+    /// ([`pane_killed`]).
+    killed: HashSet<String>,
     thread: mpsc::Sender<Snapshot>,
 }
 
@@ -114,7 +114,7 @@ impl Writer {
             frozen: AtomicBool::new(false),
             disk: Mutex::new(Disk::default()),
             latest: Mutex::new(None),
-            before_loss: Mutex::new(None),
+            lost: Mutex::new(HashMap::new()),
         });
         let (tx, rx) = mpsc::channel::<Snapshot>();
         let thread_io = Arc::clone(&io);
@@ -140,7 +140,7 @@ impl Writer {
             io,
             cwds: HashMap::new(),
             had_sessions: false,
-            killed_at: None,
+            killed: HashSet::new(),
             thread: tx,
         }
     }
@@ -151,7 +151,8 @@ impl Writer {
         let snap = build(model, &self.cwds);
         let writable = !snap.sessions.is_empty() || self.had_sessions;
         let snap = writable.then_some(snap);
-        self.io.keep(snap.clone(), self.killed_at);
+        self.io.keep(snap.clone(), &self.killed);
+        self.killed.clear();
         snap
     }
 }
@@ -216,21 +217,18 @@ pub fn track(state: &mut State, output: bool) {
     }
     if state.exit {
         // `kill-server` (or any exit that leaves sessions) writes them;
-        // the last session going writes the empty state. When its panes
-        // died of a signal, the server may have been sent it too (a
-        // reboot) with its handler not run yet: it gets the rest of the
-        // hold to show.
-        // ponytail: a pane killed by a reboot's signal before the server
-        // gets its own (the panes signalled first) is an ordinary exit
-        // here, and the last one writes the empty state.
-        if state.model.sessions.is_empty()
-            && let Some(at) = w.killed_at
-            && wait_terminating(LOSS_HOLD.saturating_sub(at.elapsed()))
-        {
+        // the last session going writes the empty state. When the last
+        // pane died of a signal in this message, the server may have been
+        // sent it too (a reboot) with its handler not run yet: it gets the
+        // hold to show. kill-session and `exit` go at once.
+        // ponytail: a server signal more than LOSS_HOLD after the last
+        // signal death misses it, and the empty state is written.
+        let signal_death = !w.killed.is_empty();
+        let snap = w.build(&state.model);
+        if state.model.sessions.is_empty() && signal_death && wait_terminating(LOSS_HOLD) {
             w.io.write_final(w.io.pre_signal().as_ref());
             return;
         }
-        let snap = w.build(&state.model);
         w.io.write_final(snap.as_ref());
         return;
     }
@@ -239,11 +237,11 @@ pub fn track(state: &mut State, output: bool) {
     }
 }
 
-/// A pane's process died of a signal (its exit has no code): kept for the
-/// last session going, see [`track`].
-pub fn pane_killed(state: &mut State) {
+/// The process of the pane `uid` died of a signal (its exit has no
+/// code): the build that sees the pane gone holds it, see [`track`].
+pub fn pane_killed(state: &mut State, uid: &str) {
     if let Some(w) = state.snapshot_writer.as_mut() {
-        w.killed_at = Some(Instant::now());
+        w.killed.insert(uid.to_string());
     }
 }
 
@@ -301,7 +299,7 @@ mod tests {
             frozen: AtomicBool::new(false),
             disk: Mutex::new(Disk::default()),
             latest: Mutex::new(None),
-            before_loss: Mutex::new(None),
+            lost: Mutex::new(HashMap::new()),
         };
         let mut snap = sample();
         snap.written_at.clear();

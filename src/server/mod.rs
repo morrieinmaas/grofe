@@ -446,11 +446,11 @@ fn handle_pane_event(state: &mut State, event: PaneEvent) {
             let (uid, window) = (p.uid.clone(), p.window);
             // The pane may be gone from the model by the time this is sent.
             let place = state.model.place_of(p);
+            if status.is_none() {
+                snapshot::pane_killed(state, &uid);
+            }
             let exited = Event::PaneExited { pane, uid, status };
             state.events.emit_at(exited, place);
-            if status.is_none() {
-                snapshot::pane_killed(state);
-            }
             // A restored pane whose resumed process exited is kept (T4.4).
             if !restore::on_pane_exited(state, pane) {
                 state.model.pane_exited(pane, status);
