@@ -27,7 +27,9 @@ its `name`. Once saved, `settings.toml` owns it: a hand edit of the file and a
 `reload` apply, even for a value or binding first set at runtime.
 
 Only global values are saveable: a value set on one session, window or pane
-answers `only global values are saveable`. An option with no TOML key (a
+answers `only global values are saveable`. A binding that is not grofe-dialect (a stock key of the
+tmux identity, or a `bind-key` from a tmux client) answers `only grofe-dialect
+bindings are saveable`. An option with no TOML key (a
 `@user` option or a list option) answers `not saveable`, and its preview in
 customize-mode says so. If the reload fails, the file is put back as it was
 and the error is shown. A missing `settings.toml` or config folder is created

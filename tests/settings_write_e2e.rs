@@ -448,3 +448,68 @@ fn a_failed_reload_after_p_keeps_the_runtime_value() {
     srv.cmd(&["reload"]).expect("reload");
     assert_eq!(global(&srv, "history-limit"), "222", "{}", h.text());
 }
+
+/// `d` on a session-local value leaves the saved global entry in settings.toml.
+#[test]
+fn d_on_a_session_local_value_keeps_the_global_entry() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 80);
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("history-limit listed", WAIT, |t| {
+        t.contains("history-limit:")
+    });
+    h.send("j");
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        t.get("history-limit").and_then(|v| v.as_integer()) == Some(222)
+    });
+    assert!(saved.is_ok(), "{}", h.text());
+    srv.cmd(&["set", "-t", "s", "history-limit", "333"])
+        .expect("set local");
+    h.send("q");
+    h.send("\x02C");
+    h.wait_until("customize-mode reopen", WAIT, |t| {
+        t.contains("history-limit")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("local listed", WAIT, |t| t.contains("333"));
+    // Move the cursor onto the session-local line.
+    for _ in 0..3 {
+        h.send("j");
+        if h.text()
+            .lines()
+            .any(|l| l.contains("333") && l.contains('>'))
+        {
+            break;
+        }
+    }
+    h.send("d");
+    h.wait_until("reset asked", WAIT, |t| t.contains("Reset history-limit"));
+    h.send("y");
+    let local_gone = try_wait_until(
+        || {
+            srv.cmd(&["show", "-t", "s", "history-limit"])
+                .is_ok_and(|o| !o.contains("333"))
+        },
+        WAIT,
+    );
+    assert!(local_gone.is_ok(), "{}", h.text());
+    let t: toml::Table = fs::read_to_string(settings_file(&srv))
+        .expect("read")
+        .parse()
+        .expect("toml");
+    assert_eq!(
+        t.get("history-limit").and_then(|v| v.as_integer()),
+        Some(222),
+        "{t:?}\n{}",
+        h.text()
+    );
+}

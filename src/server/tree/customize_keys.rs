@@ -99,7 +99,7 @@ pub(super) fn custom_change(
                     if reset && idx.is_some() {
                         continue;
                     }
-                    if reset {
+                    if reset && customize::is_global(scope) {
                         reset_names.push(name.clone());
                     }
                     cmds.extend(customize::unset_commands(

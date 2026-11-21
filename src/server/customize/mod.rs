@@ -222,7 +222,7 @@ fn owner_of(scope: Scope) -> Owner {
     }
 }
 
-fn is_global(scope: Scope) -> bool {
+pub(crate) fn is_global(scope: Scope) -> bool {
     matches!(
         scope,
         Scope::Server | Scope::GlobalSession | Scope::GlobalWindow

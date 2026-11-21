@@ -96,6 +96,16 @@ fn binding_fields(state: &State, table: &str, key: &crate::server::input::Key) -
     }
 }
 
+/// Whether the binding is grofe-dialect: a tmux-identity stock key or a
+/// tmux-client `bind-key` has no `[keys]` spelling to save.
+fn binding_is_grofe(state: &State, table: &str, key: &crate::server::input::Key) -> bool {
+    state
+        .registry
+        .key_tables
+        .exact(table, key)
+        .is_none_or(|b| b.dialect == Dialect::Grofe)
+}
+
 /// `P` in customize-mode: writes `entry` to settings.toml, then reloads the
 /// config. When the reload fails the file is put back, the runtime marks stay
 /// and the error is returned. On success, what was saved, and settings.toml
@@ -115,6 +125,9 @@ pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String
             (name.clone(), saved)
         }
         Entry::Key { table, key } | Entry::Field { table, key, .. } => {
+            if !binding_is_grofe(state, table, key) {
+                return Err("only grofe-dialect bindings are saveable".to_string());
+            }
             let f = binding_fields(state, table, key);
             let name = key.to_string();
             let saved = write::set_binding(
@@ -305,6 +318,28 @@ mod tests {
             ),
             Some("only global values are saveable")
         );
+    }
+
+    /// A tmux-dialect binding (a tmux-identity stock key) has no `[keys]`
+    /// spelling: `P` refuses it and writes nothing.
+    #[test]
+    fn a_tmux_dialect_binding_is_not_saveable() {
+        let mut state = crate::server::test_state();
+        let key = crate::server::input::parse_key("c").expect("key");
+        let mut b = state
+            .registry
+            .key_tables
+            .exact("prefix", &key)
+            .cloned()
+            .expect("stock c");
+        b.dialect = Dialect::Tmux;
+        state.registry.key_tables.insert("prefix", key, b);
+        let entry = Entry::Key {
+            table: "prefix".to_string(),
+            key,
+        };
+        let e = persist(&mut state, &entry).expect_err("tmux dialect");
+        assert_eq!(e, "only grofe-dialect bindings are saveable");
     }
 
     /// AC2.9: the preview of an option with no TOML key says so, and the
