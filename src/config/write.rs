@@ -74,15 +74,15 @@ pub fn unset(dir: &Path, key: &str) -> Result<Saved, String> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BindingFields<'a> {
     pub desc: Option<&'a str>,
-    /// `Some(true)` writes the flag, `Some(false)` removes it.
-    pub repeat: Option<bool>,
+    pub repeat: bool,
     pub group: Option<&'a str>,
     pub name: Option<&'a str>,
 }
 
 /// Binds `key` in `[keys.<table>]` to `cmd`; an empty `cmd` unbinds it
-/// (`key = ""`). The fields of an entry already there (`desc`, `repeat`,
-/// `group`, `name`) stay, except those given in `fields`.
+/// (`key = ""`). An entry already there keeps its place and comments, and
+/// its fields become `fields`: one that is `None` (or a `false` repeat
+/// flag) is removed.
 pub fn set_binding(
     dir: &Path,
     table: &str,
@@ -106,16 +106,17 @@ pub fn set_binding(
         if let Some(entry) = t.get_mut(key).and_then(Item::as_table_like_mut) {
             put(entry, "cmd", value(cmd));
             for (field, text) in texts {
-                if let Some(text) = text {
-                    put(entry, field, value(text));
+                match text {
+                    Some(text) => put(entry, field, value(text)),
+                    None => {
+                        entry.remove(field);
+                    }
                 }
             }
-            match fields.repeat {
-                Some(true) => put(entry, "repeat", value(true)),
-                Some(false) => {
-                    entry.remove("repeat");
-                }
-                None => {}
+            if fields.repeat {
+                put(entry, "repeat", value(true));
+            } else {
+                entry.remove("repeat");
             }
             return Ok(true);
         }
@@ -126,7 +127,7 @@ pub fn set_binding(
                 inline.insert(field, text.into());
             }
         }
-        if fields.repeat == Some(true) {
+        if fields.repeat {
             inline.insert("repeat", Value::from(true));
         }
         put(t, key, value(inline));

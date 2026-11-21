@@ -205,26 +205,24 @@ impl Options {
     }
 
     /// Takes global option `name` out of the runtime's hands, so the next
-    /// `reload` applies the config's value and records the base itself: the
-    /// mark goes and the value falls back to the built-in default (a user
-    /// option keeps its value). Returns the value it had, or `None` when it
-    /// was not marked.
-    pub fn release_runtime(&mut self, name: &str) -> Option<String> {
+    /// `reload` applies the config's value, or the built-in default when the
+    /// config sets none: the mark goes and the default becomes the option's
+    /// config base. The value stays until the reload, which announces only a
+    /// real change. Whether it was marked.
+    pub fn release_runtime(&mut self, name: &str) -> bool {
         if !self.runtime.remove(name) {
-            return None;
+            return false;
         }
-        let live = self.get(Owner::Global, name)?.value.clone();
         if let Some(b) = builtin(name) {
             let default = self.default_of(b).to_string();
-            let _ = self.set(Owner::Global, name, &default, false);
+            self.config_base.insert(name.to_string(), default);
         }
-        Some(live)
+        true
     }
 
-    /// Puts back what [`Self::release_runtime`] took, when the reload that
-    /// was to hand the option to the config failed.
-    pub fn restore_runtime(&mut self, name: &str, live: &str) {
-        let _ = self.set(Owner::Global, name, live, false);
+    /// Undoes [`Self::release_runtime`], when the reload that was to hand
+    /// the option to the config failed.
+    pub fn restore_runtime(&mut self, name: &str) {
         self.mark_runtime(name);
     }
 

@@ -589,3 +589,168 @@ fn d_on_a_session_local_value_keeps_the_global_entry() {
         h.text()
     );
 }
+
+/// user.toml sets `history-limit` to 111 and the runtime to 222, which `P`
+/// saves: the option is open in customize-mode, the cursor on it.
+fn save_over_user_toml(srv: &TestServer, h: &mut Harness) {
+    fs::write(user_file(srv), "history-limit = 111\n").expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    save_history_limit(srv, h);
+}
+
+/// `d` on `history-limit`, answered `y`.
+fn reset_history_limit(h: &mut Harness) {
+    h.send("d");
+    h.wait_until("reset asked", WAIT, |t| t.contains("Reset history-limit"));
+    h.send("y");
+}
+
+/// AC2.7: after `d` the config owns the option again: user.toml's value
+/// shows, and a later edit of user.toml applies on `reload`.
+#[test]
+fn d_hands_the_option_back_to_the_config() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 80);
+    save_over_user_toml(&srv, &mut h);
+    reset_history_limit(&mut h);
+    let gone = wait_settings(&srv, |t| !t.contains_key("history-limit"));
+    assert!(gone.is_ok(), "{}", h.text());
+    let shown = try_wait_until(|| global(&srv, "history-limit") == "111", WAIT);
+    assert!(shown.is_ok(), "{}", global(&srv, "history-limit"));
+    fs::write(user_file(&srv), "history-limit = 444\n").expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(global(&srv, "history-limit"), "444", "{}", h.text());
+}
+
+/// A hook whose `run-shell` holds the client's commands does not let an
+/// unset land after the reload: `D` on two tagged options still ends at
+/// user.toml's values, which the config then owns.
+#[test]
+fn d_with_a_run_shell_hook_still_shows_the_lower_layer() {
+    let srv = TestServer::start();
+    let filter = "#{||:#{==:#{option_name},history-limit},#{==:#{option_name},display-time}}";
+    let mut h = attach(&srv, filter, 80);
+    srv.cmd(&[
+        "set-hook",
+        "-g",
+        "after-set-option",
+        "run-shell 'sleep 0.3'",
+    ])
+    .expect("set-hook");
+    let user = |a: u32, b: u32| format!("history-limit = {a}\n[message]\ndisplay-time-ms = {b}\n");
+    fs::write(user_file(&srv), user(111, 1111)).expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    srv.cmd(&["set", "-g", "display-time", "2222"])
+        .expect("set");
+    h.send("\x02C");
+    h.wait_until("customize-mode open", WAIT, |t| {
+        t.contains("Session Options")
+    });
+    h.send("j");
+    h.send("l");
+    h.wait_until("both listed", WAIT, |t| {
+        t.contains("history-limit:") && t.contains("display-time:")
+    });
+    h.send("j");
+    h.send("t");
+    h.send("t");
+    h.send("D");
+    h.wait_until("reset asked", WAIT, |t| t.contains("Reset 2 tagged"));
+    h.send("y");
+    let both =
+        |a: &str, b: &str| global(&srv, "history-limit") == a && global(&srv, "display-time") == b;
+    assert!(
+        try_wait_until(|| both("111", "1111"), WAIT).is_ok(),
+        "{}",
+        h.text()
+    );
+    common::quiet_period(Duration::from_millis(800));
+    assert!(both("111", "1111"), "{}", h.text());
+    fs::write(user_file(&srv), user(444, 4444)).expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(both("444", "4444"), "{}", h.text());
+}
+
+/// AC2.6 for `d`: when the reload fails, settings.toml keeps its bytes, the
+/// value stays, and settings.toml still owns it (a hand edit applies).
+#[test]
+fn a_failed_reload_after_d_leaves_everything_as_before() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 200);
+    save_over_user_toml(&srv, &mut h);
+    let before = fs::read_to_string(settings_file(&srv)).expect("read");
+    fs::write(user_file(&srv), "history-limit = = oops\n").expect("user.toml");
+    reset_history_limit(&mut h);
+    h.wait_until("error shown", WAIT, |t| t.contains("user.toml"));
+    assert_eq!(
+        fs::read_to_string(settings_file(&srv)).expect("read"),
+        before
+    );
+    assert_eq!(global(&srv, "history-limit"), "222", "{}", h.text());
+    fs::write(user_file(&srv), "history-limit = 111\n").expect("user.toml");
+    fs::write(settings_file(&srv), "history-limit = 333\n").expect("hand edit");
+    srv.cmd(&["reload"]).expect("reload");
+    assert_eq!(global(&srv, "history-limit"), "333", "{}", h.text());
+}
+
+/// `option-changed` comes once per real change: none for `P`, which keeps
+/// the value, and one for `d`, which brings back user.toml's.
+#[test]
+fn p_and_d_announce_only_real_changes() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{option_name},history-limit}", 80);
+    fs::write(user_file(&srv), "history-limit = 111\n").expect("user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    srv.cmd(&["set", "-g", "history-limit", "222"])
+        .expect("set");
+    let mut sub = srv.subscribe(&["option-changed"]).expect("subscribe");
+    save_history_limit(&srv, &mut h);
+    reset_history_limit(&mut h);
+    let gone = wait_settings(&srv, |t| !t.contains_key("history-limit"));
+    assert!(gone.is_ok(), "{}", h.text());
+    srv.cmd(&["set", "-g", "@end", "1"]).expect("set @end");
+    let mut seen = Vec::new();
+    loop {
+        match sub.next(WAIT).expect("event") {
+            grofe::event::Event::OptionChanged { name, .. } if name == "@end" => break,
+            grofe::event::Event::OptionChanged { name, value, .. } if name == "history-limit" => {
+                seen.push(value);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(seen, vec![Some("111".to_string())], "{}", h.text());
+}
+
+/// `P` replaces the whole entry: a key saved with a note, then bound again
+/// at runtime without one, is saved with no `desc`.
+#[test]
+fn p_drops_a_field_the_live_binding_lacks() {
+    let srv = TestServer::start();
+    let mut h = attach(&srv, "#{==:#{key},F5}", 100);
+    srv.cmd(&["bind-key", "-N", "my note", "F5", "display-message", "one"])
+        .expect("bind-key");
+    open_f5(&mut h);
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        let e = t.get("keys").and_then(|k| k.get("prefix")?.get("F5"));
+        e.and_then(|e| e.get("desc")?.as_str()) == Some("my note")
+    });
+    assert!(saved.is_ok(), "{}", h.text());
+    srv.cmd(&["bind-key", "F5", "display-message", "two"])
+        .expect("rebind");
+    h.send("P");
+    let saved = wait_settings(&srv, |t| {
+        let e = t.get("keys").and_then(|k| k.get("prefix")?.get("F5"));
+        e.and_then(|e| e.get("cmd")?.as_str()) == Some("display-message two")
+    });
+    let text = fs::read_to_string(settings_file(&srv));
+    assert!(saved.is_ok(), "{text:?}\n{}", h.text());
+    let t: toml::Table = text.expect("read").parse().expect("toml");
+    let e = &t["keys"]["prefix"]["F5"];
+    assert!(e.get("desc").is_none(), "{e:?}");
+}

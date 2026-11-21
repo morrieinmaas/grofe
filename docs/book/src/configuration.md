@@ -23,7 +23,8 @@ In customize-mode (`prefix C` in the tmux identity), `P` writes the selected
 option or key binding to `settings.toml` and reloads the config. `S` is not
 used for this: as in tmux, it sets the option globally. A key binding is
 saved with its command, its note (`desc`), its repeat flag, its `group` and
-its `name`. Once saved, `settings.toml` owns it: a hand edit of the file and a
+its `name`; saving it again replaces the whole entry, so a field the binding
+no longer has (a note it was rebound without) leaves the file. Once saved, `settings.toml` owns it: a hand edit of the file and a
 `reload` apply, even for a value or binding first set at runtime.
 
 Only global values are saveable: a value set on one session, window or pane
@@ -35,10 +36,13 @@ customize-mode says so. If the reload fails, the file is put back as it was
 and the error is shown. A missing `settings.toml` or config folder is created
 on the first save.
 
-`d` and `D` (reset) take the option, or the key binding's `[keys.<table>]`
-entry, out of `settings.toml` as well as resetting it, and reload: the value
-or binding from the layer below, such as `user.toml`, applies again. If the
-reload fails, the file is put back and the option keeps the value it had.
+`d` and `D` (reset) on a global option or a key binding take its entry (an
+option's key, a binding's `[keys.<table>]` entry) out of `settings.toml` and
+reload: the value or binding from the layer below, such as `user.toml`, or
+else the built-in default, applies again, and the config owns it from then on.
+If the reload fails, the file, the value and the binding stay as they were
+before the reset and the error is shown. On a value set on one session,
+window or pane, `d` unsets it as tmux does and leaves `settings.toml` alone.
 
 A server started with `tmux -f <file>` reads only the files you name, never
 `settings.toml`, so `P` there answers that nothing was saved.

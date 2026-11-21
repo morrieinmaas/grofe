@@ -99,15 +99,21 @@ pub(super) fn custom_change(
                     if reset && idx.is_some() {
                         continue;
                     }
-                    if reset && customize::is_global(scope) {
-                        reset_names.push(name.clone());
+                    // A global option with a TOML key goes back to the
+                    // config layers (AC2.7); a local value or a name
+                    // settings.toml cannot hold is unset, as in tmux.
+                    if reset
+                        && customize::is_global(scope)
+                        && crate::config::toml_key(&name).is_some()
+                    {
+                        reset_names.push(name);
+                        continue;
                     }
                     cmds.extend(customize::unset_commands(
                         state, fs, scope, &name, idx, reset,
                     ));
                 }
                 Entry::Key { table, key } | Entry::Field { table, key, .. } if reset => {
-                    customize::reset_key(state, &table, &key);
                     reset_keys.push((table, key));
                 }
                 Entry::Key { table, key } | Entry::Field { table, key, .. } => {
@@ -116,17 +122,39 @@ pub(super) fn custom_change(
                 _ => {}
             }
         }
-        rebuild(state, client, None);
-        // A reset also takes the option or key out of settings.toml, so the
-        // layer below applies again (AC2.7).
-        if !reset_names.is_empty() || !reset_keys.is_empty() {
-            if let Err(e) = customize::reset(state, client, &cmds, &reset_names, &reset_keys) {
-                error_message(state, client, &e);
-            }
-            return Routed::Consumed;
+        if !reset {
+            rebuild(state, client, None);
+            return Routed::Command(cmds, Dialect::Tmux);
         }
-        Routed::Command(cmds, Dialect::Tmux)
+        // A reset runs now, not queued behind a hook's `run-shell`, so
+        // nothing it unsets lands after the reload.
+        if let Err(e) = run_now(state, client, &cmds) {
+            error_message(state, client, &e);
+        }
+        if (!reset_names.is_empty() || !reset_keys.is_empty())
+            && let Err(e) = customize::reset(state, &reset_names, &reset_keys)
+        {
+            error_message(state, client, &e);
+        }
+        rebuild(state, client, None);
+        Routed::Consumed
     })
+}
+
+/// Runs `cmds` for `client` at once, in order, in tmux's dialect; the first
+/// error stops the rest.
+fn run_now(state: &mut State, client: ClientId, cmds: &[Vec<String>]) -> Result<(), String> {
+    let Some(c) = state.clients.get(&client) else {
+        return Ok(());
+    };
+    let ctx = ClientCtx {
+        dialect: Dialect::Tmux,
+        ..c.ctx.clone()
+    };
+    for argv in cmds {
+        crate::server::dispatch::run_split(state, &ctx, argv)?;
+    }
+    Ok(())
 }
 
 /// `P`: saves the option or key on line `line` to settings.toml.

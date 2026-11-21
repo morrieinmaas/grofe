@@ -1,7 +1,7 @@
 //! Saving customize-mode's items to settings.toml (spec 2026-11-20-settings-menu,
-//! PR 2): `P` writes the item under the cursor, `d` and `D` take an option's
-//! key out again. Each then reloads the config, and puts the file back when
-//! the reload fails.
+//! PR 2): `P` writes the item under the cursor, `d` and `D` take a global
+//! option's or a key's entry out again. Each then reloads the config, and
+//! puts the file and the runtime state back when the reload fails.
 
 use std::path::PathBuf;
 
@@ -9,9 +9,8 @@ use super::{Entry, Scope, is_global, key_command_text, value_of};
 use crate::config::write::{self, Saved};
 use crate::protocol::{ClientCtx, Dialect};
 use crate::server::State;
-use crate::server::dispatch::options::{self, Owner};
+use crate::server::dispatch::options;
 use crate::server::input::Key;
-use crate::types::ClientId;
 
 /// The TOML key of option `name`; an array element has none.
 pub(super) fn key_of(name: &str, idx: Option<u32>) -> Option<&'static str> {
@@ -107,9 +106,10 @@ fn binding_is_grofe(state: &State, table: &str, key: &crate::server::input::Key)
 }
 
 /// `P` in customize-mode: writes `entry` to settings.toml, then reloads the
-/// config. When the reload fails the file is put back, the runtime marks stay
-/// and the error is returned. On success, what was saved, and settings.toml
-/// owns it: a hand edit of the file and a `reload` apply.
+/// config. A key's entry is replaced as a whole: a field its live binding
+/// lacks goes. When the reload fails the file is put back, the runtime marks
+/// stay and the error is returned. On success, what was saved, and
+/// settings.toml owns it: a hand edit of the file and a `reload` apply.
 pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String> {
     match entry {
         Entry::Option { scope, name, idx } => {
@@ -138,7 +138,7 @@ pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String
                     &f.cmd,
                     &write::BindingFields {
                         desc: f.desc.as_deref(),
-                        repeat: Some(f.repeat),
+                        repeat: f.repeat,
                         group: f.group.as_deref(),
                         name: f.name.as_deref(),
                     },
@@ -151,39 +151,34 @@ pub(crate) fn persist(state: &mut State, entry: &Entry) -> Result<String, String
     }
 }
 
-/// `d` and `D` on options `names` and key bindings `keys`: runs `cmds`,
-/// which unset the options at every scope and reset the keys, then hands
-/// them back to the config layers: they leave settings.toml, and the reload
-/// applies what is below. When the reload fails the file is put back and the
-/// options keep their runtime marks. With no settings.toml to change, only
-/// `cmds` run.
+/// `d` and `D` on global options `names` and key bindings `keys`: hands
+/// them back to the config layers. Their entries leave settings.toml, then
+/// [`with_owned_reload`] releases the runtime values and bindings and
+/// reloads, so the lower layer or the built-in default applies. With no
+/// settings.toml to change (`tmux -f`, no config folder) only the release
+/// and the reload run. A name with no TOML key has no entry to remove.
 pub(crate) fn reset(
     state: &mut State,
-    client: ClientId,
-    cmds: &[Vec<String>],
     names: &[String],
     keys: &[(String, Key)],
 ) -> Result<(), String> {
-    crate::server::clients::run_binding(state, client, cmds, Dialect::Tmux, None);
-    let keyed: Vec<(&str, &str)> = names
-        .iter()
-        .filter_map(|n| Some((n.as_str(), crate::config::toml_key(n)?)))
-        .collect();
-    if keyed.is_empty() && keys.is_empty() {
-        return Ok(());
-    }
-    let Ok(dir) = settings_dir() else {
-        return Ok(());
-    };
-    let option_names: Vec<&str> = keyed.iter().map(|(name, _)| *name).collect();
+    let dir = settings_dir().ok();
+    let option_names: Vec<&str> = names.iter().map(String::as_str).collect();
     let key_names: Vec<(&str, Key)> = keys.iter().map(|(t, k)| (t.as_str(), *k)).collect();
     with_owned_reload(state, &option_names, &key_names, || {
+        let Some(dir) = dir else {
+            return Ok(None);
+        };
         // The first write holds the file as it was, whatever the later ones do.
         let mut first: Option<Saved> = None;
-        let writes = keyed.iter().map(|(_, key)| write::unset(&dir, key)).chain(
-            keys.iter()
-                .map(|(table, key)| write::unset_binding(&dir, table, &key.to_string())),
-        );
+        let writes = names
+            .iter()
+            .filter_map(|n| crate::config::toml_key(n))
+            .map(|key| write::unset(&dir, key))
+            .chain(
+                keys.iter()
+                    .map(|(table, key)| write::unset_binding(&dir, table, &key.to_string())),
+            );
         for write in writes {
             match write {
                 Ok(saved) => {
@@ -196,41 +191,32 @@ pub(crate) fn reset(
     })
 }
 
-/// Hands options `names` and key bindings `keys` over to settings.toml, which
-/// `write` has just changed (it returns what puts the file back, or nothing
-/// when it wrote nothing), by reloading the config.
+/// Hands options `names` and key bindings `keys` over to the config by
+/// reloading it, after `write` changed settings.toml (it returns what puts
+/// the file back, or nothing when there is no file to change).
 ///
 /// A reload leaves what was set at runtime alone, so first each name's
-/// runtime mark goes (the option falls back to its default, for the reload to
-/// record as its base), and so does each key's runtime binding and runtime
-/// unbind. The reload then applies settings.toml and records the bases
-/// itself. When it fails the file is put back and the marks, values and
-/// bindings return; both errors are returned.
+/// runtime mark goes, and so do each key's runtime binding and runtime
+/// unbind; values stay until the reload sets them, so `option-changed`
+/// fires only for a value that ends up different. When the reload fails
+/// the file is put back and the marks and bindings are as they were; both
+/// errors are returned.
 pub(crate) fn with_owned_reload(
     state: &mut State,
     names: &[&str],
     keys: &[(&str, Key)],
     write: impl FnOnce() -> Result<Option<Saved>, String>,
 ) -> Result<(), String> {
-    let Some(saved) = write()? else {
-        return Ok(());
-    };
-    let options: Vec<(&str, String)> = names
+    let saved = write()?;
+    let released: Vec<&str> = names
         .iter()
-        .filter_map(|name| Some((*name, state.model.options.release_runtime(name)?)))
+        .copied()
+        .filter(|name| state.model.options.release_runtime(name))
         .collect();
-    let tables = &mut state.registry.key_tables;
-    let bindings: Vec<_> = keys
-        .iter()
-        .map(|&(table, key)| {
-            let live = tables.exact(table, &key).cloned();
-            let runtime = live.filter(|b| !b.source.is_config());
-            if runtime.is_some() {
-                tables.unbind(table, &key);
-            }
-            (table, key, runtime, tables.forget_unbound(table, &key))
-        })
-        .collect();
+    let tables = state.registry.key_tables.clone();
+    for (table, key) in keys {
+        state.registry.key_tables.release_runtime(table, key);
+    }
     let ctx = ClientCtx {
         cwd: PathBuf::from("/"),
         pane: None,
@@ -240,28 +226,13 @@ pub(crate) fn with_owned_reload(
         request: Default::default(),
     };
     match options::reload(state, &ctx, crate::cmd::Reload) {
-        Ok(_) => {
-            for (name, live) in &options {
-                let now = state.model.options.get(Owner::Global, name);
-                if now.is_none_or(|e| e.value != *live) {
-                    options::announce_option(state, name);
-                }
-            }
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(e) => {
-            let error = failed(e, saved.rollback());
-            for (name, live) in &options {
-                state.model.options.restore_runtime(name, live);
+            let error = failed(e, saved.map_or(Ok(()), Saved::rollback));
+            for name in released {
+                state.model.options.restore_runtime(name);
             }
-            for (table, key, runtime, unbound) in bindings {
-                if let Some(b) = runtime {
-                    state.registry.key_tables.insert(table, key, b);
-                }
-                if unbound {
-                    state.registry.key_tables.remember_unbound(table, &key);
-                }
-            }
+            state.registry.key_tables = tables;
             Err(error)
         }
     }

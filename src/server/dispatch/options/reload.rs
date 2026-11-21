@@ -244,8 +244,3 @@ pub(super) fn set_global(model: &mut Model, events: &mut Events, name: &str, val
         Err(e) => eprintln!("grofe config: {name}: {e}"),
     }
 }
-
-/// Announces a change of global option `name` made outside `set`.
-pub fn announce_option(state: &mut State, name: &str) {
-    option_changed(&mut state.model, &mut state.events, Owner::Global, name);
-}

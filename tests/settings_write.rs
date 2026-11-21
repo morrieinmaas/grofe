@@ -373,43 +373,37 @@ fn a_failed_write_removes_its_temp_file() {
     assert_eq!(names, vec!["settings.toml".to_string()], "{names:?}");
 }
 
-/// A binding saves its note and repeat flag, and keeps the other fields of
-/// the entry that was there.
+/// A binding replaces the fields of the entry that was there: one it does
+/// not give goes, and the entry keeps its comment.
 #[test]
-fn a_binding_keeps_the_fields_it_does_not_set() {
+fn a_binding_replaces_the_fields_of_the_entry() {
     let tmp = dir();
     let file = tmp.path().join("settings.toml");
     fs::write(
         &file,
-        "[keys.prefix]\nC-t = { cmd = \"a\", group = \"g\", name = \"n\", repeat = true }\n",
+        "[keys.prefix]\n# mine\nC-t = { cmd = \"a\", desc = \"d\", group = \"g\", name = \"n\", repeat = true }\n",
     )
     .expect("fixture");
-    // `set_binding` changes the command only.
-    write::set_binding(tmp.path(), "prefix", "C-t", "b", &Default::default()).expect("bind");
-    let v: toml::Table = read(&file).parse().expect("valid toml");
-    let e = &v["keys"]["prefix"]["C-t"];
-    assert_eq!(e["cmd"].as_str(), Some("b"));
-    assert_eq!(e["group"].as_str(), Some("g"));
-    assert_eq!(e["repeat"].as_bool(), Some(true));
-    // With `desc` and `repeat` it also sets the note and the flag, and still keeps the rest.
     write::set_binding(
         tmp.path(),
         "prefix",
         "C-t",
         "c",
         &BindingFields {
-            desc: Some("my note"),
-            repeat: Some(false),
+            name: Some("n2"),
             ..Default::default()
         },
     )
     .expect("bind");
-    let v: toml::Table = read(&file).parse().expect("valid toml");
+    let text = read(&file);
+    assert!(text.contains("# mine\nC-t"), "{text}");
+    let v: toml::Table = text.parse().expect("valid toml");
     let e = &v["keys"]["prefix"]["C-t"];
     assert_eq!(e["cmd"].as_str(), Some("c"));
-    assert_eq!(e["desc"].as_str(), Some("my note"));
-    assert_eq!(e["name"].as_str(), Some("n"));
-    assert!(e.get("repeat").is_none(), "{e:?}");
+    assert_eq!(e["name"].as_str(), Some("n2"));
+    for gone in ["desc", "group", "repeat"] {
+        assert!(e.get(gone).is_none(), "{gone}: {e:?}");
+    }
     // A new key gets the fields it has.
     write::set_binding(
         tmp.path(),
@@ -418,7 +412,7 @@ fn a_binding_keeps_the_fields_it_does_not_set() {
         "d",
         &BindingFields {
             desc: Some("n2"),
-            repeat: Some(true),
+            repeat: true,
             ..Default::default()
         },
     )
@@ -435,7 +429,7 @@ fn a_binding_writes_group_and_name() {
     let tmp = dir();
     let fields = BindingFields {
         desc: Some("d"),
-        repeat: Some(true),
+        repeat: true,
         group: Some("g"),
         name: Some("n"),
     };

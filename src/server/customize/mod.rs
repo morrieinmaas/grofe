@@ -1151,11 +1151,6 @@ pub fn unbind_key(state: &mut State, table: &str, key: &Key) {
     state.registry.key_tables.unbind_runtime(table, key);
 }
 
-/// `window_customize_reset_key`: the key's default binding back, or none.
-pub fn reset_key(state: &mut State, table: &str, key: &Key) {
-    state.registry.key_tables.reset_to_default(table, key);
-}
-
 /// Whether resetting `key` leaves it bound.
 pub fn key_has_default(state: &State, table: &str, key: &Key) -> bool {
     state.registry.key_tables.default_of(table, key).is_some()

@@ -131,18 +131,24 @@ impl KeyTables {
         }
     }
 
-    /// Ends a runtime unbind of `key`, so a reload may bind it from the
-    /// config again. Whether there was one.
-    pub fn forget_unbound(&mut self, table: &str, key: &Key) -> bool {
-        let before = self.runtime_unbound.len();
+    /// Takes `key` out of the runtime's hands, so the next `reload` binds
+    /// it from the config: a runtime binding of it and a runtime unbind go,
+    /// and an unbound key gets its default binding until then (a reload that
+    /// rebuilds no table keeps that).
+    pub fn release_runtime(&mut self, table: &str, key: &Key) {
+        if self
+            .exact(table, key)
+            .is_some_and(|b| !b.source.is_config())
+        {
+            self.unbind(table, key);
+        }
         self.runtime_unbound
             .retain(|(t, k)| !(t == table && k == key));
-        self.runtime_unbound.len() != before
-    }
-
-    /// Records a runtime unbind of `key` that [`Self::forget_unbound`] ended.
-    pub fn remember_unbound(&mut self, table: &str, key: &Key) {
-        self.runtime_unbound.push((table.to_string(), *key));
+        if self.exact(table, key).is_none()
+            && let Some(b) = self.default_of(table, key)
+        {
+            self.insert(table, *key, b);
+        }
     }
 
     /// The binding `key` has in `table` on a fresh server: grofe's default
@@ -153,15 +159,6 @@ impl KeyTables {
             stock.use_tmux_stock();
         }
         stock.exact(table, key).cloned()
-    }
-
-    /// `key_bindings_reset`: `key` in `table` gets its default binding
-    /// back, or is unbound when it has none.
-    pub fn reset_to_default(&mut self, table: &str, key: &Key) {
-        match self.default_of(table, key) {
-            Some(b) => self.insert(table, *key, b),
-            None => self.unbind_runtime(table, key),
-        }
     }
 
     /// Every key bound in `table`, sorted by name (stable output).
