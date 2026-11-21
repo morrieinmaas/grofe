@@ -11,6 +11,7 @@ use crate::compat::tmux::{Getopt, resolve};
 
 use super::Bridge;
 use super::conn::exchange;
+use super::scan::scan_uint;
 
 /// The smallest and largest window size, tmux's WINDOW_MINIMUM and
 /// WINDOW_MAXIMUM.
@@ -38,19 +39,33 @@ fn parse_error_text(err: &str) -> String {
     }
 }
 
-/// The leading digits of `text` as `sscanf("%u")` reads them, and the rest.
-fn uint(text: &str) -> Option<(u32, &str)> {
-    let end = text
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(text.len());
-    Some((text[..end].parse().ok()?, &text[end..]))
-}
-
 /// `<w><sep><h>`, `sep` one of `seps`, as `sscanf("%u<sep>%u")` reads it.
 fn size(text: &str, seps: &[char]) -> Option<(u32, u32)> {
-    let (w, rest) = uint(text)?;
+    let (w, rest) = scan_uint(text)?;
     let rest = rest.strip_prefix(seps)?;
-    Some((w, uint(rest)?.0))
+    Some((w, scan_uint(rest)?.0))
+}
+
+/// `argv` with its `-t` flag and value dropped (flags only, the command's
+/// own getopt words before its positionals).
+fn without_target(argv: &[String]) -> Vec<String> {
+    let mut out = vec![argv[0].clone()];
+    let mut words = argv[1..].iter();
+    while let Some(w) = words.next() {
+        if w == "--" || !w.starts_with('-') {
+            out.push(w.clone());
+            out.extend(words.cloned());
+            break;
+        }
+        match w.strip_prefix("-t") {
+            Some("") => {
+                words.next();
+            }
+            Some(_) => {}
+            None => out.push(w.clone()),
+        }
+    }
+    out
 }
 
 /// A config file's error, `<path>:<line>: <message>`, which tmux gives a
@@ -137,31 +152,74 @@ impl<W: Write> Bridge<'_, W> {
             "detach-client" if getopt.has('a') && !getopt.has('s') && !getopt.has('t') => {
                 self.detach_others()
             }
+            // `-a -t <other>` and `-s` of the attached session take the
+            // control client with them.
+            "detach-client" if getopt.has('a') || getopt.has('s') => {
+                let ours = getopt.has('a') || self.is_attached(getopt.value('s'));
+                match self.server(argv) {
+                    Outcome::Ok(_) if ours => Outcome::Detach,
+                    other => other,
+                }
+            }
             // `-c` switches another client, on the server.
             "switch-client" if !getopt.has('c') => self.switch_client(getopt.value('t')),
             "refresh-client" => self.refresh_client(&getopt),
             // tmux shows a control client its message as `%message`.
             "display-message" if !"pac".chars().any(|f| getopt.has(f)) => {
-                let mut argv = argv.to_vec();
-                argv.insert(1, "-p".to_string());
-                match self.server(&argv) {
-                    Outcome::Ok(out) => {
-                        Outcome::Ok(format!("%message {}\n", out.trim_end_matches('\n')))
-                    }
-                    other => other,
-                }
+                self.message(argv, &getopt)
             }
             // A config file's errors are notices after the block, which ends
             // as a success.
+            // The block keeps the other errors (a missing file of several).
             "source-file" => match self.server(argv) {
-                Outcome::Err(e) if !e.is_empty() && e.lines().all(is_cause) => {
-                    let causes = e.lines().map(|l| format!("%config-error {l}"));
+                Outcome::Err(e) if e.lines().any(is_cause) => {
+                    let (causes, rest): (Vec<&str>, Vec<&str>) =
+                        e.lines().partition(|l| is_cause(l));
+                    let causes = causes.iter().map(|l| format!("%config-error {l}"));
                     self.after_block.extend(causes);
-                    Outcome::Ok(String::new())
+                    Outcome::Ok(rest.join("\n"))
                 }
                 other => other,
             },
             _ => self.server(argv),
+        }
+    }
+
+    /// Whether `target` names the attached session.
+    fn is_attached(&self, target: Option<&str>) -> bool {
+        let Some(target) = target else {
+            return false;
+        };
+        let query = [
+            "display-message",
+            "-p",
+            "-t",
+            &session_target(target),
+            "#{session_id}",
+        ];
+        self.ask(&query)
+            .is_ok_and(|id| id.trim_end() == self.attached)
+    }
+
+    /// `display-message` without `-p`: its text as `%message` (with `-v`,
+    /// the trace lines first). A `-t` that names nothing falls back to the
+    /// attached session, as tmux's target may fail for it.
+    fn message(&self, argv: &[String], getopt: &Getopt<'_>) -> Outcome {
+        let mut argv = argv.to_vec();
+        argv.insert(1, "-p".to_string());
+        let mut out = self.server(&argv);
+        if matches!(&out, Outcome::Err(e) if e.starts_with("can't find")) && getopt.has('t') {
+            out = self.server(&without_target(&argv));
+        }
+        match out {
+            Outcome::Ok(text) => {
+                let mut lines: Vec<&str> = text.trim_end_matches('\n').split('\n').collect();
+                let last = lines.pop().unwrap_or_default();
+                let mut text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+                text.push_str(&format!("%message {last}\n"));
+                Outcome::Ok(text)
+            }
+            other => other,
         }
     }
 
@@ -262,7 +320,7 @@ impl<W: Write> Bridge<'_, W> {
     /// `-C <w>x<h>` (or `<w>,<h>`) or `-C @<id>:<w>x<h>`: windows resize,
     /// with tmux's errors. `-C @<id>:` alone (no size) changes nothing here.
     fn resize(&self, arg: &str) -> Result<(), String> {
-        let (window, (w, h)) = match arg.strip_prefix('@').and_then(uint) {
+        let (window, (w, h)) = match arg.strip_prefix('@').and_then(scan_uint) {
             Some((id, rest)) if rest.starts_with(':') => match size(&rest[1..], &['x']) {
                 Some(wh) => (Some(format!("@{id}")), wh),
                 None => return Ok(()),
@@ -276,8 +334,11 @@ impl<W: Write> Bridge<'_, W> {
             return Err("size too small or too big".into());
         }
         let (w, h) = (w.to_string(), h.to_string());
+        // tmux keeps a size for a window it does not have yet; the bridge
+        // has nothing to resize then.
         let targets: Vec<String> = match window {
-            Some(w) => vec![w.to_string()],
+            Some(w) if !self.snap.windows.contains_key(&w) => Vec::new(),
+            Some(w) => vec![w],
             None => self
                 .snap
                 .windows_of(&self.attached)

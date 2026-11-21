@@ -3,6 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::scan::scan_id;
+
 /// The most output held for one pane that is off.
 const HELD_MAX: usize = 1 << 20;
 
@@ -39,20 +41,6 @@ pub(super) struct Flow {
     pub(super) wait_exit: bool,
 }
 
-/// `<sigil><n>` read as tmux's `sscanf("%%%d")` reads it: an optional
-/// sign, then the leading digits (`%0x` is 0, `%00` is 0).
-pub(super) fn scan_id(text: &str, sigil: char) -> Option<i64> {
-    let rest = text.strip_prefix(sigil)?;
-    let (sign, digits) = match rest.strip_prefix('-') {
-        Some(d) => (-1, d),
-        None => (1, rest.strip_prefix('+').unwrap_or(rest)),
-    };
-    let end = digits
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(digits.len());
-    digits[..end].parse::<i64>().ok().map(|n| sign * n)
-}
-
 impl Flow {
     /// `refresh-client -f` / `-F` / `attach -f`: comma-separated flags, `!`
     /// clears.
@@ -77,7 +65,8 @@ impl Flow {
     /// prints. As tmux, a bad argument or an unknown pane changes nothing,
     /// and `%pause`/`%continue` are printed only when the state changes.
     pub(super) fn set_pane(&mut self, arg: &str, live: &BTreeSet<String>) -> Vec<String> {
-        let Some((pane, state)) = arg.split_once(':') else {
+        // tmux wants the `%` first, then reads the id with `sscanf`.
+        let Some((pane, state)) = arg.split_once(':').filter(|_| arg.starts_with('%')) else {
             return Vec::new();
         };
         let Some(pane) = scan_id(pane, '%')
@@ -204,16 +193,6 @@ mod tests {
         assert_eq!(got, b"a\\015\\012\\134\\033[1m\xc3\xa9~");
     }
 
-    #[test]
-    fn ids_scan_as_sscanf_does() {
-        assert_eq!(scan_id("%0x", '%'), Some(0));
-        assert_eq!(scan_id("%00", '%'), Some(0));
-        assert_eq!(scan_id("%-1", '%'), Some(-1));
-        assert_eq!(scan_id("%+7", '%'), Some(7));
-        assert_eq!(scan_id("%x", '%'), None);
-        assert_eq!(scan_id("@3", '%'), None);
-    }
-
     /// Recorded on tmux 3.7b: off and paused are two flags; `:on` clears
     /// only off, `:continue` only paused, and a notice only on a change.
     #[test]
@@ -226,6 +205,9 @@ mod tests {
         assert_eq!(flow.set_pane("%0:continue", &live()), none);
         assert_eq!(flow.set_pane("%0:pause", &live()), ["%pause %0"]);
         assert_eq!(flow.set_pane("%00:pause", &live()), none);
+        assert_eq!(flow.set_pane(" %0:continue", &live()), none);
+        assert_eq!(flow.set_pane("% 0:continue", &live()), ["%continue %0"]);
+        assert_eq!(flow.set_pane("%0:pause", &live()), ["%pause %0"]);
         assert_eq!(flow.set_pane("%0:on", &live()), none);
         assert!(flow.output("%0", b"lost", 0).is_none());
         flow.set_pane("%0:off", &live());

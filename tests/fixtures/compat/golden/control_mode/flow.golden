@@ -24,6 +24,9 @@ bad size argument
 %end T N 1
 %layout-change @0 b69d,90x25,0,0,0 b69d,90x25,0,0,0 *
 %begin T N 1
+size too small or too big
+%error T N 1
+%begin T N 1
 %end T N 1
 %begin T N 1
 %end T N 1
@@ -68,6 +71,12 @@ bad size argument
 %begin T N 1
 %end T N 1
 %begin T N 1
+%end T N 1
+%begin T N 1
+%pause %0
+%end T N 1
+%begin T N 1
+%continue %0
 %end T N 1
 %begin T N 1
 %pause %0

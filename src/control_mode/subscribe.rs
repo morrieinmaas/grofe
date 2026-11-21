@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use super::flow::scan_id;
+use super::scan::scan_id;
 
 /// How often tmux checks subscriptions.
 const EVERY: Duration = Duration::from_secs(1);

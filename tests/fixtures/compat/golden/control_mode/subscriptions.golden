@@ -36,4 +36,7 @@
 %subscription-changed neg $0 - - - : $0
 %subscription-changed p00 $0 @0 0 %0 : 0
 %subscription-changed p0x $0 @0 0 %0 : %0
+%subscription-changed sp1 $0 @0 0 %1 : %1
+%subscription-changed sp2 $0 @0 0 %1 : %1
+%subscription-changed w0 $0 @0 0 - : @0
 %exit

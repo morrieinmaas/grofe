@@ -25,6 +25,7 @@ mod command;
 mod conn;
 mod flow;
 mod notify;
+mod scan;
 mod subscribe;
 
 use command::session_target;

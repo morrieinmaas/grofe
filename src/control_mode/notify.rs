@@ -114,66 +114,52 @@ impl Snapshot {
     }
 }
 
-/// The `%window-add` (or unlinked) lines for the links `window` gained.
-fn adds(
-    out: &mut Vec<String>,
-    id: &str,
-    gained: &BTreeSet<String>,
-    w: &WindowInfo,
-    attached: &str,
-) {
-    let kind = if w.sessions.contains(attached) {
-        "window-add"
-    } else {
-        "unlinked-window-add"
-    };
-    out.extend(gained.iter().map(|_| format!("%{kind} {id}")));
+/// `%window-add` (or unlinked) for each link a window gained; `existing`
+/// picks windows the old view had (`link-window`) or new ones.
+fn adds(old: &Snapshot, new: &Snapshot, attached: &str, existing: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for (id, w) in &new.windows {
+        let had = old.windows.get(id);
+        if had.is_some() != existing {
+            continue;
+        }
+        let kind = if w.sessions.contains(attached) {
+            "window-add"
+        } else {
+            "unlinked-window-add"
+        };
+        let gained = w
+            .sessions
+            .iter()
+            .filter(|s| had.is_none_or(|o| !o.sessions.contains(*s)));
+        out.extend(gained.map(|_| format!("%{kind} {id}")));
+    }
+    out
 }
 
-/// The notifications between `old` and `new` for a client attached to
-/// `attached`, in the order tmux 3.7b sends them for one command.
-///
-/// Each link a window gains or loses is one notice (tmux notifies per
-/// winlink), named for whether the window is in the client's session once
-/// the command is done: a window unlinked from another session but still in
-/// the client's sends `%window-close`, one killed outright
-/// `%unlinked-window-close` (tmux unlinks it before the notice). When the
-/// client's own session went, it is leaving and gets no window notices.
-// ponytail: the notices of one command come in this fixed order, not the
-// order the command made them (tmux interleaves a multi-link `kill-window`).
-pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
+/// `%session-window-changed` for each session whose current window changed.
+fn current_windows(old: &Snapshot, new: &Snapshot) -> Vec<String> {
+    new.current
+        .iter()
+        .filter(|(s, w)| old.current.get(*s).is_some_and(|was| was != *w))
+        .map(|(s, w)| format!("%session-window-changed {s} {w}"))
+        .collect()
+}
+
+/// `%sessions-changed` when a session came or went.
+fn sessions(old: &Snapshot, new: &Snapshot) -> Vec<String> {
+    let changed = !old.sessions.keys().eq(new.sessions.keys());
+    changed
+        .then(|| "%sessions-changed".to_string())
+        .into_iter()
+        .collect()
+}
+
+/// Window renames, then session renames.
+fn renames(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let empty = BTreeSet::new();
-    let gained = |id: &String, w: &WindowInfo| -> BTreeSet<String> {
-        let had = old.windows.get(id).map_or(&empty, |o| &o.sessions);
-        w.sessions.difference(had).cloned().collect()
-    };
-    // `link-window` notifies the link before selecting it; `new-window`
-    // selects first.
     for (id, w) in &new.windows {
-        if old.windows.contains_key(id) {
-            adds(&mut out, id, &gained(id, w), w, attached);
-        }
-    }
-    for (session, window) in &new.current {
-        if old.current.get(session).is_some_and(|w| w != window) {
-            out.push(format!("%session-window-changed {session} {window}"));
-        }
-    }
-    for (id, w) in &new.windows {
-        if !old.windows.contains_key(id) {
-            adds(&mut out, id, &gained(id, w), w, attached);
-        }
-    }
-    let ids = |s: &Snapshot| s.sessions.keys().cloned().collect::<Vec<_>>();
-    if ids(old) != ids(new) {
-        out.push("%sessions-changed".to_string());
-    }
-    for (id, w) in &new.windows {
-        let Some(was) = old.windows.get(id) else {
-            continue;
-        };
-        if was.name != w.name {
+        if old.windows.get(id).is_some_and(|was| was.name != w.name) {
             let kind = if w.sessions.contains(attached) {
                 "window-renamed"
             } else {
@@ -187,6 +173,13 @@ pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
             out.push(format!("%session-renamed {id} {name}"));
         }
     }
+    out
+}
+
+/// Active pane changes, then layout changes of the attached session's
+/// windows (a zoom changes the visible layout and the `Z` flag).
+fn panes_and_layouts(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
+    let mut out = Vec::new();
     for (id, w) in &new.windows {
         if let Some(was) = old.windows.get(id)
             && was.active_pane != w.active_pane
@@ -195,64 +188,113 @@ pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
         }
     }
     for (id, w) in &new.windows {
-        if let Some(was) = old.windows.get(id)
-            && (was.layout != w.layout || was.visible() != w.visible())
+        let Some(was) = old.windows.get(id) else {
+            continue;
+        };
+        let zoom = was.flags.contains('Z') != w.flags.contains('Z');
+        if (was.layout != w.layout || was.visible() != w.visible() || zoom)
             && w.sessions.contains(attached)
         {
-            out.push(format!(
-                "%layout-change {id} {} {} {}",
-                w.layout,
-                w.visible(),
-                w.flags
-            ));
-        }
-    }
-    for (pane, mode) in &new.modes {
-        if old.modes.get(pane).is_some_and(|was| was != mode) {
-            out.push(format!("%pane-mode-changed {pane}"));
-        }
-    }
-    for (name, session) in &new.clients {
-        if old.clients.get(name) != Some(session) {
-            out.push(format!("%client-session-changed {name} {session}"));
-        }
-    }
-    for name in old.clients.keys() {
-        if !new.clients.contains_key(name) {
-            out.push(format!("%client-detached {name}"));
-        }
-    }
-    // A buffer set again under its name is freed and added (`paste_set`).
-    let names: BTreeSet<&String> = old.buffers.keys().chain(new.buffers.keys()).collect();
-    for name in names {
-        match (old.buffers.get(name), new.buffers.get(name)) {
-            (Some(a), Some(b)) if a == b => {}
-            (was, now) => {
-                if was.is_some() {
-                    out.push(format!("%paste-buffer-deleted {name}"));
-                }
-                if now.is_some() {
-                    out.push(format!("%paste-buffer-changed {name}"));
-                }
-            }
-        }
-    }
-    if new.sessions.contains_key(attached) {
-        for (id, was) in &old.windows {
-            let now = new.windows.get(id);
-            let kind = if now.is_some_and(|w| w.sessions.contains(attached)) {
-                "window-close"
-            } else {
-                "unlinked-window-close"
-            };
-            let left = was
-                .sessions
-                .iter()
-                .filter(|s| now.is_none_or(|w| !w.sessions.contains(*s)));
-            out.extend(left.map(|_| format!("%{kind} {id}")));
+            let (layout, visible, flags) = (&w.layout, w.visible(), &w.flags);
+            out.push(format!("%layout-change {id} {layout} {visible} {flags}"));
         }
     }
     out
+}
+
+/// `%pane-mode-changed` for each pane whose mode changed.
+fn modes(old: &Snapshot, new: &Snapshot) -> Vec<String> {
+    new.modes
+        .iter()
+        .filter(|(p, m)| old.modes.get(*p).is_some_and(|was| was != *m))
+        .map(|(p, _)| format!("%pane-mode-changed {p}"))
+        .collect()
+}
+
+/// Other clients that changed session or left.
+fn clients(old: &Snapshot, new: &Snapshot) -> Vec<String> {
+    let changed = new
+        .clients
+        .iter()
+        .filter(|(name, session)| old.clients.get(*name) != Some(*session))
+        .map(|(name, session)| format!("%client-session-changed {name} {session}"));
+    let gone = old
+        .clients
+        .keys()
+        .filter(|name| !new.clients.contains_key(*name))
+        .map(|name| format!("%client-detached {name}"));
+    changed.chain(gone).collect()
+}
+
+/// Paste buffers: a buffer set again under its name is freed and added
+/// (`paste_set`).
+fn buffers(old: &Snapshot, new: &Snapshot) -> Vec<String> {
+    let mut out = Vec::new();
+    let names: BTreeSet<&String> = old.buffers.keys().chain(new.buffers.keys()).collect();
+    for name in names {
+        let (was, now) = (old.buffers.get(name), new.buffers.get(name));
+        if was.is_some() && was == now {
+            continue;
+        }
+        if was.is_some() {
+            out.push(format!("%paste-buffer-deleted {name}"));
+        }
+        if now.is_some() {
+            out.push(format!("%paste-buffer-changed {name}"));
+        }
+    }
+    out
+}
+
+/// One close per link a window lost, unless the client's own session went.
+fn closes(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !new.sessions.contains_key(attached) {
+        return out;
+    }
+    for (id, was) in &old.windows {
+        let now = new.windows.get(id);
+        let kind = if now.is_some_and(|w| w.sessions.contains(attached)) {
+            "window-close"
+        } else {
+            "unlinked-window-close"
+        };
+        let left = was
+            .sessions
+            .iter()
+            .filter(|s| now.is_none_or(|w| !w.sessions.contains(*s)));
+        out.extend(left.map(|_| format!("%{kind} {id}")));
+    }
+    out
+}
+
+/// The notifications between `old` and `new` for a client attached to
+/// `attached`, in the order tmux 3.7b sends them for one command.
+///
+/// Each link a window gains or loses is one notice (tmux notifies per
+/// winlink), named for whether the window is in the client's session once
+/// the command is done: a window unlinked from another session but still in
+/// the client's sends `%window-close`, one killed outright
+/// `%unlinked-window-close` (tmux unlinks it before the notice). When the
+/// client's own session went, it is leaving and gets no window notices.
+/// `link-window` notifies the link before selecting it; `new-window`
+/// selects first.
+// ponytail: the notices of one command come in this fixed order, not the
+// order the command made them (tmux interleaves a multi-link `kill-window`).
+pub fn diff(old: &Snapshot, new: &Snapshot, attached: &str) -> Vec<String> {
+    [
+        adds(old, new, attached, true),
+        current_windows(old, new),
+        adds(old, new, attached, false),
+        sessions(old, new),
+        renames(old, new, attached),
+        panes_and_layouts(old, new, attached),
+        modes(old, new),
+        clients(old, new),
+        buffers(old, new),
+        closes(old, new, attached),
+    ]
+    .concat()
 }
 
 #[cfg(test)]
@@ -393,6 +435,15 @@ mod tests {
                 "%paste-buffer-changed buffer0",
             ]
         );
+    }
+
+    #[test]
+    fn a_zoom_sends_the_layout_with_its_flags() {
+        let old = snap(&[("$0", "m")], &["$0\t@0\t1\t%0\tL\t*\tw"]);
+        let new = snap(&[("$0", "m")], &["$0\t@0\t1\t%0\tL\t*Z\tw"]);
+        assert_eq!(diff(&old, &new, "$0"), ["%layout-change @0 L L *Z"]);
+        let unfocused = snap(&[("$0", "m")], &["$0\t@0\t1\t%0\tL\t-\tw"]);
+        assert!(diff(&old, &unfocused, "$0").is_empty());
     }
 
     #[test]

@@ -133,8 +133,12 @@ and `refresh-client` (`-F` or `-f`, then the first of `-A`, `-B` and `-C`, as tm
 flags included, before running any of it, and so does the bridge: an unknown command or flag
 anywhere in a `;` chain is one parse-error block and nothing runs (a flag the usage does not
 list is `unknown flag`, a value flag with no value `expects an argument`). `display-message` without `-p` runs with it and
-prints `%message`; `source-file` errors of the `<file>:<line>:` form become `%config-error`
-lines after a successful block. `display-message -p` formats naming `client_*` go to the
+prints `%message` (with `-v`, only the last line; the trace lines come first), and a `-t`
+that names nothing falls back to the attached session, as tmux's target may fail there.
+`source-file` errors of the `<file>:<line>:` form become `%config-error` lines right after its
+block, which ends `%end` and keeps any other error (a missing file of several).
+`detach-client -a -t <other>`, and `-s` of the attached session, run on the server and then
+detach the control client too. `display-message -p` formats naming `client_*` go to the
 server, which has no such client.
 
 **Ceilings of the bridge**, each marked `// ponytail:` in the code:
@@ -244,6 +248,19 @@ tmux:
   order. tmux interleaves them as the command runs: `kill-window` of a window linked into two
   sessions gives `%unlinked-window-close`, `%session-window-changed`, `%unlinked-window-close`;
   the bridge writes the `%session-window-changed` first.
+  Likewise `kill-pane` of the active pane: tmux sends `%layout-change` before
+  `%window-pane-changed`, the bridge after it.
+- **Moves that unlink and relink.** `swap-window`, `move-window` and `break-pane -d` unlink
+  and relink windows inside tmux, and it notifies each step (`move-window` within the session
+  gives `%window-add`, `%session-window-changed`, `%window-close` of the same window, and
+  `break-pane -d` of a window's last pane `%window-add` and `%window-close`; `swap-window` can
+  add a notice of its own). The bridge sees only the end state: the window keeps its id and
+  session, so it sends what differs, often only `%session-window-changed` or nothing.
+- **Notices with no change.** tmux sends `%layout-change` again whenever it recalculates sizes,
+  even to the same layout (`refresh-client -C @<w>:<w>x<h>`, including for a window that does
+  not exist, which succeeds); the bridge sends a layout only when it changed. In the same way,
+  `select-window` to another window and back in one `;` chain gives tmux's two
+  `%session-window-changed` but the bridge's one, or none, as only the line's end state counts.
 - **Changes that leave no trace.** A buffer set again to the same content, a mode left and
   entered again, or a client that detaches and reattaches between two snapshots sends nothing.
   A window linked twice into one session counts once.

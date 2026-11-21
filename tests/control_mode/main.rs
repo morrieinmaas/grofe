@@ -85,6 +85,7 @@ const CASES: &[Case] = &[
             "refresh-client -C 0x0",
             "refresh-client -C abc",
             "refresh-client -C @0:90x25",
+            "refresh-client -C ' 0x 0'",
             "refresh-client -f pause-after=1",
             "send-keys -t %0 abc Enter",
             "refresh-client -A '%0:pause'",
@@ -104,6 +105,8 @@ const CASES: &[Case] = &[
             "refresh-client -A '%0:bogus'",
             "refresh-client -A '%99:pause'",
             "refresh-client -A 'x:pause'",
+            "refresh-client -A '%0:continue'",
+            "refresh-client -A '% 0:pause'",
             "refresh-client -A '%0:continue'",
             "refresh-client -A '%0:pause'",
             "refresh-client -A '%0:pause'",
@@ -173,6 +176,9 @@ const CASES: &[Case] = &[
             "display-message hi there",
             "source-file {fixtures}/control-bad.conf",
             "source-file {fixtures}/control-bad.conf ; display -p after",
+            "source-file {fixtures}/control-bad.conf /nonexistent.conf",
+            "display-message -v 'v#{pane_id}'",
+            "display-message -t nosuch fallback",
         ],
     },
     // `refresh-client -B`: each kind of subscription, a change, removal.
@@ -194,7 +200,8 @@ const CASES: &[Case] = &[
             "rename-window -t @1 again ; rename-session third",
             "!wait",
             "refresh-client -B 'bad:%x:#{pane_id}' -B nosuch -B 'one:%*' -B 'dash::-#{session_name}' \
-             -B 'p0x:%0x:#{pane_id}' -B 'p00:%00:#{pane_index}' -B 'neg:%-1:#{session_id}'",
+             -B 'p0x:%0x:#{pane_id}' -B 'p00:%00:#{pane_index}' -B 'neg:%-1:#{session_id}' \
+             -B 'sp1:% 1:#{pane_id}' -B 'sp2: %1:#{pane_id}' -B 'w0:@ 0:#{window_id}'",
             "!wait",
         ],
     },
@@ -210,6 +217,30 @@ const CASES: &[Case] = &[
             "display-message -c {client} hello",
             "detach-client -s two",
         ],
+    },
+    // A zoomed window's layout notices, in and out.
+    Case {
+        name: "zoom",
+        setup: &["split-window -d -t @0 'sleep 90'"],
+        pty: None,
+        start: ATTACH,
+        script: &["resize-pane -Z -t %0", "resize-pane -Z -t %0"],
+    },
+    // `detach-client -a -t <other>` detaches the control client too.
+    Case {
+        name: "detach-all-but",
+        setup: &["new-session -d -s two -x 80 -y 24 -n t0 'sleep 99'"],
+        pty: Some("two"),
+        start: ATTACH,
+        script: &["detach-client -a -t {client}"],
+    },
+    // `detach-client -s` of the attached session detaches the control client.
+    Case {
+        name: "detach-session",
+        setup: &[],
+        pty: None,
+        start: ATTACH,
+        script: &["detach-client -s main"],
     },
     // `detach-client -a` detaches every other client.
     Case {
@@ -277,6 +308,21 @@ fn golden_subscriptions() {
 #[test]
 fn golden_clients() {
     assert_golden("clients");
+}
+
+#[test]
+fn golden_zoom() {
+    assert_golden("zoom");
+}
+
+#[test]
+fn golden_detach_all_but() {
+    assert_golden("detach-all-but");
+}
+
+#[test]
+fn golden_detach_session() {
+    assert_golden("detach-session");
 }
 
 #[test]
