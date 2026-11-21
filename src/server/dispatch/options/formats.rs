@@ -775,9 +775,6 @@ impl FormatVars for ServerVars<'_> {
         }
         match name {
             "socket_path" => Some(self.state.socket.display().to_string()),
-            "config_file" => {
-                config::config_file(&reload::config_env()).map(|f| f.display().to_string())
-            }
             "pane_title" => Some(self.state.passthrough.title(self.pane)),
             "host" => Some(crate::server::passthrough::hostname().to_string()),
             // tmux: the host name up to its first dot.

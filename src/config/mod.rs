@@ -20,6 +20,7 @@ pub mod write;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub use cli::show_config;
 pub use load::agents::{
@@ -112,23 +113,43 @@ pub fn toml_key(tmux_name: &str) -> Option<&'static str> {
 /// environment; tests build one pointing at a tempdir.
 #[derive(Debug, Clone)]
 pub struct Env {
-    /// `$XDG_CONFIG_HOME/grofe`, else `$HOME/.config/grofe` (R5). `None`
-    /// when neither is set: only the built-in defaults load.
+    /// `$XDG_CONFIG_HOME/grofe`, else `$HOME/.config/grofe` (R5), or the
+    /// folder of the `--config` file. `None` when neither is set: only the
+    /// built-in defaults load.
     pub config_dir: Option<PathBuf>,
+    /// The file read in place of `config.toml`'s layer: `<config_dir>/config.toml`,
+    /// or the `--config` / `$GROFE_CONFIG` file.
+    pub config_file: Option<PathBuf>,
     /// `$HOME`, for printing paths with `~`.
     pub home: Option<PathBuf>,
 }
 
+/// The absolute `--config` file of this process, set once at start.
+static PROCESS_CONFIG: OnceLock<PathBuf> = OnceLock::new();
+
+/// Makes `file` (absolute) this process's config file for every
+/// [`Env::from_process`] after it. Not an environment variable: it must
+/// not reach the panes.
+pub fn set_process_config(file: PathBuf) {
+    let _ = PROCESS_CONFIG.set(file);
+}
+
+/// The file [`set_process_config`] set.
+pub fn process_config() -> Option<PathBuf> {
+    PROCESS_CONFIG.get().cloned()
+}
+
 impl Env {
-    /// `$GROFE_CONFIG` (set by the CLI from `--config`) moves the config
-    /// dir to that file's folder.
+    /// With the file [`set_process_config`] set, else `$GROFE_CONFIG`.
     pub fn from_process() -> Env {
+        let config = process_config();
         let mut env = Env::from_vars(
             std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
             std::env::var("HOME").ok().as_deref(),
         );
-        if let Some(file) = env_config_file(env.home.as_deref()) {
+        if let Some(file) = config.or_else(env_config_file) {
             env.config_dir = file.parent().map(Path::to_path_buf);
+            env.config_file = Some(file);
         }
         env
     }
@@ -140,7 +161,12 @@ impl Env {
         let config_dir = xdg
             .or_else(|| home.as_ref().map(|h| h.join(".config")))
             .map(|d| d.join("grofe"));
-        Env { config_dir, home }
+        let config_file = config_dir.as_ref().map(|d| d.join("config.toml"));
+        Env {
+            config_dir,
+            config_file,
+            home,
+        }
     }
 }
 
@@ -153,23 +179,38 @@ pub fn resolve_config_path(arg: &str, cwd: &Path, home: Option<&Path>) -> PathBu
     }
 }
 
-/// `$GROFE_CONFIG` as an absolute path, when set and not empty.
-fn env_config_file(home: Option<&Path>) -> Option<PathBuf> {
-    let arg = std::env::var("GROFE_CONFIG")
-        .ok()
-        .filter(|s| !s.is_empty())?;
-    let cwd = std::env::current_dir().unwrap_or_default();
-    Some(resolve_config_path(&arg, &cwd, home))
+/// `arg` as an absolute config file path against this process's cwd and
+/// `$HOME`; an unreadable cwd is an error rather than a relative path.
+pub fn resolve_from_process(arg: &str) -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("--config: cannot resolve {arg}: {e}"))?;
+    Ok(resolve_config_path(arg, &cwd, home.as_deref()))
 }
 
-/// The file that replaces `config.toml` for `env`: `$GROFE_CONFIG` when
-/// `env` is that file's folder, else `<config_dir>/config.toml`. `None`
-/// without a config dir.
-pub fn config_file(env: &Env) -> Option<PathBuf> {
-    let dir = env.config_dir.as_deref()?;
-    env_config_file(env.home.as_deref())
-        .filter(|f| f.parent() == Some(dir))
-        .or_else(|| Some(dir.join("config.toml")))
+/// `$GROFE_CONFIG` as an absolute path, when set and not empty. One that
+/// names a directory is reported once on stderr and ignored.
+pub fn env_config_checked() -> Result<Option<PathBuf>, String> {
+    let Some(arg) = std::env::var("GROFE_CONFIG").ok().filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let path = resolve_from_process(&arg)?;
+    if path.is_dir() {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "grofe: GROFE_CONFIG: {} is a directory, ignoring it",
+                path.display()
+            );
+        });
+        return Ok(None);
+    }
+    Ok(Some(path))
+}
+
+/// [`env_config_checked`], an unresolvable path counting as unset.
+fn env_config_file() -> Option<PathBuf> {
+    env_config_checked().ok().flatten()
 }
 
 /// One config mistake. `Display` is `<file>:<line>: <key>: <message>`,

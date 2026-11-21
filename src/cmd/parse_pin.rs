@@ -9,6 +9,7 @@ use super::parse::parse;
 const FIXTURE: &str = "tests/fixtures/parse_pin.txt";
 
 const VERBS: &[&str] = &[
+    "__config-file",
     "__register-source",
     "agent",
     "agent-grid",
