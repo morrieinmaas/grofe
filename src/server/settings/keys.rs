@@ -166,7 +166,10 @@ pub fn put_back(state: &mut State, released: Vec<Touched>) {
     let tables = &mut state.registry.key_tables;
     for t in released {
         match t.was {
-            Some(b) => tables.insert(&t.table, t.key, b),
+            Some(mut b) => {
+                b.source = BindingSource::Runtime;
+                tables.insert(&t.table, t.key, b);
+            }
             None => tables.unbind_runtime(&t.table, &t.key),
         }
     }

@@ -113,10 +113,15 @@ pub fn client_gone(state: &mut State, id: ClientId, ctx: &ClientCtx) {
 /// would close it, and is told why.
 pub fn resized(state: &mut State, id: ClientId, size: (u16, u16)) {
     if state.settings_menus.is_open(id) && too_small(size) {
-        if let Some(ctx) = state.clients.get(&id).map(|c| c.ctx.clone()) {
-            discard_with(state, id, &ctx, true);
+        let err = state
+            .clients
+            .get(&id)
+            .map(|c| c.ctx.clone())
+            .and_then(|ctx| discard_with(state, id, &ctx, true));
+        match err {
+            Some(e) => clients::show_message(state, id, &format!("{e}; window too small")),
+            None => clients::show_message(state, id, "window too small"),
         }
-        clients::show_message(state, id, "window too small");
     }
 }
 
@@ -268,10 +273,13 @@ fn discard(state: &mut State, client: ClientId) {
 /// using stays open with its edits and shows the error; a `forced` close
 /// (the client is gone or too small) sets them back to what they were
 /// instead, runtime marked.
-fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx, forced: bool) {
-    let Some(mut menu) = state.settings_menus.open.remove(&client) else {
-        return;
-    };
+fn discard_with(
+    state: &mut State,
+    client: ClientId,
+    ctx: &ClientCtx,
+    forced: bool,
+) -> Option<String> {
+    let mut menu = state.settings_menus.open.remove(&client)?;
     let (key_release, key_rest) = keys::split(state, std::mem::take(&mut menu.keys));
     let (set_release, set_rest) = rows::split(state, std::mem::take(&mut menu.set));
     let names: Vec<&str> = set_release.keys().copied().collect();
@@ -279,6 +287,7 @@ fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx, forced: bo
         .iter()
         .map(|t| (t.table.as_str(), t.key))
         .collect();
+    let mut forced_err = None;
     if (!names.is_empty() || !bound.is_empty())
         && let Err(e) = customize::release_and_reload(state, &names, &bound)
     {
@@ -286,6 +295,7 @@ fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx, forced: bo
             rows::put_back(state, client, ctx, &set_release);
             keys::put_back(state, key_release);
             clients::show_message(state, client, e.trim_end());
+            forced_err = Some(e.trim_end().to_string());
         } else {
             menu.set = set_rest;
             menu.set.extend(set_release);
@@ -294,12 +304,13 @@ fn discard_with(state: &mut State, client: ClientId, ctx: &ClientCtx, forced: bo
             state.settings_menus.open.insert(client, menu);
             clients::show_message(state, client, e.trim_end());
             clients::mark_dirty(state, client);
-            return;
+            return None;
         }
     }
     clients::mark_dirty(state, client);
     keys::discard(state, key_rest);
     rows::discard(state, client, ctx, set_rest);
+    forced_err
 }
 
 /// Takes a client's keys while its settings menu is open.

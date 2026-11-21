@@ -934,3 +934,41 @@ fn ctrl_s_saves_in_the_menu_when_it_is_the_prefix() {
     h.send(CTRL_S);
     h.wait_until("diff", WAIT, |t| t.contains("write settings.toml"));
 }
+
+/// A forced close after a failed reload leaves an unbound key bound, and a
+/// later reload does not unbind it again.
+#[test]
+fn a_forced_close_after_a_failed_reload_restores_an_unbound_key() {
+    let srv = TestServer::unstarted();
+    write(&srv, "config.toml", KEYS);
+    let mut h = open_menu(&srv);
+    assert!(bound_to(&srv, "F9", "display-message"));
+    h.send("\t\t");
+    type_query(&mut h, "display-message");
+    h.send("\x04");
+    try_wait_until(|| !bound_to(&srv, "F9", "display-message"), WAIT)
+        .unwrap_or_else(|e| panic!("F9 still bound: {e}\n{}", h.text()));
+    let user = grofe_dir(&srv).join("user.toml");
+    fs::write(&user, "history-limit = = oops\n").expect("user.toml");
+    h.resize(20, 5);
+    try_wait_until(|| bound_to(&srv, "F9", "display-message"), WAIT)
+        .unwrap_or_else(|e| panic!("F9 not restored: {e}\n{}", h.text()));
+    fs::remove_file(&user).expect("remove user.toml");
+    srv.cmd(&["reload"]).expect("reload");
+    assert!(
+        bound_to(&srv, "F9", "display-message"),
+        "the reload unbound F9"
+    );
+}
+
+/// `prefix C` opens the menu when the prefix is `C-s`.
+#[test]
+fn prefix_c_opens_the_menu_when_the_prefix_is_ctrl_s() {
+    let srv = TestServer::unstarted();
+    write(&srv, "config.toml", "prefix = \"C-s\"\n");
+    let mut h = attached(&srv, 100, 30);
+    // The pty is cooked (IXON) until the client draws.
+    h.wait_until("drawn", WAIT, |t| !t.trim().is_empty());
+    h.send(format!("{CTRL_S}C"));
+    h.wait_until("menu open", WAIT, |t| t.contains("Appearance"));
+}
