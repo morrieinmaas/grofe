@@ -346,6 +346,7 @@ fn main() -> ExitCode {
         "new-session" if existing_for_a(&globals.socket(), rest).is_some() => {
             attach_existing(&globals.socket(), rest)
         }
+        "new-session" if plain_new_session(rest, true) => layout_glue::new_detached(&globals, rest),
         "new-session" if attaches(rest) => new_and_attach(&globals, rest, bare),
         _ => {
             let (socket, own_dir) = globals.resolve();
@@ -809,6 +810,25 @@ fn attaches(argv: &[String]) -> bool {
     )
 }
 
+/// A grofe `new-session` that makes a plain session, which `default-layout`
+/// then builds into: no command, no `-t` group, nothing printed, no `-A`.
+/// `detached` picks `-d` or not.
+// ponytail: `default-layout` is applied by this CLI after the session exists,
+// so a `new-session` run inside the server (a key binding, the command
+// prompt) makes a plain session, and `-P` skips it for a detached one.
+fn plain_new_session(argv: &[String], detached: bool) -> bool {
+    dialect() == Dialect::Grofe
+        && matches!(
+            grofe::cmd::parse(argv),
+            Ok(grofe::cmd::Command::NewSession(c))
+                if c.detached == detached
+                    && c.command.is_none()
+                    && c.group.is_none()
+                    && !c.print
+                    && !c.attach
+        )
+}
+
 /// What bare `grofe`'s request prints when it made no session.
 const REATTACH: &str = "grofe:reattach";
 
@@ -870,6 +890,9 @@ fn new_and_attach(globals: &Globals, argv: &[String], bare: bool) -> ExitCode {
         Ok(Reply::Event(_)) => return fail("unexpected event reply"),
         Err(e) => return fail(&e),
     };
+    if created && plain_new_session(&new_cmd, true) {
+        layout_glue::apply_default_layout_to(globals, &id);
+    }
     let mut argv = vec!["attach-session".to_string(), "-t".to_string(), id];
     // `new-session -f`: client flags for the client it attaches.
     if let Ok(grofe::cmd::Command::NewSession(c)) = grofe::cmd::parse(&new_cmd) {

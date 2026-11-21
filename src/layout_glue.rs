@@ -30,6 +30,49 @@ pub fn run(globals: &Globals, args: &[String]) -> ExitCode {
     }
 }
 
+/// `new-session -d` without a command: made with `-P`, so the session is
+/// known, then `default-layout` builds into it.
+pub fn new_detached(globals: &Globals, argv: &[String]) -> ExitCode {
+    let (socket, own_dir) = globals.resolve();
+    let mut server = Host {
+        socket,
+        own_dir,
+        held: HangUp(None),
+    };
+    let mut argv = argv.to_vec();
+    argv.extend(["-P", "-F", "#{session_id}"].map(String::from));
+    match layouts::Server::create_session(&mut server, &argv) {
+        Ok(id) => {
+            apply_default_layout(&mut server, id.trim());
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
+    }
+}
+
+/// `default-layout` for session `id`; a layout that will not build is a
+/// warning, the session stays.
+pub fn apply_default_layout_to(globals: &Globals, id: &str) {
+    let (socket, own_dir) = globals.resolve();
+    let mut server = Host {
+        socket,
+        own_dir,
+        held: HangUp(None),
+    };
+    apply_default_layout(&mut server, id);
+}
+
+fn apply_default_layout(server: &mut Host, id: &str) {
+    match layouts::build_default(server, &Dirs::from_process(), id) {
+        Ok(report) => {
+            for w in &report.warnings {
+                eprintln!("grofe: warning: {w}");
+            }
+        }
+        Err(e) => eprintln!("grofe: warning: default-layout: {e}"),
+    }
+}
+
 struct Host {
     socket: PathBuf,
     own_dir: bool,
