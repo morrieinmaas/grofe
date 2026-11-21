@@ -22,7 +22,11 @@ fn every_option_maps_to_exactly_one_section() {
         .filter_map(|l| l.split_whitespace().next())
         .filter(|n| !n.starts_with('@'))
         .collect();
-    assert!(names.len() > 100, "expected the full table, got {}", names.len());
+    assert!(
+        names.len() > 100,
+        "expected the full table, got {}",
+        names.len()
+    );
     let mut used = BTreeSet::new();
     for n in &names {
         // section_of is a function, so one answer per name; it must agree
@@ -33,7 +37,10 @@ fn every_option_maps_to_exactly_one_section() {
         used.insert(a);
     }
     assert!(used.len() <= 8, "more than eight sections: {used:?}");
-    assert!(used.len() >= 6, "options bunch into too few sections: {used:?}");
+    assert!(
+        used.len() >= 6,
+        "options bunch into too few sections: {used:?}"
+    );
     assert_eq!(
         format!("{:?}", section_of("status-left")),
         format!("{:?}", section_of("status-right"))
@@ -72,7 +79,10 @@ fn preview_of_a_side_by_side_split_draws_two_boxes() {
     let (w, h) = (24u16, 6u16);
     let side = preview(TWO_SIDE_BY_SIDE, w, h);
     assert_eq!(side.len(), usize::from(h), "{side:#?}");
-    assert!(side.iter().all(|l| l.chars().count() <= usize::from(w)), "{side:#?}");
+    assert!(
+        side.iter().all(|l| l.chars().count() <= usize::from(w)),
+        "{side:#?}"
+    );
     assert_eq!(corners(&side[0]), 2, "{side:#?}");
 
     let stacked = preview(TWO_STACKED, w, h);

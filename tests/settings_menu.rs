@@ -40,7 +40,15 @@ fn opt(srv: &TestServer, name: &str) -> String {
 /// A server with a `cat` session and an attached client of `w` by `h`.
 fn attached(srv: &TestServer, w: u16, h: u16) -> Harness {
     srv.cmd(&[
-        "new-session", "-d", "-s", "s", "-x", &w.to_string(), "-y", &h.to_string(), "cat",
+        "new-session",
+        "-d",
+        "-s",
+        "s",
+        "-x",
+        &w.to_string(),
+        "-y",
+        &h.to_string(),
+        "cat",
     ])
     .expect("new-session");
     Harness::spawn_attach_with_env(srv.command(), "s", &[], w, h)
@@ -68,7 +76,10 @@ fn prefix_c_opens_the_menu_in_grofe_identity() {
     let srv = TestServer::start();
     let mut h = open_menu(&srv);
     let t = h.text();
-    assert!(!t.contains("Session Options"), "that is customize-mode:\n{t}");
+    assert!(
+        !t.contains("Session Options"),
+        "that is customize-mode:\n{t}"
+    );
 }
 
 /// T19: in tmux identity `C` is still customize-mode.
@@ -108,7 +119,10 @@ fn query_stl_ranks_status_left_first() {
         .position(|l| l.contains("status-left"))
         .expect("a status-left row");
     let line = t.lines().nth(first).unwrap();
-    assert!(!line.contains("status-left-length"), "first row is {line:?}\n{t}");
+    assert!(
+        !line.contains("status-left-length"),
+        "first row is {line:?}\n{t}"
+    );
 }
 
 /// T23 (through the screen): a settings.toml value over conf.d names the
@@ -119,8 +133,18 @@ fn a_row_shows_what_settings_toml_overrides() {
     write(&srv, "conf.d/10.toml", "# c\n\nstatus-left = \"A\"\n");
     write(&srv, "settings.toml", "status-left = \"S\"\n");
     let mut h = {
-        srv.cmd(&["new-session", "-d", "-s", "s", "-x", "100", "-y", "30", "cat"])
-            .unwrap();
+        srv.cmd(&[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            "100",
+            "-y",
+            "30",
+            "cat",
+        ])
+        .unwrap();
         Harness::spawn_attach_with_env(srv.command(), "s", &[], 100, 30)
     };
     h.send(&format!("{PREFIX}C"));
@@ -187,7 +211,9 @@ fn ctrl_s_shows_the_diff_and_y_writes_it() {
     type_query(&mut h, "mouse");
     h.send("\r");
     h.send(CTRL_S);
-    h.wait_until("diff", WAIT, |t| t.contains("settings.toml") && t.contains("mouse"));
+    h.wait_until("diff", WAIT, |t| {
+        t.contains("settings.toml") && t.contains("mouse")
+    });
     h.send("y");
     let file = grofe_dir(&srv).join("settings.toml");
     try_wait_until(
@@ -254,7 +280,8 @@ fn default_layout_builds_for_new_session() {
         "layouts/dev.toml",
         "[[window]]\nname = \"dev\"\nsplit = \"h\"\n[[window.pane]]\n[[window.pane]]\n",
     );
-    srv.cmd(&["new-session", "-d", "-s", "d"]).expect("new-session");
+    srv.cmd(&["new-session", "-d", "-s", "d"])
+        .expect("new-session");
     let panes = srv.cmd(&["list-panes", "-t", "d"]).unwrap();
     assert_eq!(panes.lines().count(), 2, "{panes}");
 }
@@ -264,7 +291,8 @@ fn default_layout_builds_for_new_session() {
 fn unknown_default_layout_makes_a_plain_session_and_a_message() {
     let srv = TestServer::unstarted();
     write(&srv, "config.toml", "default-layout = \"nope\"\n");
-    srv.cmd(&["new-session", "-d", "-s", "d"]).expect("new-session");
+    srv.cmd(&["new-session", "-d", "-s", "d"])
+        .expect("new-session");
     let panes = srv.cmd(&["list-panes", "-t", "d"]).unwrap();
     assert_eq!(panes.lines().count(), 1, "{panes}");
     let msgs = srv.cmd(&["show-messages"]).unwrap_or_default();
@@ -281,8 +309,18 @@ fn enter_on_a_layout_sets_default_layout() {
         "[[window]]\nname = \"dev\"\nsplit = \"h\"\n[[window.pane]]\n[[window.pane]]\n",
     );
     let mut h = {
-        srv.cmd(&["new-session", "-d", "-s", "s", "-x", "100", "-y", "30", "cat"])
-            .unwrap();
+        srv.cmd(&[
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-x",
+            "100",
+            "-y",
+            "30",
+            "cat",
+        ])
+        .unwrap();
         Harness::spawn_attach_with_env(srv.command(), "s", &[], 100, 30)
     };
     h.send(&format!("{PREFIX}C"));
@@ -308,8 +346,18 @@ fn a_query_with_no_match_says_so() {
 fn a_unicode_query_matches_a_value() {
     let srv = TestServer::unstarted();
     write(&srv, "config.toml", "status-left = \"世界 hi\"\n");
-    srv.cmd(&["new-session", "-d", "-s", "s", "-x", "100", "-y", "30", "cat"])
-        .unwrap();
+    srv.cmd(&[
+        "new-session",
+        "-d",
+        "-s",
+        "s",
+        "-x",
+        "100",
+        "-y",
+        "30",
+        "cat",
+    ])
+    .unwrap();
     let mut h = Harness::spawn_attach_with_env(srv.command(), "s", &[], 100, 30);
     h.send(&format!("{PREFIX}C"));
     h.wait_until("menu", WAIT, |t| t.contains("Appearance"));
