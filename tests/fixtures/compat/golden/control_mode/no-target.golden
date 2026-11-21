@@ -1,0 +1,4 @@
+%begin T N 0
+can't find session: nosuch
+%error T N 0
+%exit

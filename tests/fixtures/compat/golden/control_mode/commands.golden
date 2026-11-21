@@ -1,0 +1,41 @@
+%begin T N 0
+%end T N 0
+%session-changed $0 main
+%begin T N 1
+@0 w0 b25d,80x24,0,0,0
+%end T N 1
+%begin T N 1
+%end T N 1
+%window-add @1
+%begin T N 1
+%end T N 1
+%layout-change @0 0206,80x24,0,0{40x24,0,0,0,39x24,41,0,2} 0206,80x24,0,0{40x24,0,0,0,39x24,41,0,2} *
+%begin T N 1
+%end T N 1
+%session-window-changed $0 @1
+%begin T N 1
+%end T N 1
+%session-window-changed $0 @0
+%begin T N 1
+%end T N 1
+%window-renamed @1 renamed
+%begin T N 1
+%end T N 1
+%output %0 hi\015\012hi\015\012
+%begin T N 1
+parse error: unknown command: bogus
+%error T N 1
+%begin T N 1
+%end T N 1
+%unlinked-window-add @2
+%sessions-changed
+%begin T N 1
+%end T N 1
+%session-changed $1 two
+%begin T N 1
+%end T N 1
+%unlinked-window-close @1
+%begin T N 1
+%end T N 1
+%sessions-changed
+%exit

@@ -1,0 +1,32 @@
+%begin T N 0
+%end T N 0
+%session-changed $0 main
+%begin T N 1
+%end T N 1
+%pane-mode-changed %0
+%begin T N 1
+%end T N 1
+%pane-mode-changed %0
+%begin T N 1
+%end T N 1
+%paste-buffer-changed b1
+%begin T N 1
+%end T N 1
+%paste-buffer-deleted b1
+%paste-buffer-changed b1
+%begin T N 1
+%end T N 1
+%paste-buffer-deleted b1
+%begin T N 1
+%message hi there
+%end T N 1
+%begin T N 1
+%message %0
+%end T N 1
+%begin T N 1
+parse error: command display-message: too many arguments (need at most 1)
+%error T N 1
+%begin T N 1
+%end T N 1
+%config-error {fixtures}/control-bad.conf:1: unknown command: bogus-cmd
+%exit

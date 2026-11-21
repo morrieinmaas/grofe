@@ -1,0 +1,11 @@
+%begin T N 0
+%end T N 0
+%window-add @0
+%sessions-changed
+%session-changed $0 x
+%begin T N 1
+@0 w0
+%end T N 1
+%begin T N 1
+%end T N 1
+%exit
