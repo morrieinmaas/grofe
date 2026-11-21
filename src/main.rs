@@ -43,7 +43,7 @@ Options:
   -S socket-path   use the server socket at this path
   --config file    load this config file instead of ~/.config/grofe/config.toml
                    (also $GROFE_CONFIG); its folder becomes the config dir: conf.d/,
-                   user.toml, layouts/, packs (pack-lock.toml),
+                   user.toml, settings.toml, layouts/, packs (pack-lock.toml),
                    init.luau and machines.toml are read from there
   -r host          run the command on host over ssh (default: new-session -A -s main)
   --install        install grofe on the remote host if it has none (--no-install: never)
