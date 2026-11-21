@@ -96,8 +96,12 @@ pub fn check_version(tmux: &Path) -> Result<(), String> {
     }
 }
 
+/// In the container, or driving it from the host: `--exec`'s wrapper runs
+/// each tmux command in the container.
 fn in_container() -> bool {
-    Path::new("/run/.containerenv").exists() || Path::new("/.dockerenv").exists()
+    Path::new("/run/.containerenv").exists()
+        || Path::new("/.dockerenv").exists()
+        || std::env::var_os("GROFE_COMPAT_VIA_EXEC").is_some()
 }
 
 /// The tmux built with `--enable-sixel` that records the scenarios under

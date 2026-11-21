@@ -169,16 +169,24 @@ impl Cli {
         }
     }
 
-    /// Wait until the server lists a client on `tty`.
+    /// Wait until the server lists a client on `tty`. Recording with
+    /// `--exec`, the client's tty is the container's, and the one client a
+    /// scenario has is enough.
     fn wait_attached(&self, tty: &Path) {
         let deadline = Instant::now() + CMD_TIMEOUT;
         let tty = tty.display().to_string();
+        let any = std::env::var_os("GROFE_COMPAT_VIA_EXEC").is_some();
         let list = [
             "list-clients".to_string(),
             "-F".into(),
             "#{client_tty}".into(),
         ];
-        while !self.run(&list).1.lines().any(|l| l == tty) {
+        while !self
+            .run(&list)
+            .1
+            .lines()
+            .any(|l| l == tty || (any && !l.is_empty()))
+        {
             assert!(Instant::now() < deadline, "client on {tty} never attached");
             thread::sleep(Duration::from_millis(50));
         }
